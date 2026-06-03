@@ -4,7 +4,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,15 +28,35 @@ class Settings(BaseSettings):
     )
     jwt_secret: str = Field(default="dev-secret-change-in-production-32chars", alias="JWT_SECRET")
     jwt_access_token_expire_minutes: int = Field(default=60, alias="JWT_EXPIRE_MINUTES")
+
+    # Betfair — delayed app key is free, live is £499 one-time
+    betfair_app_key: str = Field(default="", alias="BETFAIR_APP_KEY")
+    betfair_session_token: str = Field(default="", alias="BETFAIR_SESSION_TOKEN")
+    betfair_username: str = Field(default="", alias="BETFAIR_USERNAME")
+    betfair_password: str = Field(default="", alias="BETFAIR_PASSWORD")
+
+    # Matchbook — free API up to 1M GET requests/month
+    matchbook_username: str = Field(default="", alias="MATCHBOOK_USERNAME")
+    matchbook_password: str = Field(default="", alias="MATCHBOOK_PASSWORD")
+
+    # Football-data.org — free tier for live stats
     football_data_api_key: str = Field(default="", alias="FOOTBALL_DATA_API_KEY")
 
     @classmethod
     def load(cls) -> "Settings":
         overrides = {}
-        if db_url := _read_secret("database_url"):
-            overrides["database_url"] = db_url
-        if jwt := _read_secret("jwt_secret"):
-            overrides["jwt_secret"] = jwt
+        for secret_name, field_name in [
+            ("database_url", "database_url"),
+            ("jwt_secret", "jwt_secret"),
+            ("betfair_app_key", "betfair_app_key"),
+            ("betfair_session_token", "betfair_session_token"),
+            ("betfair_username", "betfair_username"),
+            ("betfair_password", "betfair_password"),
+            ("matchbook_username", "matchbook_username"),
+            ("matchbook_password", "matchbook_password"),
+        ]:
+            if val := _read_secret(secret_name):
+                overrides[field_name] = val
         return cls(**overrides)
 
 
