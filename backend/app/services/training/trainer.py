@@ -1,6 +1,7 @@
 """Model training service — fits Poisson / Dixon-Coles on historical data."""
 from __future__ import annotations
 
+import asyncio
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -61,10 +62,14 @@ class ModelTrainer:
 
         from penaltyblog.models import DixonColesGoalModel, PoissonGoalsModel
 
-        self.poisson = PoissonGoalsModel(gh, ga, th, ta)
-        self.poisson.fit()
-        self.dixon_coles = DixonColesGoalModel(gh, ga, th, ta)
-        self.dixon_coles.fit()
+        def _fit() -> tuple[Any, Any]:
+            poisson = PoissonGoalsModel(gh, ga, th, ta)
+            poisson.fit()
+            dixon_coles = DixonColesGoalModel(gh, ga, th, ta)
+            dixon_coles.fit()
+            return poisson, dixon_coles
+
+        self.poisson, self.dixon_coles = await asyncio.to_thread(_fit)
 
         avg_hg = sum(gh) / len(gh)
         avg_ag = sum(ga) / len(ga)

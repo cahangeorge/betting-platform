@@ -5,6 +5,8 @@
     let ingester = $state<Record<string, unknown>>({ running: false });
     let matches = $state<Array<Record<string, unknown>>>([]);
     let loading = $state(true);
+    let momentumPopup = $state<Record<string, unknown> | null>(null);
+    let showPopup = $state(false);
 
     onMount(async () => {
         try {
@@ -25,7 +27,8 @@
 
     async function getMomentum(matchId: string) {
         const m = await api.momentum(matchId);
-        alert(JSON.stringify(m, null, 2));
+        momentumPopup = m as Record<string, unknown>;
+        showPopup = true;
     }
 </script>
 
@@ -70,3 +73,13 @@
         </table>
     {/if}
 </div>
+
+{#if showPopup && momentumPopup}
+<div style="position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:50" onclick={() => showPopup = false}>
+    <div class="card" style="max-width:400px;width:90%;max-height:80vh;overflow-y:auto" onclick={(e) => e.stopPropagation()}>
+        <h3>Momentum</h3>
+        <pre style="font-size:0.8rem;margin-top:0.5rem">{JSON.stringify(momentumPopup, null, 2)}</pre>
+        <button onclick={() => showPopup = false} style="margin-top:1rem">Close</button>
+    </div>
+</div>
+{/if}

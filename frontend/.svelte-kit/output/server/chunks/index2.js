@@ -3001,15 +3001,6 @@ function unsubscribe_stores(store_values) {
     store_values[store_name][1]();
   }
 }
-function slot(renderer, $$props, name, slot_props, fallback_fn) {
-  var slot_fn = $$props.$$slots?.[name];
-  if (slot_fn === true) {
-    slot_fn = $$props["children"];
-  }
-  if (slot_fn !== void 0) {
-    slot_fn(renderer, slot_props);
-  }
-}
 function ensure_array_like(array_like_or_iterator) {
   if (array_like_or_iterator) {
     return array_like_or_iterator.length !== void 0 ? array_like_or_iterator : Array.from(array_like_or_iterator);
@@ -3040,41 +3031,40 @@ function derived(fn) {
   };
 }
 export {
-  mutable_source as $,
-  set_component_context as A,
+  flushSync as $,
+  set_active_reaction as A,
   BOUNDARY_EFFECT as B,
   COMMENT_NODE as C,
-  Batch as D,
-  handle_error as E,
-  active_reaction as F,
-  component_context as G,
+  set_component_context as D,
+  Batch as E,
+  handle_error as F,
+  active_reaction as G,
   HYDRATION_ERROR as H,
-  internal_set as I,
-  destroy_effect as J,
-  invoke_error_boundary as K,
-  svelte_boundary_reset_onerror as L,
-  HYDRATION_START_FAILED as M,
-  svelte_boundary_reset_noop as N,
-  EFFECT_TRANSPARENT as O,
-  EFFECT_PRESERVED as P,
-  init_operations as Q,
-  get_first_child as R,
-  hydration_failed as S,
-  clear_text_content as T,
-  component_root as U,
-  is_passive_event as V,
-  push$1 as W,
-  pop$1 as X,
-  set as Y,
-  LEGACY_PROPS as Z,
-  flushSync as _,
+  component_context as I,
+  internal_set as J,
+  destroy_effect as K,
+  invoke_error_boundary as L,
+  svelte_boundary_reset_onerror as M,
+  HYDRATION_START_FAILED as N,
+  svelte_boundary_reset_noop as O,
+  EFFECT_TRANSPARENT as P,
+  EFFECT_PRESERVED as Q,
+  init_operations as R,
+  get_first_child as S,
+  hydration_failed as T,
+  clear_text_content as U,
+  component_root as V,
+  is_passive_event as W,
+  push$1 as X,
+  pop$1 as Y,
+  set as Z,
+  LEGACY_PROPS as _,
   attr_class as a,
-  render as a0,
-  setContext as a1,
-  derived as a2,
-  store_get as a3,
-  unsubscribe_stores as a4,
-  safe_not_equal as a5,
+  mutable_source as a0,
+  render as a1,
+  setContext as a2,
+  derived as a3,
+  safe_not_equal as a4,
   HYDRATION_END as b,
   HYDRATION_START as c,
   HYDRATION_START_ELSE as d,
@@ -3085,19 +3075,19 @@ export {
   effect_tracking as i,
   get as j,
   source as k,
-  increment as l,
-  active_effect as m,
-  block as n,
-  branch as o,
-  create_text as p,
+  untrack as l,
+  increment as m,
+  active_effect as n,
+  block as o,
+  branch as p,
   queue_micro_task as q,
   render_effect as r,
-  slot as s,
-  pause_effect as t,
-  untrack as u,
-  current_batch as v,
-  move_effect as w,
-  defer_effect as x,
-  set_active_effect as y,
-  set_active_reaction as z
+  store_get as s,
+  create_text as t,
+  unsubscribe_stores as u,
+  pause_effect as v,
+  current_batch as w,
+  move_effect as x,
+  defer_effect as y,
+  set_active_effect as z
 };

@@ -40,5 +40,5 @@ class Base(DeclarativeBase):
         DateTime(timezone=True), default=lambda: datetime.now(UTC), server_default=sa.func.now(), nullable=False,
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), server_default=sa.func.now(), onupdate=datetime.now(UTC), nullable=False,
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), server_default=sa.func.now(), onupdate=lambda: datetime.now(UTC), nullable=False,
     )

@@ -5,6 +5,7 @@
     import { onMount } from 'svelte';
     import '../app.css';
 
+    let { children } = $props();
     let authed = $state(false);
 
     onMount(async () => {
@@ -24,18 +25,10 @@
         }
     });
 
-    $effect(() => {
-        const unsub = user.subscribe(u => authed = !!u);
-        return () => unsub();
-    });
+    let u = $derived($user);
+    $effect(() => { authed = !!u; });
 
-    let nav = $state('');
-    $effect(() => {
-        if (typeof window !== 'undefined') {
-            nav = window.location.pathname;
-        }
-    });
-
+    let nav = $derived($page.url.pathname);
     function isActive(p: string) { return nav === p ? 'active' : ''; }
 
     async function logout() {
@@ -46,7 +39,7 @@
 </script>
 
 {#if !authed}
-    <slot />
+    {@render children()}
 {:else}
     <div class="layout">
         <aside class="sidebar">
@@ -61,12 +54,12 @@
                 <a href="/stats" class={isActive('/stats')}>Live Stats</a>
             </nav>
             <div style="margin-top:auto;padding:1rem 1.25rem;border-top:1px solid var(--border);font-size:0.8rem;color:var(--text-dim)">
-                <div>{$user?.email}</div>
+                <div>{u?.email}</div>
                 <button class="btn-outline" style="margin-top:0.5rem;font-size:0.75rem;padding:0.3rem 0.6rem" onclick={logout}>Logout</button>
             </div>
         </aside>
         <main class="main">
-            <slot />
+            {@render children()}
         </main>
     </div>
 {/if}

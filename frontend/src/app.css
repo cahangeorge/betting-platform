@@ -48,7 +48,6 @@ a:hover { text-decoration: underline; }
 }
 
 .stat-card {
-    composes: card;
     display: flex;
     flex-direction: column;
     gap: 0.25rem;

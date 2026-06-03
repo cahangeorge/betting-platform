@@ -1,63 +1,38 @@
 const API_BASE = "/api/v1";
-let _token = null;
-function setToken(t) {
-  _token = t;
-  localStorage.removeItem("bt_token");
-}
 function getToken() {
-  if (!_token) _token = localStorage.getItem("bt_token");
-  return _token;
+  return localStorage.getItem("bt_token");
 }
-async function request(method, path, body) {
-  const headers = { "Content-Type": "application/json" };
-  const token = getToken();
-  if (token) headers["Authorization"] = `Bearer ${token}`;
-  const res = await fetch(`${API_BASE}${path}`, {
-    method,
-    headers,
-    body: body ? JSON.stringify(body) : void 0
-  });
-  if (res.status === 401) {
-    setToken(null);
-    throw new Error("Unauthorized");
-  }
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
-  }
-  return res.json();
+async function _fetch(path, opts = {}) {
+  const url = `${API_BASE}${path}`;
+  const headers = { "Content-Type": "application/json", ...opts.headers || {} };
+  const t = getToken();
+  if (t) headers["Authorization"] = `Bearer ${t}`;
+  const r = await fetch(url, { ...opts, headers });
+  if (!r.ok) throw new Error(`${r.status}: ${await r.text()}`);
+  return r.json();
 }
 const api = {
-  // Auth
-  login: (email, password) => request("POST", "/auth/login", { email, password }),
-  register: (email, password) => request("POST", "/auth/register", { email, password }),
-  // Me
-  me: () => request("GET", "/auth/me"),
-  // Matches
-  listMatches: (status) => request("GET", `/matches${status ? `?status=${status}` : ""}`),
-  // Bankroll
-  listBankrolls: () => request("GET", "/bankroll"),
-  createBankroll: (name, currency = "GBP") => request("POST", "/bankroll", { name, currency }),
-  // Bot
-  botStatus: (bankrollId) => request("GET", `/bot/status?bankroll_id=${bankrollId}`),
-  botStart: (bankrollId, opts) => request("POST", "/bot/start", { bankroll_id: bankrollId, paper: true, ...opts }),
-  botStop: (bankrollId) => request("POST", `/bot/stop?bankroll_id=${bankrollId}`),
-  // Trades
-  listTrades: (bankrollId, status) => request("GET", `/bot/trades?bankroll_id=${bankrollId}${status ? `&status=${status}` : ""}`),
-  // Stats / momentum
-  momentum: (matchId) => request("GET", `/stats/momentum/${matchId}`),
-  statHistory: (matchId) => request("GET", `/stats/history/${matchId}`),
-  // Predictions
-  predict: (homeTeam, awayTeam, league = "PL", model = "poisson") => request("POST", `/predictions/predict?model_key=${model}`, { home_team: homeTeam, away_team: awayTeam, league }),
-  // Training
-  importCsv: () => request("POST", "/training/import-csv"),
-  fitModel: (league) => request("POST", `/training/fit${league ? `?league=${league}` : ""}`),
-  fitAndEval: () => request("POST", "/training/fit-and-eval"),
-  // Data
-  expandCsv: (seasons = "2024") => request("POST", `/data/expand-csv?seasons=${seasons}`),
-  ingesterStatus: () => request("GET", "/data/ingester/status"),
-  ingesterStart: () => request("POST", "/data/ingester/start"),
-  ingesterStop: () => request("POST", "/data/ingester/stop")
+  login: (email, password) => _fetch("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
+  register: (email, password) => _fetch("/auth/register", { method: "POST", body: JSON.stringify({ email, password }) }),
+  me: () => _fetch("/auth/me"),
+  listMatches: (status) => _fetch(`/matches?${status ? "status=" + status : ""}`),
+  getMatch: (id) => _fetch(`/matches/${id}`),
+  listBankrolls: () => _fetch("/bankroll"),
+  botStatus: (id) => _fetch(`/bot/status?bankroll_id=${id}`),
+  botStart: (id, cfg) => _fetch("/bot/start", { method: "POST", body: JSON.stringify({ bankroll_id: id, ...cfg }) }),
+  botStop: (id) => _fetch("/bot/stop", { method: "POST", body: JSON.stringify({ bankroll_id: id }) }),
+  listTrades: (id, status) => _fetch(`/bot/trades?bankroll_id=${id}${status ? "&status=" + status : ""}`),
+  momentum: (id) => _fetch(`/stats/momentum/${id}`),
+  statHistory: (id) => _fetch(`/stats/history/${id}`),
+  predict: (home, away) => _fetch("/predictions/predict?home_team=" + encodeURIComponent(home) + "&away_team=" + encodeURIComponent(away)),
+  importCsv: () => _fetch("/training/import-csv", { method: "POST" }),
+  fitModel: () => _fetch("/training/fit", { method: "POST" }),
+  fitAndEval: () => _fetch("/training/fit-and-eval", { method: "POST" }),
+  expandCsv: (seasons) => _fetch("/data/expand-csv?seasons=" + encodeURIComponent(seasons), { method: "POST" }),
+  ingesterStatus: () => _fetch("/data/ingester/status"),
+  ingesterStart: () => _fetch("/data/ingester/start", { method: "POST" }),
+  ingesterStop: () => _fetch("/data/ingester/stop", { method: "POST" }),
+  paperSettle: (id, result) => _fetch("/bot/paper/settle", { method: "POST", body: JSON.stringify({ trade_id: id, result }) })
 };
 export {
   api as a

@@ -9,22 +9,22 @@
     let prediction = $state<Record<string, unknown> | null>(null);
     let loading = $state(true);
 
+    const id = $page.params.id;
+
     onMount(async () => {
-        const id = $page.params.id;
         try {
-            const [m, mom, hist, pred] = await Promise.all([
-                api.listMatches('all').then(ms => ms.find((x: Record<string, unknown>) => x.id === id)),
-                api.momentum(id).catch(() => null),
-                api.statHistory(id).catch(() => []),
-                api.predict(
-                    (match?.home_team as string) || 'Arsenal',
-                    (match?.away_team as string) || 'Chelsea'
-                ).catch(() => null),
-            ]);
+            const m = await api.getMatch(id);
             match = m ?? null;
-            momentum = mom as Record<string, unknown> | null;
-            stats = hist as Array<Record<string, unknown>>;
-            prediction = pred as Record<string, unknown> | null;
+            if (match) {
+                const [mom, hist, pred] = await Promise.all([
+                    api.momentum(id).catch(() => null),
+                    api.statHistory(id).catch(() => []),
+                    api.predict(String(match.home_team), String(match.away_team)).catch(() => null),
+                ]);
+                momentum = mom as Record<string, unknown> | null;
+                stats = hist as Array<Record<string, unknown>>;
+                prediction = pred as Record<string, unknown> | null;
+            }
         } catch { /* */ }
         loading = false;
     });

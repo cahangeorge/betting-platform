@@ -130,14 +130,13 @@
     "src": "src/routes/+layout.svelte",
     "isEntry": true,
     "imports": [
-      "_index2.js",
       "_exports.js",
       "_utils2.js",
       "_root.js",
       "_state.svelte.js"
     ],
     "css": [
-      "_app/immutable/assets/_layout.D6kGW1ql.css"
+      "_app/immutable/assets/_layout.DOC4slrD.css"
     ]
   },
   "src/routes/+page.svelte": {
@@ -197,6 +196,7 @@
     "src": "src/routes/matches/[id]/+page.svelte",
     "isEntry": true,
     "imports": [
+      "_index2.js",
       "_exports.js",
       "_utils2.js",
       "_root.js",

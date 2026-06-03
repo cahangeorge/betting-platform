@@ -3,18 +3,13 @@
 
     let result = $state<Record<string, unknown> | null>(null);
     let loading = $state(false);
-    let config = $state({ stake: 1000, kelly: 0.25, edge: 0.05 });
-    let csvPath = $state('');
 
     async function runBacktest() {
         loading = true;
         result = null;
         try {
-            const r = await fetch(`/api/v1/training/fit-and-eval?league=&holdout_ratio=0.2`, {
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('bt_token')}` },
-                method: 'POST',
-            });
-            result = { status: 'api_eval', ...(await r.json()) };
+            const r = await api.fitAndEval();
+            result = r;
         } catch (e: unknown) {
             result = { error: e instanceof Error ? e.message : 'Backtest failed' };
         }

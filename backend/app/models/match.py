@@ -63,4 +63,4 @@ class MatchStat(Base):
     cards_away: Mapped[int | None] = mapped_column(Integer, nullable=True)
     data: Mapped[str | None] = mapped_column(Text, nullable=True, comment="JSON: extra fields")
     match: Mapped["Match"] = relationship("Match", back_populates="stats")
-    __table_args__ = (UniqueConstraint("match_id", "source", name="uq_match_stat_match_source"),)
+    __table_args__ = (UniqueConstraint("match_id", "source", "elapsed", name="uq_match_stat_match_source_elapsed"),)
