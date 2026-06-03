@@ -1,7 +1,11 @@
 """FastAPI application factory."""
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.core.config import Settings, get_settings
 from app.core.database import engine
@@ -48,6 +52,20 @@ def create_application(settings: Settings | None = None) -> FastAPI:
     app.include_router(stats_router, prefix="/api/v1")
     app.include_router(training_router, prefix="/api/v1")
     app.include_router(data_router, prefix="/api/v1")
+
+    # Serve SvelteKit frontend (if built)
+    frontend_dir = Path(__file__).resolve().parents[2] / "frontend" / "build"
+    index_html = frontend_dir / "index.html"
+
+    if frontend_dir.exists() and index_html.exists():
+        app.mount("/_app", StaticFiles(directory=str(frontend_dir / "_app")), name="svelte-app")
+
+        @app.get("/{full:path}", response_class=HTMLResponse, include_in_schema=False)
+        async def serve_frontend(full: str) -> HTMLResponse:
+            if full.startswith("api/") or full in ("docs", "redoc", "openapi.json"):
+                return HTMLResponse(status_code=404)
+            return HTMLResponse(content=index_html.read_text())
+
     return app
 
 
