@@ -19,6 +19,8 @@ dependencies = [
     "bcrypt>=4.1.0",
     "PyJWT>=2.8.0",
     "aiosqlite>=0.22.1",
+    "penaltyblog>=1.11.0",
+    "scipy>=1.17.1",
 ]
 
 [project.scripts]

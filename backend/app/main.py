@@ -36,6 +36,7 @@ def create_application(settings: Settings | None = None) -> FastAPI:
     from app.api.routes.health import router as health_router
     from app.api.routes.matches import router as matches_router
     from app.api.routes.predictions import router as predictions_router
+    from app.api.routes.training import router as training_router
 
     app.include_router(health_router)
     app.include_router(matches_router, prefix="/api/v1")
@@ -44,6 +45,7 @@ def create_application(settings: Settings | None = None) -> FastAPI:
     app.include_router(auth_router, prefix="/api/v1")
     app.include_router(bot_router, prefix="/api/v1")
     app.include_router(stats_router, prefix="/api/v1")
+    app.include_router(training_router, prefix="/api/v1")
     return app
 
 
