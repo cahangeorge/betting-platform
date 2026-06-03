@@ -19,6 +19,8 @@ from app.models.match import Match
 from app.services.exchanges.betfair import BetfairClient
 from app.services.exchanges.smarkets import SmarketsClient
 from app.services.live_engine.execution import ExecutionService
+from app.services.live_engine.momentum import LiveMomentumScorer
+from app.services.live_engine.probability_updater import LiveProbabilityUpdater
 from app.services.live_engine.risk_manager import RiskManager
 from app.services.live_engine.value_detector import ValueDetector
 from app.services.training.trainer import FittedPredictionService
@@ -35,6 +37,7 @@ class LiveBotDaemon:
         exchange_whitelist: list[str] | None = None,
         min_odds: float = 1.5,
         max_odds: float = 20.0,
+        use_contrarian: bool = True,
     ) -> None:
         self.bankroll_id = bankroll_id
         self.kelly_fraction = kelly_fraction
@@ -44,9 +47,12 @@ class LiveBotDaemon:
         self.exchange_whitelist = exchange_whitelist or ["betfair", "smarkets"]
         self.min_odds = min_odds
         self.max_odds = max_odds
+        self.use_contrarian = use_contrarian
         self.betfair = BetfairClient()
         self.smarkets = SmarketsClient()
         self.detector = ValueDetector(edge_threshold=edge_threshold)
+        self.momentum_scorer = LiveMomentumScorer()
+        self.prob_updater = LiveProbabilityUpdater()
         self.prediction_service = FittedPredictionService("latest")
         self._redis: redis.Redis | None = None
         self._running = False
@@ -114,7 +120,26 @@ class LiveBotDaemon:
         self, db: Any, match: Any, risk: RiskManager,
     ) -> None:
         mid = str(match.id)
-        probs = {"home": 0.3333, "draw": 0.3333, "away": 0.3333}
+        elapsed = 0  # will be replaced by DB stat lookup
+        momentum_diff = 0.0
+
+        # 1. Fetch latest stat snapshot for momentum scoring
+        from app.models.match import MatchStat
+        stat_result = await db.execute(
+            select(MatchStat).where(
+                MatchStat.match_id == mid,
+                MatchStat.is_deleted.is_(False),
+            ).order_by(MatchStat.elapsed.desc()).limit(1)
+        )
+        latest_stat = stat_result.scalar_one_or_none()
+
+        if latest_stat:
+            elapsed = latest_stat.elapsed or 0
+            ms = self.momentum_scorer.score_from_matchstat(mid, latest_stat)
+            momentum_diff = ms.differential
+
+        # 2. Get base model probabilities
+        base_probs = {"home": 0.3333, "draw": 0.3333, "away": 0.3333}
         try:
             from app.schemas import PredictionInput
             payload = PredictionInput(
@@ -123,7 +148,7 @@ class LiveBotDaemon:
                 match_date=datetime.datetime.now(datetime.timezone.utc),
             )
             p = await self.prediction_service.predict(payload, model_key="poisson")
-            probs = {
+            base_probs = {
                 "home": float(p.home_win_prob),
                 "draw": float(p.draw_prob),
                 "away": float(p.away_win_prob),
@@ -131,6 +156,16 @@ class LiveBotDaemon:
         except Exception:
             pass
 
+        # 3. Update probabilities with live match context
+        live_probs = self.prob_updater.update(
+            base_probs=base_probs,
+            home_score=match.home_score or 0,
+            away_score=match.away_score or 0,
+            momentum_diff=momentum_diff,
+            elapsed=elapsed,
+        )
+
+        # 4. Fetch odds
         all_rows: list[dict[str, Any]] = []
         if match.betfair_market_id and "betfair" in self.exchange_whitelist:
             try:
@@ -165,11 +200,23 @@ class LiveBotDaemon:
             if not exchange_rows:
                 continue
             market_id = getattr(match, f"{exchange}_market_id", "unknown") or "unknown"
+            # Standard value detection with live-adjusted probabilities
             signals = self.detector.detect(
-                match_id=mid, model_probs=probs, live_odds_rows=exchange_rows,
+                match_id=mid, model_probs=live_probs, live_odds_rows=exchange_rows,
                 exchange=exchange, market_id=market_id,
                 kelly_fraction=self.kelly_fraction, max_bet=Decimal("100.0"),
             )
+
+            # Contrarian detection (odds >= 3.0, momentum mismatch)
+            if self.use_contrarian:
+                contrarian = self.detector.detect_contrarian(
+                    match_id=mid, model_probs=live_probs, live_odds_rows=exchange_rows,
+                    exchange=exchange, market_id=market_id,
+                    min_odds=3.0, momentum_diff=momentum_diff,
+                    momentum_direction="negative",
+                    kelly_fraction=self.kelly_fraction, max_bet=Decimal("100.0"),
+                )
+                signals.extend(contrarian)
             execution = ExecutionService(db, paper=self.paper)
             for signal in signals:
                 self.stats["signals_found"] += 1

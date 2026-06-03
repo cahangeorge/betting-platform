@@ -103,3 +103,70 @@ class ValueDetector:
                 kelly_fraction=kelly_fraction, max_bet=max_bet,
             ))
         return signals
+
+    def detect_contrarian(
+        self,
+        match_id: str,
+        model_probs: dict[str, float],
+        live_odds_rows: list[dict[str, Any]],
+        exchange: str,
+        market_id: str,
+        min_odds: float = 3.0,
+        momentum_diff: float = 0.0,
+        momentum_direction: str = "negative",  # bet ON the team being momentum'd AGAINST
+        kelly_fraction: float = 0.5,
+        max_bet: Decimal = Decimal("100.0"),
+    ) -> list[ValueSignal]:
+        """Contrarian entry: bet on a team the market has overreacted against.
+
+        Key insight: when a team is performing poorly (momentum negative) but the
+        model still sees latent win probability, and odds have drifted to 3.0+,
+        the market may have overcorrected.
+
+        Only triggers when:
+        - odds >= min_odds (typically 3.0+)
+        - model probability exceeds implied by edge_threshold
+        - momentum_diff is opposite to the runner (e.g., negative momentum on home = bet home)
+        """
+        signals: list[ValueSignal] = []
+        for row in live_odds_rows:
+            runner_key = row.get("runner", "").lower()
+            if runner_key not in ("home", "away"):
+                continue
+
+            prob = model_probs.get(runner_key, 0.0)
+            if prob <= 0:
+                continue
+
+            price, size = self.best_back_odds(row.get("available_to_back", []))
+            if price < min_odds:
+                continue
+            if price <= 1.0:
+                continue
+
+            # Contrarian check: momentum is negative for this team = market overreaction
+            is_home = runner_key == "home"
+            if momentum_direction == "negative":
+                if is_home and momentum_diff >= 0:
+                    continue  # home not being momentum'd against
+                if not is_home and momentum_diff <= 0:
+                    continue  # away not being momentum'd against
+            elif momentum_direction == "positive":
+                if is_home and momentum_diff <= 0:
+                    continue  # home not dominant
+                if not is_home and momentum_diff >= 0:
+                    continue
+
+            implied = self.implied_probability(price)
+            edge = prob - implied
+            if edge < self.edge_threshold:
+                continue
+
+            signals.append(ValueSignal(
+                match_id=match_id, exchange=exchange, market_id=market_id,
+                runner=runner_key, side="BACK",
+                model_prob=prob, implied_prob=implied,
+                edge=edge, odds=price, available_size=size,
+                kelly_fraction=kelly_fraction, max_bet=max_bet,
+            ))
+        return signals

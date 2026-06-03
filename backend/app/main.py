@@ -32,6 +32,7 @@ def create_application(settings: Settings | None = None) -> FastAPI:
     from app.api.routes.auth import router as auth_router
     from app.api.routes.bankroll import router as bankroll_router
     from app.api.routes.bot import router as bot_router
+    from app.api.routes.stats import router as stats_router
     from app.api.routes.health import router as health_router
     from app.api.routes.matches import router as matches_router
     from app.api.routes.predictions import router as predictions_router
@@ -42,6 +43,7 @@ def create_application(settings: Settings | None = None) -> FastAPI:
     app.include_router(bankroll_router, prefix="/api/v1")
     app.include_router(auth_router, prefix="/api/v1")
     app.include_router(bot_router, prefix="/api/v1")
+    app.include_router(stats_router, prefix="/api/v1")
     return app
 
 
