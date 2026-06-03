@@ -206,3 +206,45 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
 .mt-1 { margin-top: 1rem; }
 .mb-1 { margin-bottom: 1rem; }
 .mb-2 { margin-bottom: 2rem; }
+
+/* Skeleton loading */
+@keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+}
+.skeleton {
+    background: linear-gradient(90deg, var(--bg-card) 25%, var(--bg-hover) 50%, var(--bg-card) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s ease-in-out infinite;
+    border-radius: var(--radius);
+    min-height: 1rem;
+}
+.skeleton-line { height: 1rem; margin-bottom: 0.5rem; }
+.skeleton-line.w60 { width: 60%; }
+.skeleton-line.w80 { width: 80%; }
+.skeleton-line.w40 { width: 40%; }
+.skeleton-line.w100 { width: 100%; }
+.skeleton-block { height: 3rem; margin-bottom: 0.5rem; }
+.skeleton-chart { height: 140px; margin-bottom: 0.5rem; }
+
+/* Pagination */
+.pagination {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    margin-top: 1rem;
+}
+.pagination button {
+    padding: 0.35rem 0.75rem;
+    font-size: 0.8rem;
+}
+.pagination button:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+.pagination .page-info {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    padding: 0 0.5rem;
+}

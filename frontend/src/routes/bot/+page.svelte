@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { onMount } from 'svelte';
+    import { onMount, onDestroy } from 'svelte';
     import { api } from '$lib/api';
     import { bankrolls, activeBankrollId } from '$lib/stores';
 
@@ -7,6 +7,14 @@
     let config = $state({ kellyFraction: 0.5, edgeThreshold: 0.15, pollInterval: 5, paper: true });
     let loading = $state(true);
     let message = $state('');
+    let intervalId: ReturnType<typeof setInterval> | null = null;
+
+    async function loadStatus() {
+        const bid = $activeBankrollId;
+        if (bid) {
+            try { status = await api.botStatus(bid); } catch { /* ignore */ }
+        }
+    }
 
     onMount(async () => {
         const bs = await api.listBankrolls();
@@ -14,9 +22,14 @@
         const bid = bs.length > 0 ? String(bs[0].id) : null;
         if (bid) {
             activeBankrollId.set(bid);
-            status = await api.botStatus(bid);
+            await loadStatus();
         }
         loading = false;
+        intervalId = setInterval(loadStatus, 5000);
+    });
+
+    onDestroy(() => {
+        if (intervalId) clearInterval(intervalId);
     });
 
     async function startBot() {
@@ -47,8 +60,9 @@
     }
 
     async function refresh() {
-        const bid = $activeBankrollId;
-        if (bid) status = await api.botStatus(bid);
+        loading = true;
+        await loadStatus();
+        loading = false;
     }
 </script>
 
@@ -58,7 +72,14 @@
 </div>
 
 {#if loading}
-    <p>Loading...</p>
+    <div class="stat-grid">
+        {#each Array(4) as _}
+            <div class="card">
+                <div class="skeleton skeleton-line w60"></div>
+                <div class="skeleton skeleton-block" style="margin-top:0.5rem"></div>
+            </div>
+        {/each}
+    </div>
 {:else}
     <div class="stat-grid">
         <div class="card">

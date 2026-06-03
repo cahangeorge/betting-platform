@@ -6,6 +6,15 @@
     let loading = $state(true);
     let filter = $state('live');
 
+    // Pagination
+    let page = $state(1);
+    const pageSize = 20;
+    let paginatedMatches = $derived.by(() => {
+        const start = (page - 1) * pageSize;
+        return matches.slice(start, start + pageSize);
+    });
+    let totalPages = $derived(Math.max(1, Math.ceil(matches.length / pageSize)));
+
     onMount(async () => {
         try {
             const all = await api.listMatches(filter === 'all' ? undefined : filter);
@@ -16,6 +25,7 @@
 
     async function refresh() {
         loading = true;
+        page = 1;
         try { matches = await api.listMatches(filter === 'all' ? undefined : filter); } catch { /* */ }
         loading = false;
     }
@@ -35,7 +45,24 @@
 </div>
 
 {#if loading}
-    <p>Loading...</p>
+    <div class="card" style="overflow-x:auto">
+        <table>
+            <thead>
+                <tr>
+                    <th>Home</th><th>Away</th><th>League</th><th>Score</th><th>Status</th><th>Odds</th><th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {#each Array(6) as _}
+                    <tr>
+                        {#each Array(7) as _}
+                            <td><div class="skeleton skeleton-line w80"></div></td>
+                        {/each}
+                    </tr>
+                {/each}
+            </tbody>
+        </table>
+    </div>
 {:else if matches.length === 0}
     <div class="card"><p style="color:var(--text-dim);text-align:center">No matches found</p></div>
 {:else}
@@ -47,7 +74,7 @@
                 </tr>
             </thead>
             <tbody>
-                {#each matches as m}
+                {#each paginatedMatches as m}
                     <tr>
                         <td><strong>{m.home_team as string}</strong></td>
                         <td>{m.away_team as string}</td>
@@ -60,5 +87,13 @@
                 {/each}
             </tbody>
         </table>
+
+        {#if totalPages > 1}
+            <div class="pagination">
+                <button onclick={() => page = Math.max(1, page - 1)} disabled={page <= 1}>← Prev</button>
+                <span class="page-info">Page {page} / {totalPages}</span>
+                <button onclick={() => page = Math.min(totalPages, page + 1)} disabled={page >= totalPages}>Next →</button>
+            </div>
+        {/if}
     </div>
 {/if}

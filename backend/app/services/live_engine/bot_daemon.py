@@ -57,6 +57,8 @@ class LiveBotDaemon:
         self._redis: redis.Redis | None = None
         self._running = False
         self._task: asyncio.Task | None = None
+        # Persistent risk manager — survives across cycles
+        self._risk: RiskManager | None = None
         self.stats: dict[str, Any] = {
             "cycles": 0, "signals_found": 0, "orders_placed": 0,
             "orders_rejected": 0, "errors": 0, "last_cycle_at": None,
@@ -104,17 +106,21 @@ class LiveBotDaemon:
             bankroll = bres.scalar_one_or_none()
             if not bankroll:
                 return
-            risk = RiskManager(
-                bankroll_balance=bankroll.balance,
-                kelly_fraction=self.kelly_fraction,
-                max_exposure_per_match=Decimal("50.0"),
-                max_daily_loss=Decimal("200.0"),
-                max_concurrent_positions=5,
-                min_odds=self.min_odds,
-                max_odds=self.max_odds,
-            )
+            # Persistent risk manager — update balance, don't recreate
+            if self._risk is None:
+                self._risk = RiskManager(
+                    bankroll_balance=bankroll.balance,
+                    kelly_fraction=self.kelly_fraction,
+                    max_exposure_per_match=Decimal("50.0"),
+                    max_daily_loss=Decimal("200.0"),
+                    max_concurrent_positions=5,
+                    min_odds=self.min_odds,
+                    max_odds=self.max_odds,
+                )
+            else:
+                self._risk.update_balance(bankroll.balance)
             for match in matches:
-                await self._process_match(db, match, risk)
+                await self._process_match(db, match, self._risk)
 
     async def _process_match(
         self, db: Any, match: Any, risk: RiskManager,

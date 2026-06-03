@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     matchbook_username: str = Field(default="", alias="MATCHBOOK_USERNAME")
     matchbook_password: str = Field(default="", alias="MATCHBOOK_PASSWORD")
 
+    # Smarkets — free tier
+    smarkets_api_key: str = Field(default="", alias="SMARKETS_API_KEY")
+
     # Football-data.org — free tier for live stats
     football_data_api_key: str = Field(default="", alias="FOOTBALL_DATA_API_KEY")
 
@@ -54,6 +57,8 @@ class Settings(BaseSettings):
             ("betfair_password", "betfair_password"),
             ("matchbook_username", "matchbook_username"),
             ("matchbook_password", "matchbook_password"),
+            ("smarkets_api_key", "smarkets_api_key"),
+            ("football_data_api_key", "football_data_api_key"),
         ]:
             if val := _read_secret(secret_name):
                 overrides[field_name] = val

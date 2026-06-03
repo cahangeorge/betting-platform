@@ -50,6 +50,7 @@ class SmarketsClient:
     async def list_market_quotes(self, market_id: str) -> dict[str, Any]:
         return await self._get(f"/markets/{market_id}/quotes/")
 
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     async def submit_order(self, contract_id: str, side: str, quantity: int, price: int) -> dict[str, Any]:
         client = await self._ensure_client()
         payload = {"contract_id": contract_id, "side": side, "quantity": quantity, "price": price}

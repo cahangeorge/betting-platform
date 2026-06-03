@@ -43,6 +43,7 @@ class BetfairClient:
 
     # ── Auth ──────────────────────────────────────────
 
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     async def login(self, username: str | None = None, password: str | None = None) -> str:
         """SSO login — required for both delayed (free) and live app keys."""
         cfg = get_settings()

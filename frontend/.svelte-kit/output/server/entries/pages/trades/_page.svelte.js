@@ -1,42 +1,82 @@
-import { a as attr_class, e as ensure_array_like, s as store_get, a3 as derived, u as unsubscribe_stores } from "../../../chunks/index2.js";
-import { e as escape_html } from "../../../chunks/attributes.js";
+import { a as attr_class, e as ensure_array_like, d as derived, s as store_get, u as unsubscribe_stores } from "../../../chunks/index2.js";
+import { o as onDestroy } from "../../../chunks/index-server.js";
 import { a as api } from "../../../chunks/api.js";
 import { w as writable } from "../../../chunks/index.js";
+import { e as escape_html, a as attr } from "../../../chunks/attributes.js";
 const activeBankrollId = writable(null);
 function _page($$renderer, $$props) {
   $$renderer.component(($$renderer2) => {
     var $$store_subs;
     let trades = [];
     let filter = "all";
-    async function refresh() {
+    let loading = true;
+    let page = 1;
+    const pageSize = 20;
+    let paginatedTrades = derived(() => {
+      const start = (page - 1) * pageSize;
+      return trades.slice(start, start + pageSize);
+    });
+    let totalPages = derived(() => Math.max(1, Math.ceil(trades.length / pageSize)));
+    async function loadData() {
       const bid = store_get($$store_subs ??= {}, "$activeBankrollId", activeBankrollId);
-      if (bid) trades = await api.listTrades(bid, void 0);
+      if (bid) {
+        try {
+          trades = await api.listTrades(bid, filter === "all" ? void 0 : filter);
+        } catch {
+        }
+      }
+    }
+    onDestroy(() => {
+    });
+    async function refresh() {
+      loading = true;
+      await loadData();
+      loading = false;
+    }
+    function onFilterChange() {
+      page = 1;
+      refresh();
     }
     let totalPnl = derived(() => trades.reduce((s, t) => s + Number(t.profit_loss || 0), 0));
     let wins = derived(() => trades.filter((t) => t.final_result === "won").length);
     let losses = derived(() => trades.filter((t) => t.final_result === "lost").length);
     $$renderer2.push(`<div class="flex mb-2"><h1>Trade Log</h1> <div class="flex gap-sm" style="margin-left:auto">`);
-    $$renderer2.select({ value: filter, onchange: refresh }, ($$renderer3) => {
+    $$renderer2.select({ value: filter, onchange: onFilterChange }, ($$renderer3) => {
       $$renderer3.option({ value: "all" }, ($$renderer4) => {
         $$renderer4.push(`All`);
       });
       $$renderer3.option({ value: "filled" }, ($$renderer4) => {
-        $$renderer4.push(`Open`);
+        $$renderer4.push(`Filled`);
       });
       $$renderer3.option({ value: "settled" }, ($$renderer4) => {
         $$renderer4.push(`Settled`);
       });
     });
     $$renderer2.push(` <button>↻</button></div></div> <div class="stat-grid"><div class="card"><div class="stat-label">Total Trades</div><div class="stat-value">${escape_html(trades.length)}</div></div> <div class="card"><div class="stat-label">Wins</div><div class="stat-value positive svelte-4z9rsc">${escape_html(wins())}</div></div> <div class="card"><div class="stat-label">Losses</div><div class="stat-value negative svelte-4z9rsc">${escape_html(losses())}</div></div> <div class="card"><div class="stat-label">Total P&amp;L</div><div${attr_class("stat-value mono svelte-4z9rsc", void 0, { "positive": totalPnl() >= 0, "negative": totalPnl() < 0 })}>$${escape_html(totalPnl().toFixed(2))}</div></div></div> <div class="card" style="overflow-x:auto">`);
-    if (trades.length === 0) {
+    if (loading) {
       $$renderer2.push("<!--[0-->");
+      $$renderer2.push(`<table><thead><tr><th>Match</th><th>Bet</th><th>Odds</th><th>Edge</th><th>Stake</th><th>Result</th><th>P&amp;L</th></tr></thead><tbody><!--[-->`);
+      const each_array = ensure_array_like(Array(8));
+      for (let $$index_1 = 0, $$length = each_array.length; $$index_1 < $$length; $$index_1++) {
+        each_array[$$index_1];
+        $$renderer2.push(`<tr><!--[-->`);
+        const each_array_1 = ensure_array_like(Array(7));
+        for (let $$index = 0, $$length2 = each_array_1.length; $$index < $$length2; $$index++) {
+          each_array_1[$$index];
+          $$renderer2.push(`<td><div class="skeleton skeleton-line w80"></div></td>`);
+        }
+        $$renderer2.push(`<!--]--></tr>`);
+      }
+      $$renderer2.push(`<!--]--></tbody></table>`);
+    } else if (trades.length === 0) {
+      $$renderer2.push("<!--[1-->");
       $$renderer2.push(`<p style="color:var(--text-dim);text-align:center">No trades yet</p>`);
     } else {
       $$renderer2.push("<!--[-1-->");
       $$renderer2.push(`<table><thead><tr><th>Match</th><th>Bet</th><th>Odds</th><th>Edge</th><th>Stake</th><th>Result</th><th>P&amp;L</th></tr></thead><tbody><!--[-->`);
-      const each_array = ensure_array_like(trades);
-      for (let $$index = 0, $$length = each_array.length; $$index < $$length; $$index++) {
-        let t = each_array[$$index];
+      const each_array_2 = ensure_array_like(paginatedTrades());
+      for (let $$index_2 = 0, $$length = each_array_2.length; $$index_2 < $$length; $$index_2++) {
+        let t = each_array_2[$$index_2];
         $$renderer2.push(`<tr><td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escape_html(t.market_id)}</td><td><span class="tag">${escape_html(t.side)}</span></td><td class="mono">${escape_html(Number(t.requested_odds).toFixed(2))}</td><td class="mono">${escape_html(t.edge_at_entry ? (Number(t.edge_at_entry) * 100).toFixed(1) + "%" : "-")}</td><td class="mono">$${escape_html(Number(t.requested_stake).toFixed(2))}</td><td>`);
         if (t.final_result === "won") {
           $$renderer2.push("<!--[0-->");
@@ -53,7 +93,14 @@ function _page($$renderer, $$props) {
           "negative": Number(t.profit_loss) < 0
         })}>${escape_html(t.profit_loss ? `$${Number(t.profit_loss).toFixed(2)}` : "-")}</td></tr>`);
       }
-      $$renderer2.push(`<!--]--></tbody></table>`);
+      $$renderer2.push(`<!--]--></tbody></table> `);
+      if (totalPages() > 1) {
+        $$renderer2.push("<!--[0-->");
+        $$renderer2.push(`<div class="pagination"><button${attr("disabled", page <= 1, true)}>← Prev</button> <span class="page-info">Page ${escape_html(page)} / ${escape_html(totalPages())}</span> <button${attr("disabled", page >= totalPages(), true)}>Next →</button></div>`);
+      } else {
+        $$renderer2.push("<!--[-1-->");
+      }
+      $$renderer2.push(`<!--]-->`);
     }
     $$renderer2.push(`<!--]--></div>`);
     if ($$store_subs) unsubscribe_stores($$store_subs);

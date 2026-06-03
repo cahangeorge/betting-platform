@@ -55,6 +55,7 @@ class MatchbookClient:
 
     # ── Auth ──────────────────────────────────────────
 
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     async def login(self) -> str:
         """Authenticate with username/password. Returns session token."""
         client = await self._ensure_client()

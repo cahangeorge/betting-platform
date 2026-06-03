@@ -105,7 +105,7 @@ class BacktestResult:
         self.avg_pnl = self.total_pnl / self.total_trades if self.total_trades > 0 else 0.0
 
         # Sharpe ratio (P&L-based)
-        if self.total_trades > 1:
+        if self.total_trades > 1 and self.initial_bankroll > 0:
             returns = [t.pnl / self.initial_bankroll for t in self.trades]
             mean_r = sum(returns) / len(returns)
             var_r = sum((r - mean_r) ** 2 for r in returns) / (len(returns) - 1)
@@ -114,15 +114,15 @@ class BacktestResult:
             self.sharpe = 0.0
 
         # Max drawdown
-        peak = self.initial_bankroll
+        peak = max(self.initial_bankroll, 1.0)  # floor at 1.0 to avoid division by zero
         max_dd = 0.0
         self.equity_curve = [float(peak)]
         for t in self.trades:
-            b = t.bankroll_after
+            b = max(t.bankroll_after, 0.0)
             self.equity_curve.append(float(b))
             if b > peak:
                 peak = b
-            dd = (peak - b) / peak
+            dd = (peak - b) / peak if peak > 0 else 0.0
             if dd > max_dd:
                 max_dd = dd
         self.max_drawdown = max_dd

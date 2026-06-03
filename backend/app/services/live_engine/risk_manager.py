@@ -1,6 +1,7 @@
-"""Risk manager."""
+"""Risk manager — persistent across bot daemon cycles."""
 from __future__ import annotations
 
+import datetime
 from decimal import Decimal
 from typing import Any
 
@@ -23,8 +24,21 @@ class RiskManager:
         self.daily_pnl: Decimal = Decimal("0")
         self.open_positions: int = 0
         self.exposure_by_match: dict[str, Decimal] = {}
+        self._daily_reset_date = datetime.date.today()
+
+    def _check_daily_reset(self) -> None:
+        """Reset daily P&L at midnight."""
+        today = datetime.date.today()
+        if today > self._daily_reset_date:
+            self.daily_pnl = Decimal("0")
+            self._daily_reset_date = today
+
+    def update_balance(self, new_balance: Decimal) -> None:
+        """Update bankroll balance from DB."""
+        self.bankroll_balance = new_balance
 
     def approve(self, signal: ValueSignal) -> tuple[bool, str]:
+        self._check_daily_reset()
         if signal.kelly_stake_fraction <= 0:
             return False, "kelly_negative"
         if signal.odds < self.min_odds:
@@ -47,10 +61,28 @@ class RiskManager:
 
     def record_position(self, signal: ValueSignal) -> None:
         self.open_positions += 1
-        self.exposure_by_match[signal.match_id] = self.exposure_by_match.get(signal.match_id, Decimal("0")) + signal.recommended_stake
+        self.exposure_by_match[signal.match_id] = (
+            self.exposure_by_match.get(signal.match_id, Decimal("0"))
+            + signal.recommended_stake
+        )
+
+    def close_position(self, match_id: str, pnl: Decimal = Decimal("0")) -> None:
+        """Close a position: decrement counter, reduce exposure, update P&L."""
+        self.open_positions = max(0, self.open_positions - 1)
+        self.daily_pnl += pnl
+        if match_id in self.exposure_by_match:
+            self.exposure_by_match[match_id] = max(
+                Decimal("0"),
+                self.exposure_by_match[match_id] - abs(pnl),
+            )
 
     def to_dict(self) -> dict[str, Any]:
-        return {"bankroll_balance": float(self.bankroll_balance), "kelly_fraction": self.kelly_fraction,
-                "daily_pnl": float(self.daily_pnl), "open_positions": self.open_positions,
-                "max_concurrent_positions": self.max_concurrent_positions,
-                "exposure_by_match": {k: float(v) for k, v in self.exposure_by_match.items()}}
+        self._check_daily_reset()
+        return {
+            "bankroll_balance": float(self.bankroll_balance),
+            "kelly_fraction": self.kelly_fraction,
+            "daily_pnl": float(self.daily_pnl),
+            "open_positions": self.open_positions,
+            "max_concurrent_positions": self.max_concurrent_positions,
+            "exposure_by_match": {k: float(v) for k, v in self.exposure_by_match.items()},
+        }
