@@ -4,7 +4,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     )
     jwt_secret: str = Field(default="dev-secret-change-in-production-32chars", alias="JWT_SECRET")
     jwt_access_token_expire_minutes: int = Field(default=60, alias="JWT_EXPIRE_MINUTES")
+    football_data_api_key: str = Field(default="", alias="FOOTBALL_DATA_API_KEY")
 
     @classmethod
     def load(cls) -> "Settings":
