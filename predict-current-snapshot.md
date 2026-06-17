@@ -1,0 +1,86 @@
+- generic [active] [ref=e1]:
+  - banner [ref=e2]:
+    - generic [ref=e3]:
+      - link "Betfront" [ref=e4] [cursor=pointer]:
+        - /url: /
+        - text: Betfront
+      - navigation "Main navigation" [ref=e6]:
+        - link "Home" [ref=e7] [cursor=pointer]:
+          - /url: /
+        - link "Data" [ref=e8] [cursor=pointer]:
+          - /url: /data
+        - link "Predict" [ref=e9] [cursor=pointer]:
+          - /url: /predict
+        - link "Tickets" [ref=e10] [cursor=pointer]:
+          - /url: /tickets
+        - link "Jobs" [ref=e11] [cursor=pointer]:
+          - /url: /jobs
+        - link "Account" [ref=e12] [cursor=pointer]:
+          - /url: /account
+      - generic [ref=e13]:
+        - button "Auto (system) — click for light" [ref=e15]
+        - generic [ref=e22]
+  - main [ref=e25]:
+    - generic [ref=e26]:
+      - generic [ref=e27]:
+        - paragraph [ref=e28]: Prediction & Training
+        - heading "Predict Match Outcomes" [level=1] [ref=e29]
+        - paragraph [ref=e30]: Run penaltyblog statistical models or train ML classifiers on historical data. All predictions are saved to history for ticket generation.
+      - navigation "Predict tabs" [ref=e31]:
+        - link "✨ Pillar 3 · Predict" [ref=e32] [cursor=pointer]:
+          - /url: /predict?tab=pillar
+        - link "🔮 Prediction" [ref=e33] [cursor=pointer]:
+          - /url: /predict?tab=prediction
+        - link "🧠 Train & Predict" [ref=e34] [cursor=pointer]:
+          - /url: /predict?tab=train
+        - link "📐 Analytics" [ref=e35] [cursor=pointer]:
+          - /url: /predict?tab=analytics
+        - link "🎯 Backtest" [ref=e36] [cursor=pointer]:
+          - /url: /predict?tab=backtest
+        - link "📋 Prediction History" [ref=e37] [cursor=pointer]:
+          - /url: /predict?tab=history
+      - generic [ref=e39]:
+        - tablist [ref=e40]
+        - tabpanel "🎯 Single Model" [ref=e44]
+  - contentinfo [ref=e108]:
+    - generic [ref=e109]:
+      - generic [ref=e110]:
+        - generic [ref=e113]: Betfront
+        - paragraph [ref=e114]: Football analytics & betting intelligence. Scrape, predict, and trade with confidence.
+      - generic [ref=e115]:
+        - paragraph [ref=e116]: Pages
+        - link "Data" [ref=e117] [cursor=pointer]:
+          - /url: /data
+        - link "Predict" [ref=e118] [cursor=pointer]:
+          - /url: /predict
+        - link "Tickets" [ref=e119] [cursor=pointer]:
+          - /url: /tickets
+      - generic [ref=e120]:
+        - paragraph [ref=e121]: Built with
+        - paragraph [ref=e122]
+        - paragraph [ref=e124]
+        - paragraph [ref=e126]: © 2026 Betfront
+  - generic [ref=e129]:
+    - button "Menu" [ref=e130]:
+      - img [ref=e132]
+      - generic: Menu
+    - button "Inspect" [ref=e136]:
+      - img [ref=e138]
+      - generic: Inspect
+    - button "Audit" [ref=e140]:
+      - generic [ref=e141]:
+        - img [ref=e142]
+        - img [ref=e158]
+      - generic: Audit
+    - button "🐍 Bridge logs" [ref=e145]:
+      - generic [ref=e146]: 🐍
+      - generic: Bridge logs
+    - button "🗃️ Prisma queries" [ref=e147]:
+      - generic [ref=e148]: 🗃️
+      - generic: Prisma queries
+    - button "🕸️ Scrape jobs" [ref=e149]:
+      - generic [ref=e150]: 🕸️
+      - generic: Scrape jobs
+    - button "Settings" [ref=e152]:
+      - img [ref=e154]
+      - generic: Settings

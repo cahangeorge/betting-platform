@@ -1,12 +1,19 @@
 import { sveltekit } from '@sveltejs/kit/vite';
+import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
 
 export default defineConfig({
-    plugins: [sveltekit()],
-    server: {
-        port: 5173,
-        proxy: {
-            '/api': 'http://localhost:8000',
-        },
-    },
+	plugins: [tailwindcss(), sveltekit()],
+	server: {
+		watch: {
+			ignored: ['**/test-results/**', '**/playwright-report/**', '**/.playwright-artifacts/**']
+		},
+		proxy: {
+			'/api': {
+				target: 'http://localhost:8001',
+				changeOrigin: true,
+				ws: true
+			}
+		}
+	}
 });

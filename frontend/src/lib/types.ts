@@ -1,0 +1,443 @@
+// ─── Auth ──────────────────────────────────────────────
+export interface User {
+	id: number;
+	email: string;
+	name: string;
+	is_active: boolean;
+	is_superuser: boolean;
+	created_at: string;
+}
+
+export interface LoginRequest {
+	email: string;
+	password: string;
+}
+
+export interface SignupRequest {
+	email: string;
+	password: string;
+	name: string;
+}
+
+export interface AuthResponse {
+	access_token: string;
+	token_type: string;
+}
+
+// ─── Matches ───────────────────────────────────────────
+export interface Match {
+	id: number;
+	league: string;
+	home_team: string;
+	away_team: string;
+	start_time: string;
+	status: MatchStatus;
+	home_score: number | null;
+	away_score: number | null;
+	odds: Odd[];
+	// Live match properties
+	minute?: number;
+	momentum?: string;
+	momentum_intensity?: 'overwhelming' | 'strong' | 'moderate' | 'weak';
+	xg_home?: number;
+	xg_away?: number;
+	possession_home?: number;
+	possession_away?: number;
+	shots_home?: number;
+	shots_away?: number;
+	live_value_candidates?: LiveValueCandidate[];
+}
+
+export type MatchStatus = 'scheduled' | 'live' | 'finished' | 'postponed' | 'cancelled';
+
+export interface Odd {
+	id: number;
+	bookmaker: string;
+	market: string;
+	home_odds: number;
+	draw_odds: number | null;
+	away_odds: number;
+	updated_at: string;
+}
+
+export interface LiveValueCandidate {
+	market: string;
+	selection: string;
+	odds: number;
+	model_probability: number;
+	implied_probability: number;
+	edge: number;
+	expected_value: number;
+	spread: number | null;
+	source: string;
+	prediction_age_seconds: number | null;
+	confidence_band: 'low' | 'medium' | 'high';
+}
+
+export interface MatchFilter {
+	league?: string;
+	status?: MatchStatus;
+	date_from?: string;
+	date_to?: string;
+}
+
+// ─── Predictions ──────────────────────────────────────
+export type ModelType = 'poisson' | 'bivariate_poisson' | 'skellam' | 'elo' | 'ensemble' | 'xgb';
+
+export interface PredictionModel {
+	id: string;
+	name: string;
+	type: ModelType;
+	description: string;
+	parameters: Record<string, unknown>;
+}
+
+export interface PredictionRun {
+	id: number;
+	model_type: ModelType;
+	status: RunStatus;
+	matches: number[];
+	parameters: Record<string, unknown>;
+	created_at: string;
+	completed_at: string | null;
+	results: PredictionResult[] | null;
+	error: string | null;
+}
+
+export type RunStatus = 'pending' | 'running' | 'completed' | 'failed';
+
+export interface PredictionResult {
+	match_id: number;
+	home_team: string;
+	away_team: string;
+	home_prob: number;
+	draw_prob: number;
+	away_prob: number;
+	home_expected_goals: number;
+	away_expected_goals: number;
+	predicted_score: string;
+	value_bet: string | null;
+	confidence: number;
+}
+
+export interface RunRequest {
+	model_type: ModelType;
+	match_ids: number[];
+	parameters?: Record<string, unknown>;
+}
+
+export interface EnsembleResult {
+	models: string[];
+	weights: Record<string, number>;
+	results: PredictionResult[];
+}
+
+export interface BacktestRequest {
+	model_type: ModelType;
+	date_from: string;
+	date_to: string;
+	parameters?: Record<string, unknown>;
+}
+
+export interface BacktestResult {
+	model_type: ModelType;
+	total_matches: number;
+	accuracy: number;
+	profit_loss: number;
+	roi: number;
+	results: PredictionResult[];
+}
+
+// ─── Tickets ──────────────────────────────────────────
+export type TicketStatus = 'open' | 'won' | 'lost' | 'cashed_out' | 'void';
+export type TicketType = 'single' | 'accumulator' | 'system';
+
+export interface Ticket {
+	id: number;
+	reference: string;
+	type?: TicketType;
+	ticket_type?: TicketType;
+	status: TicketStatus;
+	stake: number;
+	total_odds: number;
+	potential_return: number;
+	actual_return: number | null;
+	legs: TicketLeg[];
+	created_at: string;
+	settled_at: string | null;
+	bankroll_id: number;
+}
+
+export interface TicketLeg {
+	id: number;
+	model_prediction_id?: number | null;
+	match_id: number;
+	market: string;
+	selection: string;
+	odds: number;
+	status: 'pending' | 'won' | 'lost' | 'void';
+	match: Match | null;
+}
+
+export interface PlaceBetRequest {
+	legs: {
+		match_id: number;
+		model_prediction_id?: number;
+		market: string;
+		selection: string;
+		odds: number;
+	}[];
+	stake: number;
+	type?: TicketType;
+	ticket_type?: TicketType;
+	bankroll_id: number;
+}
+
+export interface SettleRequest {
+	ticket_id: number;
+	outcome: 'won' | 'lost' | 'void';
+	return_amount?: number;
+}
+
+// ─── Bankroll ─────────────────────────────────────────
+export type BankrollType = 'paper' | 'real';
+export type LedgerEntryType = 'deposit' | 'withdrawal' | 'bet_placed' | 'bet_won' | 'bet_lost' | 'adjustment';
+
+export interface Bankroll {
+	id: number;
+	name: string;
+	type: BankrollType;
+	currency: string;
+	balance: number;
+	initial_balance: number;
+	is_active: boolean;
+	created_at: string;
+}
+
+export interface BankrollCreateRequest {
+	name: string;
+	type: BankrollType;
+	currency?: string;
+	initial_balance: number;
+}
+
+export interface BookmakerAccount {
+	id: number;
+	bookmaker: string;
+	account_name: string;
+	balance: number;
+	bankroll_id: number;
+	created_at?: string;
+}
+
+export interface BookmakerAccountCreateRequest {
+	bookmaker: string;
+	account_name: string;
+	balance?: number;
+	bankroll_id: number;
+}
+
+export interface LedgerEntry {
+	id: number;
+	entry_type: LedgerEntryType;
+	description: string;
+	amount: number;
+	balance_after: number;
+	reference_type: string | null;
+	reference_id: number | null;
+	created_at: string;
+	bankroll_id: number;
+}
+
+// ─── Data / Scraping ──────────────────────────────────
+export type JobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type JobType = 'scrape_odds' | 'scrape_results' | 'scrape_league' | 'sync_data';
+
+export interface ScrapeJob {
+	id: number;
+	job_type: string;
+	status: JobStatus;
+	league?: string | null;
+	params: Record<string, unknown> | null;
+	created_at: string;
+	started_at?: string | null;
+	completed_at: string | null;
+	error: string | null;
+	output?: string | null;
+}
+
+export interface ScrapeJobCreateRequest {
+	job_type: JobType;
+	params?: Record<string, unknown>;
+}
+
+export interface Dataset {
+	id: number;
+	name: string | null;
+	source: string;
+	data: Record<string, unknown>;
+	matches_count: number | null;
+	created_at: string;
+}
+
+export interface League {
+	id: string;
+	name: string;
+	matches_count: number;
+	scrape_slug?: string | null;
+}
+
+// ─── Scheduled Jobs ───────────────────────────────────
+export interface ScheduledJob {
+	id: number;
+	name: string;
+	cron_expression: string;
+	task_type: string;
+	config: Record<string, unknown> | null;
+	enabled: boolean;
+	last_run: string | null;
+	next_run: string | null;
+	created_at: string;
+}
+
+export interface ScheduledJobCreateRequest {
+	name: string;
+	cron_expression: string;
+	task_type: string;
+	config?: Record<string, unknown>;
+}
+
+// ─── Strategy Run Results ─────────────────────────────
+export interface StrategyCreateRequest {
+	name: string;
+	model_type: string;
+	description?: string;
+	parameters?: Record<string, unknown>;
+}
+
+export interface StrategyRunRequest {
+	match_ids: number[];
+	markets: string[];
+	parameters?: Record<string, unknown>;
+}
+
+export interface StrategyRunResult {
+	strategy_id: number;
+	match_id: number;
+	match_home: string;
+	match_away: string;
+	league: string;
+	market: string;
+	predicted: string;
+	probability: number;
+	confidence: number;
+	edge: number;
+	odds: number;
+}
+
+// ─── API Error ─────────────────────────────────────────
+export interface ApiError {
+	detail: string;
+	status_code: number;
+}
+
+// ─── Polling ──────────────────────────────────────────
+export interface PollingState<T> {
+	data: T | null;
+	loading: boolean;
+	error: string | null;
+}
+
+// ─── Dashboard ────────────────────────────────────────
+export interface DashboardSummary {
+	total_matches: number;
+	total_tickets: number;
+	win_rate: number;
+	total_pnl: number;
+	active_bankroll: number;
+	pending_bets: number;
+}
+
+export interface JobLog {
+	id: number;
+	job_type: string;
+	status: string;
+	league: string | null;
+	started_at: string | null;
+	completed_at: string | null;
+	error: string | null;
+	created_at: string;
+}
+
+// ─── Analytics ────────────────────────────────────────
+export interface PnlPoint {
+	date: string;
+	pnl: number;
+	cumulative_pnl: number;
+	bets_count: number;
+	wins: number;
+}
+
+// ─── Catalog ──────────────────────────────────────────
+export interface Country {
+	country: string;
+	leagues: LeagueInfo[];
+}
+
+export interface LeagueInfo {
+	id: string;
+	name: string;
+	matches_count: number;
+	scrape_slug?: string | null;
+}
+
+// ─── Strategies ───────────────────────────────────────
+export interface Strategy {
+	id: number;
+	name: string;
+	model_type: string;
+	description: string | null;
+	parameters: Record<string, unknown>;
+	weights: Record<string, unknown> | null;
+	is_active: boolean;
+	created_at: string;
+	updated_at: string;
+	last_run: string | null;
+	avg_edge: number | null;
+	avg_win_rate: number | null;
+}
+
+// ─── Extended Dashboard Types ─────────────────────────
+export interface DashboardTicket {
+	id: number;
+	reference: string | null;
+	ticket_type: string;
+	status: TicketStatus;
+	stake: number;
+	total_odds: number;
+	potential_return: number;
+	actual_return: number | null;
+	legs: {
+		match_id: number;
+		home_team: string;
+		away_team: string;
+		market: string;
+		selection: string;
+		odds: number;
+		status: string;
+		home_score: number | null;
+		away_score: number | null;
+	}[];
+	created_at: string;
+}
+
+export interface UpcomingMatch {
+	id: number;
+	league: string;
+	home_team: string;
+	away_team: string;
+	start_time: string;
+	home_odds: number | null;
+	draw_odds: number | null;
+	away_odds: number | null;
+}
