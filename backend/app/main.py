@@ -1,72 +1,93 @@
-"""FastAPI application factory."""
+import re
+import warnings
 from contextlib import asynccontextmanager
-from pathlib import Path
+from typing import Any
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
-from fastapi.responses import HTMLResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI, Request, Response
+from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.core.config import Settings, get_settings
-from app.core.database import engine
-from app.models.base import metadata as _meta
+from app.api.v1.router import v1_router
+from app.config import get_settings
+from app.services.python_bridge import bridge_runtime_summary, validate_bridge_runtime
+
+settings = get_settings()
 
 
-async def _create_tables() -> None:
-    async with engine.begin() as conn:
-        await conn.run_sync(_meta.create_all)
+class FlexibleCORSMiddleware(BaseHTTPMiddleware):
+    """Custom CORS that allows any *.trycloudflare.com + configured origins."""
+
+    TUNNEL_PATTERN = re.compile(r"^https://[a-zA-Z0-9-]+\.trycloudflare\.com$")
+
+    def __init__(self, app: Any, allowed_origins: list[str]):
+        super().__init__(app)
+        self.allowed_origins = set(allowed_origins)
+
+    def _is_allowed(self, origin: str) -> bool:
+        if "*" in self.allowed_origins:
+            return True
+        if origin in self.allowed_origins:
+            return True
+        if self.TUNNEL_PATTERN.match(origin):
+            return True
+        return False
+
+    async def dispatch(self, request: Request, call_next):
+        if request.method == "OPTIONS":
+            origin = request.headers.get("origin", "")
+            if self._is_allowed(origin):
+                return Response(
+                    status_code=204,
+                    headers={
+                        "Access-Control-Allow-Origin": origin,
+                        "Access-Control-Allow-Credentials": "true",
+                        "Access-Control-Allow-Methods": "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT",
+                        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Requested-With",
+                        "Access-Control-Max-Age": "600",
+                    },
+                )
+            return Response(status_code=204)
+
+        response = await call_next(request)
+        origin = request.headers.get("origin", "")
+        if origin and self._is_allowed(origin):
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+        return response
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    settings = get_settings()
-    if settings.debug:
-        await _create_tables()
+    if settings.jwt_secret in ("dev-secret-change-in-production", "dev-jwt-secret-change-in-production"):
+        warnings.warn("BET_JWT_SECRET is not set — using insecure dev fallback. Set BET_JWT_SECRET in production.")
+
+    for issue in validate_bridge_runtime():
+        warnings.warn(f"Bridge runtime prerequisite issue: {issue}")
+
+    app.state.bridge_runtime = bridge_runtime_summary()
     yield
-    await engine.dispose()
 
 
-def create_application(settings: Settings | None = None) -> FastAPI:
-    _settings = settings or get_settings()
-    app = FastAPI(
-        title=_settings.app_name, version="0.1.0",
-        debug=_settings.debug, docs_url="/docs", redoc_url="/redoc",
-        lifespan=lifespan,
-    )
-    from app.api.routes.auth import router as auth_router
-    from app.api.routes.bankroll import router as bankroll_router
-    from app.api.routes.bot import router as bot_router
-    from app.api.routes.stats import router as stats_router
-    from app.api.routes.health import router as health_router
-    from app.api.routes.matches import router as matches_router
-    from app.api.routes.predictions import router as predictions_router
-    from app.api.routes.training import router as training_router
-    from app.api.routes.data import router as data_router
+app = FastAPI(
+    title=settings.app_name,
+    version="0.1.0",
+    lifespan=lifespan,
+    docs_url="/docs",
+    redoc_url="/redoc",
+)
 
-    app.include_router(health_router)
-    app.include_router(matches_router, prefix="/api/v1")
-    app.include_router(predictions_router, prefix="/api/v1")
-    app.include_router(bankroll_router, prefix="/api/v1")
-    app.include_router(auth_router, prefix="/api/v1")
-    app.include_router(bot_router, prefix="/api/v1")
-    app.include_router(stats_router, prefix="/api/v1")
-    app.include_router(training_router, prefix="/api/v1")
-    app.include_router(data_router, prefix="/api/v1")
+app.add_middleware(
+    FlexibleCORSMiddleware,
+    allowed_origins=settings.cors_origin_list,
+)
 
-    # Serve SvelteKit frontend (if built)
-    frontend_dir = Path(__file__).resolve().parents[2] / "frontend" / "build"
-    index_html = frontend_dir / "index.html"
-
-    if frontend_dir.exists() and index_html.exists():
-        app.mount("/_app", StaticFiles(directory=str(frontend_dir / "_app")), name="svelte-app")
-
-        @app.get("/{full:path}", response_class=HTMLResponse, include_in_schema=False)
-        async def serve_frontend(full: str) -> HTMLResponse:
-            if full.startswith("api/") or full in ("docs", "redoc", "openapi.json"):
-                return HTMLResponse(status_code=404)
-            return HTMLResponse(content=index_html.read_text())
-
-    return app
+app.include_router(v1_router)
 
 
-app = create_application()
+@app.get("/health")
+async def health():
+    return {"status": "ok", "app": settings.app_name}
+
+
+@app.get("/api/v1/health")
+async def api_health():
+    return {"status": "ok", "app": settings.app_name}

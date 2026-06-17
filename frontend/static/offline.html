@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="theme-color" content="#060B14" />
+		<title>Betfront Offline</title>
+		<style>
+			:root {
+				color-scheme: dark;
+				font-family: "Segoe UI", "Avenir Next", "Helvetica Neue", sans-serif;
+				background:
+					radial-gradient(circle at top, rgba(56, 189, 248, 0.14), transparent 38%),
+					radial-gradient(circle at bottom right, rgba(217, 70, 239, 0.14), transparent 30%),
+					#020617;
+			}
+
+			body {
+				margin: 0;
+				min-height: 100vh;
+				display: grid;
+				place-items: center;
+				padding: 24px;
+				color: #e2e8f0;
+			}
+
+			.panel {
+				width: min(560px, 100%);
+				border: 1px solid rgba(148, 163, 184, 0.22);
+				background: rgba(15, 23, 42, 0.78);
+				backdrop-filter: blur(18px);
+				padding: 28px;
+				box-shadow: 0 20px 60px rgba(2, 6, 23, 0.4);
+			}
+
+			h1 {
+				margin: 0 0 12px;
+				font-size: clamp(1.6rem, 3vw, 2.3rem);
+				letter-spacing: 0.04em;
+				text-transform: uppercase;
+			}
+
+			p {
+				margin: 0 0 14px;
+				line-height: 1.6;
+				color: rgba(226, 232, 240, 0.86);
+			}
+
+			.status {
+				display: inline-block;
+				margin-bottom: 18px;
+				padding: 6px 10px;
+				font-size: 12px;
+				font-weight: 700;
+				letter-spacing: 0.12em;
+				text-transform: uppercase;
+				background: rgba(251, 191, 36, 0.12);
+				border: 1px solid rgba(251, 191, 36, 0.28);
+				color: #fde68a;
+			}
+
+			.actions {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 12px;
+				margin-top: 18px;
+			}
+
+			a,
+			button {
+				appearance: none;
+				border: 1px solid rgba(125, 211, 252, 0.28);
+				background: rgba(14, 165, 233, 0.14);
+				color: #e0f2fe;
+				padding: 10px 14px;
+				font: inherit;
+				font-size: 14px;
+				font-weight: 700;
+				letter-spacing: 0.08em;
+				text-transform: uppercase;
+				text-decoration: none;
+				cursor: pointer;
+			}
+		</style>
+	</head>
+	<body>
+		<section class="panel">
+			<div class="status">Offline</div>
+			<h1>Betfront is temporarily disconnected</h1>
+			<p>
+				The app shell is still cached, but live odds, scraping, predictions, and ticket placement need a working connection.
+			</p>
+			<p>
+				Reconnect and refresh when you are back online. If you already visited a route before losing signal, the service worker can restore it from cache.
+			</p>
+			<div class="actions">
+				<button type="button" onclick="window.location.reload()">Retry</button>
+				<a href="/">Open dashboard</a>
+			</div>
+		</section>
+	</body>
+</html>
