@@ -40,8 +40,8 @@ def _market_aliases(prediction_market: str) -> set[str]:
         aliases.update({"1x2", "match_winner", "home_away", "matchwinner"})
     if base in {"btts", "both_teams_to_score", "bothteams", "bt_ts", "btts_yes_no"}:
         aliases.update({"btts", "both_teams_to_score", "bothteams", "bt_ts", "btts_yes_no"})
-    if base in {"ou_2_5", "ou25", "ou2_5", "over_under", "overunder", "totals"}:
-        aliases.update({"ou_2_5", "ou25", "ou2_5", "over_under", "overunder", "totals"})
+    if base in {"ou_2_5", "ou25", "ou2_5", "over_under", "over_under_2_5", "overunder", "totals"}:
+        aliases.update({"ou_2_5", "ou25", "ou2_5", "over_under", "over_under_2_5", "overunder", "totals"})
     return aliases
 
 
@@ -51,7 +51,7 @@ def market_matches(prediction_market: str, odds_market: str | None) -> bool:
         return False
 
     prediction_base = _market_base(prediction_market)
-    if prediction_base in {"ou_2_5", "ou25", "ou2_5", "over_under", "overunder", "totals"}:
+    if prediction_base in {"ou_2_5", "ou25", "ou2_5", "over_under", "over_under_2_5", "overunder", "totals"}:
         return _line_token(prediction_market) in {"", "2.5", "2.50"} and _line_token(odds_market) in {
             "2.5",
             "2.50",

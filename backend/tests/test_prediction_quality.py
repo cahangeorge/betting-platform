@@ -56,6 +56,23 @@ def test_build_market_consensus_accepts_oddsharvester_full_time_markets_and_best
     assert consensus["pick"] == "home"
 
 
+def test_build_market_consensus_accepts_oddsharvester_over_under_2_5_market():
+    odds_entries = [
+        _odds("over_under_2_5:FullTime", 1.91, None, 1.95, "Book A"),
+        _odds("over_under_2_5:FullTime", 1.93, None, 1.9, "Book B"),
+    ]
+
+    consensus = build_market_consensus(
+        "ou_2_5",
+        odds_entries,
+        implied_probabilities={"over": 0.49, "under": 0.51},
+    )
+
+    assert consensus["odds"]["over"] == {"odds": 1.93, "bookmaker": "Book B"}
+    assert consensus["odds"]["under"] == {"odds": 1.95, "bookmaker": "Book A"}
+    assert consensus["pick"] == "under"
+
+
 def test_sparse_team_history_and_market_disagreement_blocks_ticket_eligibility():
     training = [
         _match("England", "USA", 0, 0),

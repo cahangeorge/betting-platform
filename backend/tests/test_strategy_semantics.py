@@ -5,6 +5,7 @@ import pytest
 
 from app.api.v1 import strategies as strategies_api
 from app.services import prediction_engine
+from app.services.python_bridge import BridgeError
 
 
 def test_normalize_strategy_markets_maps_ui_aliases():
@@ -153,3 +154,95 @@ async def test_execute_single_model_run_forwards_penaltyblog_options(monkeypatch
     assert predictions[0].home_odds == 2.05
     assert predictions[0].expected_value == 0.025
     assert predictions[0].quality_report["market"]["implied_source"] == "penaltyblog.implied.calculate_implied"
+
+
+@pytest.mark.asyncio
+async def test_execute_single_model_run_falls_back_when_time_decay_bridge_fails(monkeypatch):
+    class _FakeSession:
+        def __init__(self):
+            self.added = []
+
+        def add(self, obj):
+            self.added.append(obj)
+
+        async def flush(self):
+            return None
+
+    training = [
+        SimpleNamespace(
+            id=index,
+            home_team=f"Home {index % 4}",
+            away_team=f"Away {index % 4}",
+            home_score=1,
+            away_score=0,
+            match_date=datetime(2026, 1, index + 1, tzinfo=timezone.utc),
+        )
+        for index in range(20)
+    ]
+    targets = [SimpleNamespace(id=92, home_team="Alpha FC", away_team="Beta United")]
+    captured_payloads: list[dict] = []
+
+    async def fake_fetch_training_matches(*args, **kwargs):
+        return training
+
+    async def fake_fetch_target_matches(*args, **kwargs):
+        return targets
+
+    async def fake_fetch_target_odds_map(*args, **kwargs):
+        return {
+            92: [
+                SimpleNamespace(
+                    match_id=92,
+                    market="1x2:FullTime",
+                    home_odds=2.05,
+                    draw_odds=3.4,
+                    away_odds=4.2,
+                    bookmaker="Book",
+                )
+            ]
+        }
+
+    async def fake_calculate_implied_probabilities_with_penaltyblog(*args, **kwargs):
+        return {"home": 0.48, "draw": 0.29, "away": 0.23}
+
+    async def fake_run_penaltyblog(payload):
+        captured_payloads.append(payload)
+        if payload["operation"] == "dixon_coles_weights":
+            raise BridgeError("weights unavailable")
+        if payload["operation"] == "model_fit_predict":
+            return {
+                "operation": "model_fit_predict",
+                "result": {
+                    "prediction": {
+                        "homeWin": 0.5,
+                        "draw": 0.3,
+                        "awayWin": 0.2,
+                    }
+                },
+            }
+        raise AssertionError(f"Unexpected operation {payload['operation']}")
+
+    monkeypatch.setattr(prediction_engine, "fetch_training_matches", fake_fetch_training_matches)
+    monkeypatch.setattr(prediction_engine, "fetch_target_matches", fake_fetch_target_matches)
+    monkeypatch.setattr(prediction_engine, "fetch_target_odds_map", fake_fetch_target_odds_map)
+    monkeypatch.setattr(
+        prediction_engine,
+        "calculate_implied_probabilities_with_penaltyblog",
+        fake_calculate_implied_probabilities_with_penaltyblog,
+    )
+    monkeypatch.setattr(prediction_engine, "run_penaltyblog", fake_run_penaltyblog)
+
+    db = _FakeSession()
+    summary = await prediction_engine.execute_single_model_run(
+        db=db,
+        run_id=13,
+        model_key="DixonColesGoalModel",
+        league="Premier League",
+        markets=["1x2"],
+        use_time_decay=True,
+    )
+
+    assert summary["written"] == 1
+    assert captured_payloads[0]["operation"] == "dixon_coles_weights"
+    assert captured_payloads[1]["operation"] == "model_fit_predict"
+    assert captured_payloads[1]["payload"]["weights"] is None

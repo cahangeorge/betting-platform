@@ -8,8 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.match import Match, OddsEntry
 from app.models.prediction import ModelPrediction, PredictionRun
 from app.services.prediction_quality import (
-    build_market_consensus,
     best_market_odds_by_outcome,
+    build_market_consensus,
     evaluate_prediction_quality,
     market_outcomes,
 )
@@ -361,20 +361,23 @@ async def execute_single_model_run(
         if len(dated_training) != len(training):
             raise ValueError("Time-decay weighting requires match dates for all training matches")
 
-        weights_response = await run_penaltyblog(
-            {
-                "operation": "dixon_coles_weights",
-                "payload": {
-                    "dates": [m.match_date.isoformat() for m in dated_training],
-                    "xi": float(time_decay_xi),
-                },
-            }
-        )
-        weights_result = weights_response.get("result", {})
-        serialized_weights = weights_result.get("weights")
-        if not isinstance(serialized_weights, list) or len(serialized_weights) != len(training):
-            raise ValueError("Penaltyblog time-decay weights response was invalid")
-        weights = [float(weight) for weight in serialized_weights]
+        try:
+            weights_response = await run_penaltyblog(
+                {
+                    "operation": "dixon_coles_weights",
+                    "payload": {
+                        "dates": [m.match_date.isoformat() for m in dated_training],
+                        "xi": float(time_decay_xi),
+                    },
+                }
+            )
+            weights_result = weights_response.get("result", {})
+            serialized_weights = weights_result.get("weights")
+            if not isinstance(serialized_weights, list) or len(serialized_weights) != len(training):
+                raise ValueError("Penaltyblog time-decay weights response was invalid")
+            weights = [float(weight) for weight in serialized_weights]
+        except BridgeError:
+            weights = None
 
     written = 0
     failed = 0
@@ -416,7 +419,7 @@ async def execute_single_model_run(
                 outcome_lookup = {entry["outcome"]: entry["probability"] for entry in probs}
                 model_probabilities = _market_model_probability_map(market, outcome_lookup)
                 home_prob, draw_prob, away_prob = _row_probability_fields(market, model_probabilities)
-                odds_entries = target_odds_map.get(target.id, getattr(target, "odds", []) or [])
+                odds_entries = target_odds_map.get(target.id) or []
                 implied_probabilities = await calculate_implied_probabilities_with_penaltyblog(market, odds_entries)
                 market_consensus = build_market_consensus(
                     market,
