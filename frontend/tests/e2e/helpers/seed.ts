@@ -83,12 +83,15 @@ async function insertMatch(input: {
 	return Number((await runSql(sql)).split('\n')[0]?.trim());
 }
 
-async function insertOdds(matchId: number, input: { homeOdds: number; drawOdds: number; awayOdds: number; market?: string }) {
+async function insertOdds(
+	matchId: number,
+	input: { homeOdds: number; drawOdds: number; awayOdds: number; market?: string; bookmaker?: string }
+) {
 	await runSql(`
 		INSERT INTO odds_entries (match_id, bookmaker, market, home_odds, draw_odds, away_odds, timestamp)
 		VALUES (
 			${matchId},
-			'Betfair',
+			${sqlLiteral(input.bookmaker ?? 'Betfair')},
 			${sqlLiteral(input.market ?? '1x2')},
 			${input.homeOdds},
 			${input.drawOdds},
@@ -96,6 +99,13 @@ async function insertOdds(matchId: number, input: { homeOdds: number; drawOdds: 
 			NOW()
 		);
 	`);
+}
+
+export async function addOddsEntryForMatch(
+	matchId: number,
+	input: { bookmaker: string; homeOdds: number; drawOdds: number; awayOdds: number; market?: string }
+): Promise<void> {
+	await insertOdds(matchId, input);
 }
 
 async function insertLiveStats(matchId: number) {
