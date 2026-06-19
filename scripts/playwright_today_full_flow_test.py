@@ -148,7 +148,15 @@ def summarize_job(job: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def scrape_params(*, args: argparse.Namespace, command: str, ymd: str | None = None, slug: str | None = None, season: str | None = None) -> dict[str, Any]:
+def scrape_params(
+    *,
+    args: argparse.Namespace,
+    command: str,
+    ymd: str | None = None,
+    slug: str | None = None,
+    season: str | None = None,
+    markets_override: list[str] | None = None,
+) -> dict[str, Any]:
     params: dict[str, Any] = {
         "command": command,
         "sport": "football",
@@ -158,7 +166,10 @@ def scrape_params(*, args: argparse.Namespace, command: str, ymd: str | None = N
         "concurrency": args.concurrency,
         "request_delay": args.request_delay,
     }
-    if args.market_mode == "all":
+    if markets_override is not None:
+        params["all_markets"] = False
+        params["markets"] = markets_override
+    elif args.market_mode == "all":
         params["all_markets"] = True
     else:
         params["all_markets"] = False
@@ -198,6 +209,8 @@ def main() -> int:
     parser.add_argument("--market-mode", choices=["all", "predictable"], default=os.getenv("FLOW_MARKET_MODE", "all"), help="all scrapes every configured football market; predictable limits scraping to markets the prediction engine can price")
     parser.add_argument("--today-league-slug", default=os.getenv("FLOW_TODAY_LEAGUE_SLUG"), help="Optional OddsHarvester league slug to bound today's scrape while keeping the requested date filter")
     parser.add_argument("--competition-filter", default=os.getenv("FLOW_COMPETITION_FILTER"), help="Optional backend competition filter for the downstream match/prediction set")
+    parser.add_argument("--historic-market-mode", choices=["same", "one-x-two"], default=os.getenv("FLOW_HISTORIC_MARKET_MODE", "same"), help="Use one-x-two to ingest historic scores faster while keeping today scrape unchanged")
+    parser.add_argument("--prediction-markets", default=os.getenv("FLOW_PREDICTION_MARKETS", ",".join(PREDICTION_MARKETS)), help="Comma-separated prediction markets, e.g. 1x2,btts,ou_2_5")
     parser.add_argument("--odds-history", action="store_true", help="Also scrape odds movement history; much slower.")
     parser.add_argument("--concurrency", type=int, default=int(os.getenv("FLOW_SCRAPE_CONCURRENCY", "2")))
     parser.add_argument("--request-delay", type=float, default=float(os.getenv("FLOW_SCRAPE_REQUEST_DELAY", "1.0")))
@@ -225,6 +238,8 @@ def main() -> int:
         "odds_history": args.odds_history,
         "today_league_slug": args.today_league_slug,
         "competition_filter": args.competition_filter,
+        "historic_market_mode": args.historic_market_mode,
+        "prediction_markets": [m.strip() for m in args.prediction_markets.split(",") if m.strip()],
         "user": None,
         "screenshots": [],
         "today_scrape_job": None,
@@ -340,8 +355,15 @@ def main() -> int:
             # backend-supported equivalent to per-team history: after league history is
             # ingested, prediction training filters by competition and team participation
             # comes from those stored matches.
+            historic_markets = ["1x2"] if args.historic_market_mode == "one-x-two" else None
             for slug in league_slugs:
-                hist_params = scrape_params(args=args, command="historic", slug=slug, season=historic_season)
+                hist_params = scrape_params(
+                    args=args,
+                    command="historic",
+                    slug=slug,
+                    season=historic_season,
+                    markets_override=historic_markets,
+                )
                 hist_job = safe_step(
                     summary,
                     f"historic_scrape_create:{slug}",
@@ -381,6 +403,7 @@ def main() -> int:
 
             # Run predictions for each discovered competition. Models support only 1x2, BTTS, OU 2.5.
             model_keys = ["PoissonGoalsModel", "DixonColesGoalModel", "BivariatePoissonGoalModel"]
+            prediction_markets = [m.strip() for m in args.prediction_markets.split(",") if m.strip()]
             for league_name in league_names:
                 for model_key in model_keys:
                     run = safe_step(
@@ -392,7 +415,7 @@ def main() -> int:
                                 "league": league_name,
                                 "sport": "football",
                                 "model_key": model_key,
-                                "markets": PREDICTION_MARKETS,
+                                "markets": prediction_markets,
                                 "training_limit": 380,
                                 "target_mode": "future",
                                 "target_limit": 50,
