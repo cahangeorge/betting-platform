@@ -59,3 +59,6 @@ flumine/
 
 # Local worktrees
 .worktrees/
+
+# Local Playwright artifacts
+.playwright-artifacts/

@@ -7,6 +7,7 @@ from starlette.requests import Request
 
 from app.api.deps import get_current_user
 from app.api.v1 import data as data_api
+from app.api.v1 import matches as matches_api
 from app.api.v1 import tickets as tickets_api
 from app.api.v1.catalog import CATALOG
 from app.schemas.match import MatchResponse
@@ -227,6 +228,18 @@ def test_match_response_maps_competition_date_and_odds():
     assert payload.start_time == "2026-06-17T18:30:00+00:00"
     assert payload.odds[0].bookmaker == "Pinnacle"
     assert payload.odds[0].home_odds == 1.95
+
+
+def test_match_filter_datetime_parser_accepts_browser_iso_offsets():
+    parsed = matches_api._parse_match_filter_datetime("2026-06-19T00:00:00+00:00")
+
+    assert parsed == datetime(2026, 6, 19, 0, 0, tzinfo=timezone.utc)
+
+
+def test_match_filter_datetime_parser_accepts_browser_utc_z_suffix():
+    parsed = matches_api._parse_match_filter_datetime("2026-06-19T23:59:59Z")
+
+    assert parsed == datetime(2026, 6, 19, 23, 59, 59, tzinfo=timezone.utc)
 
 
 def test_catalog_exposes_scrape_slugs_and_world_cup():
