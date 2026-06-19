@@ -33,6 +33,7 @@
 	let matches = $state<Match[]>([]);
 	let tickets = $state<Ticket[]>([]);
 	let predictionRuns = $state<PredictionRun[]>([]);
+	let predictionMatchMap = $state<Record<number, Match>>({});
 
 	$effect(() => {
 		matches = (serverData as any).matches ?? [];
@@ -109,8 +110,28 @@
 					}
 				})
 			);
+			const matchIds = Array.from(
+				new Set(
+					predictionRuns.flatMap((run) =>
+						(run.model_predictions ?? []).map((prediction) => prediction.match_id)
+					)
+				)
+			);
+			const matchEntries = await Promise.all(
+				matchIds.map(async (id) => {
+					try {
+						return [id, await matchesApi.getMatch(id)] as const;
+					} catch {
+						return null;
+					}
+				})
+			);
+			predictionMatchMap = Object.fromEntries(
+				matchEntries.filter((entry): entry is readonly [number, Match] => entry !== null)
+			);
 		} catch {
 			predictionRuns = [];
+			predictionMatchMap = {};
 		}
 		predictionsLoading = false;
 	}
@@ -153,6 +174,7 @@
 			match: string;
 			model: string;
 			market?: string;
+			selection?: string;
 			status: string;
 			probability?: number;
 			confidence?: number;
@@ -163,13 +185,21 @@
 		for (const run of predictionRuns) {
 			if (run.model_predictions && run.model_predictions.length > 0) {
 				for (const prediction of run.model_predictions) {
-					const match = matches.find((m) => m.id === prediction.match_id);
+					const match =
+						predictionMatchMap[prediction.match_id] ??
+						matches.find((m) => m.id === prediction.match_id);
 					const matchKey = match
 						? `${match.home_team} vs ${match.away_team}`
 						: `Match #${prediction.match_id}`;
 					if (searchQuery && !matchKey.toLowerCase().includes(searchLower)) continue;
 					const drawProb = prediction.draw_prob ?? 0;
 					const probability = Math.max(prediction.home_prob, drawProb, prediction.away_prob);
+					const selection =
+						probability === prediction.home_prob
+							? 'home'
+							: probability === drawProb
+								? 'draw'
+								: 'away';
 					rows.push({
 						id: run.id,
 						prediction_id: prediction.id,
@@ -178,6 +208,7 @@
 						match: matchKey,
 						model: prediction.model_type || run.model_type,
 						market: prediction.market,
+						selection,
 						status: run.status,
 						probability,
 						confidence: probability,
@@ -269,6 +300,8 @@
 			{ key: 'date', label: 'Date' },
 			{ key: 'match', label: 'Match' },
 			{ key: 'model', label: 'Model' },
+			{ key: 'market', label: 'Market' },
+			{ key: 'selection', label: 'Pick' },
 			{ key: 'status', label: 'Status' },
 			{ key: 'probability', label: 'Probability %' },
 			{ key: 'confidence', label: 'Confidence %' }
@@ -574,6 +607,29 @@
 								</div>
 							</div>
 						{/each}
+					</div>
+				{/if}
+
+				{#if selectedRow.model_prediction}
+					{@const prediction = selectedRow.model_prediction as NonNullable<PredictionRun['model_predictions']>[number]}
+					<div class="mt-4">
+						<h4 class="mb-2 text-sm font-semibold text-foreground">Model probabilities</h4>
+						<div class="grid grid-cols-3 gap-2 text-center">
+							<div class="border border-border bg-muted/30 p-2">
+								<p class="text-[10px] uppercase text-muted-foreground">Home</p>
+								<p class="font-mono text-sm">{(prediction.home_prob * 100).toFixed(2)}%</p>
+							</div>
+							<div class="border border-border bg-muted/30 p-2">
+								<p class="text-[10px] uppercase text-muted-foreground">Draw</p>
+								<p class="font-mono text-sm">
+									{prediction.draw_prob === null ? '--' : `${(prediction.draw_prob * 100).toFixed(2)}%`}
+								</p>
+							</div>
+							<div class="border border-border bg-muted/30 p-2">
+								<p class="text-[10px] uppercase text-muted-foreground">Away</p>
+								<p class="font-mono text-sm">{(prediction.away_prob * 100).toFixed(2)}%</p>
+							</div>
+						</div>
 					</div>
 				{/if}
 			</div>
