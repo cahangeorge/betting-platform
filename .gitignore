@@ -36,9 +36,6 @@ yarn-error.log*
 # Subprojects (managed in their own repos)
 betfront/
 frontbet/
-penaltyblog/
-OddsHarvester/
-soccerdata/
 flumine/
 
 # Large binary assets
