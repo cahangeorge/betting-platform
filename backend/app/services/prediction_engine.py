@@ -5,8 +5,14 @@ from datetime import datetime, timezone
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.match import Match
+from app.models.match import Match, OddsEntry
 from app.models.prediction import ModelPrediction, PredictionRun
+from app.services.prediction_quality import (
+    build_market_consensus,
+    best_market_odds_by_outcome,
+    evaluate_prediction_quality,
+    market_outcomes,
+)
 from app.services.python_bridge import BridgeError, run_penaltyblog
 
 MODEL_TYPE_ALIASES = {
@@ -195,6 +201,128 @@ def extract_market_probabilities(grid: dict, market: str) -> list[dict]:
     return mapping.get(market, [])
 
 
+async def fetch_target_odds_map(db: AsyncSession, target_ids: list[int]) -> dict[int, list[OddsEntry]]:
+    if not target_ids:
+        return {}
+    result = await db.execute(select(OddsEntry).where(OddsEntry.match_id.in_(target_ids)))
+    odds_by_match: dict[int, list[OddsEntry]] = {}
+    for odds in result.scalars().all():
+        odds_by_match.setdefault(odds.match_id, []).append(odds)
+    return odds_by_match
+
+
+async def calculate_implied_probabilities_with_penaltyblog(
+    market: str,
+    odds_entries: list[OddsEntry],
+) -> dict[str, float] | None:
+    """Convert best market odds into no-vig probabilities via penaltyblog.implied."""
+    odds_by_outcome = best_market_odds_by_outcome(market, odds_entries)
+    outcomes = [outcome for outcome in market_outcomes(market) if odds_by_outcome.get(outcome)]
+    if len(outcomes) < 2:
+        return None
+
+    try:
+        response = await run_penaltyblog(
+            {
+                "operation": "calculate_implied",
+                "payload": {
+                    "odds": [float(odds_by_outcome[outcome]["odds"]) for outcome in outcomes],
+                    "method": "multiplicative",
+                    "odds_format": "decimal",
+                    "market_names": outcomes,
+                },
+            }
+        )
+    except BridgeError:
+        return None
+
+    result = response.get("result", {})
+    probabilities = result.get("probabilities")
+    names = result.get("market_names") or outcomes
+    if not isinstance(probabilities, list) or len(probabilities) != len(outcomes):
+        return None
+    return {str(name): float(probability) for name, probability in zip(names, probabilities)}
+
+
+def _market_model_probability_map(market: str, outcome_lookup: dict[str, float]) -> dict[str, float]:
+    market_key = market.lower()
+    if market_key == "1x2":
+        return {
+            "home": float(outcome_lookup.get("home", 0.0)),
+            "draw": float(outcome_lookup.get("draw", 0.0) or 0.0),
+            "away": float(outcome_lookup.get("away", 0.0)),
+        }
+    if market_key == "btts":
+        return {
+            "yes": float(outcome_lookup.get("yes", 0.0)),
+            "no": float(outcome_lookup.get("no", 0.0)),
+        }
+    if market_key in {"ou_2_5", "over_under", "overunder", "totals"}:
+        return {
+            "over": float(outcome_lookup.get("over", 0.0)),
+            "under": float(outcome_lookup.get("under", 0.0)),
+        }
+    return {
+        "home": float(outcome_lookup.get("home", 0.0)),
+        "draw": float(outcome_lookup.get("draw", 0.0) or 0.0),
+        "away": float(outcome_lookup.get("away", 0.0)),
+    }
+
+
+def _row_probability_fields(market: str, probabilities: dict[str, float]) -> tuple[float, float | None, float]:
+    market_key = market.lower()
+    if market_key == "1x2":
+        return probabilities.get("home", 0.0), probabilities.get("draw"), probabilities.get("away", 0.0)
+    if market_key == "btts":
+        return probabilities.get("yes", 0.0), None, probabilities.get("no", 0.0)
+    if market_key in {"ou_2_5", "over_under", "overunder", "totals"}:
+        return probabilities.get("over", 0.0), None, probabilities.get("under", 0.0)
+    return probabilities.get("home", 0.0), probabilities.get("draw"), probabilities.get("away", 0.0)
+
+
+def _row_odds_and_value_fields(
+    market: str,
+    quality_report: dict,
+) -> tuple[float | None, float | None, float | None, float | None, float | None, float | None, float | None]:
+    market_key = market.lower()
+    odds = quality_report.get("market", {}).get("odds", {}) or {}
+    edge = quality_report.get("edge", {}) or {}
+    pick = quality_report.get("model", {}).get("pick")
+
+    if market_key == "1x2":
+        outcome_fields = ("home", "draw", "away")
+    elif market_key == "btts":
+        outcome_fields = ("yes", None, "no")
+    elif market_key in {"ou_2_5", "over_under", "overunder", "totals"}:
+        outcome_fields = ("over", None, "under")
+    else:
+        outcome_fields = ("home", "draw", "away")
+
+    def odds_value(outcome: str | None) -> float | None:
+        if not outcome:
+            return None
+        payload = odds.get(outcome)
+        return float(payload["odds"]) if payload else None
+
+    def edge_value(outcome: str | None) -> float | None:
+        if not outcome:
+            return None
+        value = edge.get(outcome)
+        return float(value) / 100 if value is not None else None
+
+    home_outcome, draw_outcome, away_outcome = outcome_fields
+    expected_value = edge_value(pick) if pick else None
+    return (
+        odds_value(home_outcome),
+        odds_value(draw_outcome),
+        odds_value(away_outcome),
+        edge_value(home_outcome),
+        edge_value(draw_outcome),
+        edge_value(away_outcome),
+        expected_value,
+    )
+
+
 async def execute_single_model_run(
     db: AsyncSession,
     run_id: int,
@@ -220,6 +348,7 @@ async def execute_single_model_run(
     targets = await fetch_target_matches(db, league, sport, target_mode, target_limit, target_match_ids)
     if not targets:
         raise ValueError("No target matches found for this selection.")
+    target_odds_map = await fetch_target_odds_map(db, [target.id for target in targets])
 
     goals_home = [m.home_score for m in training]
     goals_away = [m.away_score for m in training]
@@ -285,36 +414,36 @@ async def execute_single_model_run(
                     continue
 
                 outcome_lookup = {entry["outcome"]: entry["probability"] for entry in probs}
-                market_key = market.lower()
-                if market_key == "1x2":
-                    home_prob = outcome_lookup.get("home", 0)
-                    draw_prob = outcome_lookup.get("draw")
-                    away_prob = outcome_lookup.get("away", 0)
-                    value_home = home_prob
-                    value_draw = draw_prob
-                    value_away = away_prob
-                elif market_key == "btts":
-                    home_prob = outcome_lookup.get("yes", 0)
-                    draw_prob = None
-                    away_prob = outcome_lookup.get("no", 0)
-                    value_home = home_prob
-                    value_draw = None
-                    value_away = away_prob
-                elif market_key in {"ou_2_5", "over_under", "overunder", "totals"}:
-                    home_prob = outcome_lookup.get("over", 0)
-                    draw_prob = None
-                    away_prob = outcome_lookup.get("under", 0)
-                    value_home = home_prob
-                    value_draw = None
-                    value_away = away_prob
-                else:
-                    # Fallback for unexpected market definitions.
-                    home_prob = outcome_lookup.get("home", 0)
-                    draw_prob = outcome_lookup.get("draw")
-                    away_prob = outcome_lookup.get("away", 0)
-                    value_home = home_prob
-                    value_draw = draw_prob
-                    value_away = away_prob
+                model_probabilities = _market_model_probability_map(market, outcome_lookup)
+                home_prob, draw_prob, away_prob = _row_probability_fields(market, model_probabilities)
+                odds_entries = target_odds_map.get(target.id, getattr(target, "odds", []) or [])
+                implied_probabilities = await calculate_implied_probabilities_with_penaltyblog(market, odds_entries)
+                market_consensus = build_market_consensus(
+                    market,
+                    odds_entries,
+                    implied_probabilities=implied_probabilities,
+                )
+                market_consensus["implied_source"] = (
+                    "penaltyblog.implied.calculate_implied"
+                    if implied_probabilities
+                    else "overround_normalized_fallback"
+                )
+                quality_report = evaluate_prediction_quality(
+                    training_matches=training,
+                    target_match=target,
+                    market=market,
+                    model_probabilities=model_probabilities,
+                    market_consensus=market_consensus,
+                )
+                (
+                    home_odds,
+                    draw_odds,
+                    away_odds,
+                    value_home,
+                    value_draw,
+                    value_away,
+                    expected_value,
+                ) = _row_odds_and_value_fields(market, quality_report)
 
                 row = ModelPrediction(
                     run_id=run_id,
@@ -324,9 +453,14 @@ async def execute_single_model_run(
                     home_prob=home_prob,
                     draw_prob=draw_prob,
                     away_prob=away_prob,
+                    home_odds=home_odds,
+                    draw_odds=draw_odds,
+                    away_odds=away_odds,
                     value_home=value_home,
                     value_away=value_away,
                     value_draw=value_draw,
+                    expected_value=expected_value,
+                    quality_report=quality_report,
                 )
                 db.add(row)
                 written += 1

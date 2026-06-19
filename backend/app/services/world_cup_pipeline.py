@@ -245,6 +245,14 @@ def _best_odds_for_selection(
     return best_value, best_bookmaker
 
 
+def _prediction_is_ticket_eligible(prediction: ModelPrediction) -> bool:
+    quality = getattr(prediction, "quality_report", None)
+    if not quality:
+        return False
+    reliability = quality.get("reliability", {}) if isinstance(quality, dict) else {}
+    return bool(reliability.get("is_ticket_eligible", False))
+
+
 async def _build_top_ticket_candidates(
     db: AsyncSession,
     *,
@@ -266,6 +274,9 @@ async def _build_top_ticket_candidates(
     aggregated: dict[tuple[int, str, str], dict] = {}
 
     for prediction in predictions:
+        if not _prediction_is_ticket_eligible(prediction):
+            continue
+
         match = prediction.match
         if not match:
             continue

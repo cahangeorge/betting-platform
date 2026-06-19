@@ -95,6 +95,11 @@
 			bestOdds: number | null;
 			bookmaker: string | null;
 			edge: number | null;
+			reliability: string;
+			ticketEligible: boolean | null;
+			qualityReasons: string[];
+			marketPick: string | null;
+			marketProbability: number | null;
 		}[]
 	>([]);
 	let activeResultTab = $state('all');
@@ -250,7 +255,12 @@
 		const marketKey = market.toLowerCase();
 		const candidates = match.odds.filter((odd) => {
 			const oddMarket = odd.market.toLowerCase();
-			if (marketKey === '1x2') return oddMarket === '1x2' || oddMarket === 'match_winner';
+			const oddBase = oddMarket.split(':', 1)[0];
+			if (marketKey === '1x2') return oddBase === '1x2' || oddBase === 'match_winner';
+			if (marketKey === 'btts') return oddBase === 'btts' || oddBase === 'both_teams_to_score';
+			if (marketKey === 'ou_2_5' || marketKey === 'over_under_2.5') {
+				return ['ou_2_5', 'over_under_2_5', 'over_under'].includes(oddBase);
+			}
 			return oddMarket === marketKey;
 		});
 
@@ -269,6 +279,13 @@
 		}
 
 		return best ?? { odds: null, bookmaker: null };
+	}
+
+	function reliabilityVariant(label: string): 'success' | 'warning' | 'danger' | 'neutral' {
+		if (label === 'reliable') return 'success';
+		if (label === 'moderate') return 'warning';
+		if (label === 'unreliable') return 'danger';
+		return 'neutral';
 	}
 
 	async function loadMatchMap(matchIds: number[]): Promise<Map<number, Match>> {
@@ -327,6 +344,12 @@
 						impliedProbability !== null
 							? (selected.probability - impliedProbability) * 100
 							: null;
+					const reliability = prediction.quality_report?.reliability ?? null;
+					const marketPick = prediction.quality_report?.market?.pick ?? null;
+					const marketProbability =
+						selected.selection && prediction.quality_report?.market?.probabilities
+							? (prediction.quality_report.market.probabilities[selected.selection] ?? null)
+							: null;
 
 					return {
 						runId: run.id,
@@ -345,7 +368,13 @@
 						awayProb: prediction.away_prob,
 						bestOdds: bestOdds.odds,
 						bookmaker: bestOdds.bookmaker,
-						edge
+						edge,
+						reliability: reliability?.label ?? 'legacy/no-report',
+						ticketEligible:
+							reliability?.is_ticket_eligible === undefined ? null : reliability.is_ticket_eligible,
+						qualityReasons: reliability?.block_reasons ?? [],
+						marketPick,
+						marketProbability
 					};
 				});
 			}
@@ -962,6 +991,8 @@
 								<th class="px-3 py-2 text-left">Match</th>
 								<th class="px-3 py-2 text-left">Model</th>
 								<th class="px-3 py-2 text-left">Pick</th>
+								<th class="px-3 py-2 text-left">Reliability</th>
+								<th class="px-3 py-2 text-left">Market</th>
 								<th class="px-3 py-2 text-right">Home</th>
 								<th class="px-3 py-2 text-right">Draw</th>
 								<th class="px-3 py-2 text-right">Away</th>
@@ -983,6 +1014,37 @@
 										<span class="ml-2 font-mono text-xs">
 											{(prediction.probability * 100).toFixed(1)}%
 										</span>
+									</td>
+									<td class="px-3 py-2">
+										<div class="flex flex-col gap-1">
+											<Badge variant={reliabilityVariant(prediction.reliability)}>
+												{prediction.reliability}
+											</Badge>
+											<span class="text-[10px] text-muted-foreground">
+												{prediction.ticketEligible === null
+													? 'legacy prediction'
+													: prediction.ticketEligible
+														? 'ticket eligible'
+														: 'blocked from tickets'}
+											</span>
+											{#if prediction.qualityReasons.length > 0}
+												<span class="max-w-44 truncate text-[10px] text-muted-foreground" title={prediction.qualityReasons.join(', ')}>
+													{prediction.qualityReasons.join(', ')}
+												</span>
+											{/if}
+										</div>
+									</td>
+									<td class="px-3 py-2 text-xs">
+										{#if prediction.marketPick}
+											<div class="font-medium text-foreground">{prediction.marketPick}</div>
+											<div class="font-mono text-[10px] text-muted-foreground">
+												{prediction.marketProbability === null
+													? '--'
+													: `${(prediction.marketProbability * 100).toFixed(1)}% market`}
+											</div>
+										{:else}
+											<span class="text-muted-foreground">--</span>
+										{/if}
 									</td>
 									<td class="px-3 py-2 text-right font-mono text-xs">
 										{(prediction.homeProb * 100).toFixed(1)}%

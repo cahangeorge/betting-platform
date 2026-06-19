@@ -178,6 +178,9 @@
 			status: string;
 			probability?: number;
 			confidence?: number;
+			reliability?: string;
+			ticket_eligible?: string;
+			block_reasons?: string;
 			results: PredictionRun['results'];
 			model_prediction?: NonNullable<PredictionRun['model_predictions']>[number];
 			error: string | null;
@@ -212,6 +215,15 @@
 						status: run.status,
 						probability,
 						confidence: probability,
+						reliability: prediction.quality_report?.reliability?.label ?? 'legacy/no-report',
+						ticket_eligible:
+							prediction.quality_report?.reliability?.is_ticket_eligible === undefined
+								? 'unknown'
+								: prediction.quality_report.reliability.is_ticket_eligible
+									? 'yes'
+									: 'no',
+						block_reasons:
+							prediction.quality_report?.reliability?.block_reasons?.join(', ') ?? '',
 						results: null,
 						model_prediction: prediction,
 						error: null
@@ -303,6 +315,8 @@
 			{ key: 'market', label: 'Market' },
 			{ key: 'selection', label: 'Pick' },
 			{ key: 'status', label: 'Status' },
+			{ key: 'reliability', label: 'Reliability' },
+			{ key: 'ticket_eligible', label: 'Ticket?' },
 			{ key: 'probability', label: 'Probability %' },
 			{ key: 'confidence', label: 'Confidence %' }
 		];
@@ -379,6 +393,14 @@
 		if (s === 'won' || s === 'completed' || s === 'finished') return 'success';
 		if (s === 'lost' || s === 'failed' || s === 'cancelled') return 'danger';
 		if (s === 'live' || s === 'running' || s === 'open') return 'info';
+		return 'neutral';
+	}
+
+	function reliabilityBadgeVariant(status: string): 'success' | 'warning' | 'danger' | 'neutral' {
+		const s = status.toLowerCase();
+		if (s === 'reliable') return 'success';
+		if (s === 'moderate') return 'warning';
+		if (s === 'unreliable') return 'danger';
 		return 'neutral';
 	}
 
@@ -518,10 +540,19 @@
 										onclick={() => openRowDetail(row)}
 								>
 									{#each currentColumns as col (col.key)}
+										{@const cellValue = (row as Record<string, unknown>)[col.key]}
 										<td class="px-3 py-2.5 font-mono text-sm">
 											{#if col.key === 'status'}
 												<Badge variant={statusBadgeVariant(String(row[col.key] ?? ''))}>
 													{row[col.key]}
+												</Badge>
+											{:else if col.key === 'reliability'}
+												<Badge variant={reliabilityBadgeVariant(String(cellValue ?? ''))}>
+													{cellValue}
+												</Badge>
+											{:else if col.key === 'ticket_eligible'}
+												<Badge variant={String(cellValue ?? '') === 'yes' ? 'success' : 'neutral'}>
+													{cellValue}
 												</Badge>
 											{:else if col.key === 'league'}
 												<Badge variant="info">{row[col.key as keyof typeof row]}</Badge>
@@ -631,6 +662,39 @@
 							</div>
 						</div>
 					</div>
+					{#if prediction.quality_report}
+						<div class="mt-4 space-y-3">
+							<h4 class="text-sm font-semibold text-foreground">Prediction quality</h4>
+							<div class="grid grid-cols-2 gap-2 text-sm">
+								<div class="border border-border bg-muted/30 p-2">
+									<p class="text-[10px] uppercase text-muted-foreground">Reliability</p>
+									<Badge variant={reliabilityBadgeVariant(prediction.quality_report.reliability?.label ?? '')}>
+										{prediction.quality_report.reliability?.label ?? 'unknown'}
+									</Badge>
+								</div>
+								<div class="border border-border bg-muted/30 p-2">
+									<p class="text-[10px] uppercase text-muted-foreground">Ticket eligible</p>
+									<p class="font-mono text-sm">
+										{prediction.quality_report.reliability?.is_ticket_eligible ? 'yes' : 'no'}
+									</p>
+								</div>
+								<div class="border border-border bg-muted/30 p-2">
+									<p class="text-[10px] uppercase text-muted-foreground">Market pick</p>
+									<p class="font-mono text-sm">{prediction.quality_report.market?.pick ?? '--'}</p>
+								</div>
+								<div class="border border-border bg-muted/30 p-2">
+									<p class="text-[10px] uppercase text-muted-foreground">Training matches</p>
+									<p class="font-mono text-sm">{prediction.quality_report.training?.total_matches ?? '--'}</p>
+								</div>
+							</div>
+							{#if prediction.quality_report.reliability?.block_reasons?.length}
+								<div class="border border-border bg-muted/30 p-2 text-xs text-muted-foreground">
+									<span class="font-medium text-foreground">Blocked reasons:</span>
+									{prediction.quality_report.reliability.block_reasons.join(', ')}
+								</div>
+							{/if}
+						</div>
+					{/if}
 				{/if}
 			</div>
 		{/if}

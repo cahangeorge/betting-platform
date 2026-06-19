@@ -80,6 +80,23 @@ async def test_execute_single_model_run_forwards_penaltyblog_options(monkeypatch
     async def fake_fetch_target_matches(*args, **kwargs):
         return targets
 
+    async def fake_fetch_target_odds_map(*args, **kwargs):
+        return {
+            91: [
+                SimpleNamespace(
+                    match_id=91,
+                    market="1x2:FullTime",
+                    home_odds=2.05,
+                    draw_odds=3.4,
+                    away_odds=4.2,
+                    bookmaker="Book",
+                )
+            ]
+        }
+
+    async def fake_calculate_implied_probabilities_with_penaltyblog(*args, **kwargs):
+        return {"home": 0.48, "draw": 0.29, "away": 0.23}
+
     async def fake_run_penaltyblog(payload):
         captured_payloads.append(payload)
         if payload["operation"] == "dixon_coles_weights":
@@ -102,6 +119,12 @@ async def test_execute_single_model_run_forwards_penaltyblog_options(monkeypatch
 
     monkeypatch.setattr(prediction_engine, "fetch_training_matches", fake_fetch_training_matches)
     monkeypatch.setattr(prediction_engine, "fetch_target_matches", fake_fetch_target_matches)
+    monkeypatch.setattr(prediction_engine, "fetch_target_odds_map", fake_fetch_target_odds_map)
+    monkeypatch.setattr(
+        prediction_engine,
+        "calculate_implied_probabilities_with_penaltyblog",
+        fake_calculate_implied_probabilities_with_penaltyblog,
+    )
     monkeypatch.setattr(prediction_engine, "run_penaltyblog", fake_run_penaltyblog)
 
     db = _FakeSession()
@@ -126,3 +149,7 @@ async def test_execute_single_model_run_forwards_penaltyblog_options(monkeypatch
     assert captured_payloads[1]["payload"]["fit_kwargs"] == {"minimizer_options": {"maxiter": 20}}
     assert captured_payloads[1]["payload"]["weights"] == [1.0] * len(training)
     assert captured_payloads[1]["payload"]["prediction"]["max_goals"] == 6
+    predictions = [obj for obj in db.added if obj.__class__.__name__ == "ModelPrediction"]
+    assert predictions[0].home_odds == 2.05
+    assert predictions[0].expected_value == 0.025
+    assert predictions[0].quality_report["market"]["implied_source"] == "penaltyblog.implied.calculate_implied"

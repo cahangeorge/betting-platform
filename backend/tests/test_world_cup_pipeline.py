@@ -60,3 +60,57 @@ def test_build_difficulty_ticket_tiers_creates_seven_top_lists():
     assert tiers[6]["tickets"][0]["ticket_type"] == "accumulator"
     assert tiers[6]["tickets"][0]["leg_count"] == 7
     assert len({leg["match_id"] for leg in tiers[6]["tickets"][0]["legs"]}) == 7
+
+import pytest
+
+
+@pytest.mark.asyncio
+async def test_build_top_ticket_candidates_skips_unreliable_predictions():
+    class _Scalars:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def unique(self):
+            return self
+
+        def all(self):
+            return self._rows
+
+    class _Result:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def scalars(self):
+            return _Scalars(self._rows)
+
+    class _DB:
+        async def execute(self, _stmt):
+            return _Result(predictions)
+
+    odds_entries = [
+        SimpleNamespace(market="1x2:FullTime", home_odds=2.1, draw_odds=3.4, away_odds=4.0, bookmaker="Book")
+    ]
+    match = SimpleNamespace(
+        id=19,
+        home_team="USA",
+        away_team="Australia",
+        competition="World Cup",
+        match_date=None,
+        odds=odds_entries,
+    )
+    predictions = [
+        SimpleNamespace(
+            id=1,
+            match=match,
+            market="1x2",
+            home_prob=0.62,
+            draw_prob=0.23,
+            away_prob=0.15,
+            model_type="PoissonGoalsModel",
+            quality_report={"reliability": {"is_ticket_eligible": False, "label": "unreliable"}},
+        )
+    ]
+
+    candidates = await world_cup_pipeline._build_top_ticket_candidates(_DB(), run_ids=[123], limit=10)
+
+    assert candidates == []

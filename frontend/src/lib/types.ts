@@ -120,6 +120,33 @@ export interface PredictionRun {
 
 export type RunStatus = 'pending' | 'running' | 'completed' | 'partial' | 'failed';
 
+export interface PredictionQualityReport {
+	schema_version: number;
+	training?: {
+		total_matches?: number;
+		home_team?: { matches?: number; [key: string]: number | undefined };
+		away_team?: { matches?: number; [key: string]: number | undefined };
+		[key: string]: unknown;
+	};
+	model?: {
+		pick?: string | null;
+		probabilities?: Record<string, number>;
+	};
+	market?: {
+		pick?: string | null;
+		probabilities?: Record<string, number>;
+		odds?: Record<string, { odds: number; bookmaker?: string } | null>;
+		implied_source?: string;
+	};
+	edge?: Record<string, number | null>;
+	reliability?: {
+		label?: string | null;
+		score?: number;
+		is_ticket_eligible?: boolean;
+		block_reasons?: string[];
+	};
+}
+
 export interface ModelPrediction {
 	id: number;
 	run_id: number;
@@ -136,6 +163,7 @@ export interface ModelPrediction {
 	value_draw: number | null;
 	value_away: number | null;
 	expected_value: number | null;
+	quality_report: PredictionQualityReport | null;
 	created_at: string;
 }
 

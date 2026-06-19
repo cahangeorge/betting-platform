@@ -131,10 +131,30 @@ def _resolve_market_odds(
     return getattr(best, outcome_field), best.bookmaker
 
 
-def _build_value_candidates(run: PredictionRun, min_edge: float, max_results: int) -> list[ValueBetItem]:
+def _prediction_quality_details(prediction: ModelPrediction) -> tuple[bool, str | None, list[str]]:
+    quality = getattr(prediction, "quality_report", None) or {}
+    reliability = quality.get("reliability", {}) if isinstance(quality, dict) else {}
+    label = reliability.get("label") if isinstance(reliability, dict) else None
+    reasons = reliability.get("block_reasons", []) if isinstance(reliability, dict) else []
+    if not isinstance(reasons, list):
+        reasons = []
+    return bool(reliability.get("is_ticket_eligible", False)), label, [str(reason) for reason in reasons]
+
+
+def _build_value_candidates(
+    run: PredictionRun,
+    min_edge: float,
+    max_results: int,
+    *,
+    include_unreliable: bool = False,
+) -> list[ValueBetItem]:
     items: list[ValueBetItem] = []
 
     for prediction in run.model_predictions:
+        is_ticket_eligible, reliability, quality_reasons = _prediction_quality_details(prediction)
+        if not include_unreliable and not is_ticket_eligible:
+            continue
+
         match = prediction.match
         if not match:
             continue
@@ -181,6 +201,8 @@ def _build_value_candidates(run: PredictionRun, min_edge: float, max_results: in
                     edge=edge_pct,
                     model_type=run.model_type,
                     confidence=max(0.0, min(1.0, model_prob)) * 100,
+                    reliability=reliability,
+                    quality_reasons=quality_reasons,
                     source=f"odds:{bookmaker}" if bookmaker else "odds",
                 )
             )
@@ -283,6 +305,7 @@ async def get_prediction_run(
 async def list_value_bets(
     min_edge: float = Query(0, ge=-100, le=100),
     max_results: int = Query(100, ge=1, le=1000),
+    include_unreliable: bool = Query(False),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -308,7 +331,12 @@ async def list_value_bets(
             generated_at=datetime.now(timezone.utc).isoformat(),
         )
 
-    items = _build_value_candidates(run, min_edge=min_edge, max_results=max_results)
+    items = _build_value_candidates(
+        run,
+        min_edge=min_edge,
+        max_results=max_results,
+        include_unreliable=include_unreliable,
+    )
     return ValueBetResponse(
         items=items,
         source="prediction",
