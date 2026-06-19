@@ -99,7 +99,16 @@
 	async function fetchPredictions() {
 		predictionsLoading = true;
 		try {
-			predictionRuns = await predictionsApi.getRuns();
+			const runs = await predictionsApi.getRuns();
+			predictionRuns = await Promise.all(
+				runs.map(async (run) => {
+					try {
+						return await predictionsApi.getRun(run.id);
+					} catch {
+						return run;
+					}
+				})
+			);
 		} catch {
 			predictionRuns = [];
 		}
@@ -138,15 +147,46 @@
 	const predictionRows = $derived.by(() => {
 		const rows: {
 			id: number;
+			prediction_id?: number;
+			match_id?: number;
 			date: string;
 			match: string;
 			model: string;
+			market?: string;
 			status: string;
+			probability?: number;
+			confidence?: number;
 			results: PredictionRun['results'];
+			model_prediction?: NonNullable<PredictionRun['model_predictions']>[number];
 			error: string | null;
 		}[] = [];
 		for (const run of predictionRuns) {
-			if (run.results && run.results.length > 0) {
+			if (run.model_predictions && run.model_predictions.length > 0) {
+				for (const prediction of run.model_predictions) {
+					const match = matches.find((m) => m.id === prediction.match_id);
+					const matchKey = match
+						? `${match.home_team} vs ${match.away_team}`
+						: `Match #${prediction.match_id}`;
+					if (searchQuery && !matchKey.toLowerCase().includes(searchLower)) continue;
+					const drawProb = prediction.draw_prob ?? 0;
+					const probability = Math.max(prediction.home_prob, drawProb, prediction.away_prob);
+					rows.push({
+						id: run.id,
+						prediction_id: prediction.id,
+						match_id: prediction.match_id,
+						date: prediction.created_at || run.created_at,
+						match: matchKey,
+						model: prediction.model_type || run.model_type,
+						market: prediction.market,
+						status: run.status,
+						probability,
+						confidence: probability,
+						results: null,
+						model_prediction: prediction,
+						error: null
+					});
+				}
+			} else if (run.results && run.results.length > 0) {
 				for (const r of run.results) {
 					const matchKey = `${r.home_team} vs ${r.away_team}`;
 					if (searchQuery && !matchKey.toLowerCase().includes(searchLower)) continue;
@@ -161,12 +201,13 @@
 					});
 				}
 			} else {
-				const matchKey = run.matches.join(', ');
+				const matchCount = run.matches_count ?? run.matches?.length ?? 0;
+				const matchKey = `Run #${run.id} (${matchCount} matches)`;
 				if (searchQuery && !matchKey.toLowerCase().includes(searchLower)) continue;
 				rows.push({
 					id: run.id,
 					date: run.created_at,
-					match: `Run #${run.id} (${run.matches.length} matches)`,
+					match: matchKey,
 					model: run.model_type,
 					status: run.status,
 					results: null,
@@ -275,10 +316,14 @@
 			return {
 				...p,
 				date: formatDate(p.date),
-				probability: firstResult
+				probability: p.probability !== undefined
+					? `${(p.probability * 100).toFixed(1)}`
+					: firstResult
 					? `${((firstResult.home_prob + firstResult.draw_prob + firstResult.away_prob) / 3 * 100).toFixed(1)}`
 					: '--',
-				confidence: firstResult ? `${(firstResult.confidence * 100).toFixed(1)}` : '--'
+				confidence: p.confidence !== undefined
+					? `${(p.confidence * 100).toFixed(1)}`
+					: firstResult ? `${(firstResult.confidence * 100).toFixed(1)}` : '--'
 			};
 		});
 	});
@@ -338,7 +383,7 @@
 	onMount(() => {
 		if (matches.length === 0) fetchMatches();
 		if (tickets.length === 0) fetchTickets();
-		if (predictionRuns.length === 0) fetchPredictions();
+		fetchPredictions();
 	});
 
 	$effect(() => {
@@ -434,7 +479,7 @@
 							</tr>
 						</thead>
 						<tbody>
-								{#each currentRowsFormatted as row, i ((row.id ?? `${activeTab}-${page}-${i}`) as string | number)}
+								{#each currentRowsFormatted as row, i ((((row as Record<string, unknown>).prediction_id as string | number | undefined) ?? row.id ?? `${activeTab}-${page}-${i}`) as string | number)}
 									<tr
 										class="border-b border-border last:border-0 hover:bg-muted/30 transition-colors cursor-pointer"
 										onclick={() => openRowDetail(row)}
@@ -507,7 +552,7 @@
 		{#if selectedRow}
 			<div class="space-y-3 max-h-[60vh] overflow-y-auto">
 					{#each Object.entries(selectedRow) as [key, value] (key)}
-						{#if key !== 'legs' && key !== 'results' && key !== 'odds' && key !== 'parameters'}
+						{#if key !== 'legs' && key !== 'results' && key !== 'odds' && key !== 'parameters' && key !== 'model_prediction'}
 							<div class="flex justify-between py-1.5 border-b border-border last:border-0">
 								<span class="text-xs text-muted-foreground uppercase tracking-wider">{key.replace(/_/g, ' ')}</span>
 							<span class="text-sm font-mono text-foreground text-right max-w-[60%] break-words">

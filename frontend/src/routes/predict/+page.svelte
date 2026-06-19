@@ -21,6 +21,7 @@
 	import { cn } from '$lib/utils';
 	import type {
 		Country,
+		PredictionRun,
 		Strategy,
 		StrategyCreateRequest,
 		StrategyRunResult
@@ -74,6 +75,7 @@
 
 	// --- Results State ---
 	let results = $state<StrategyRunResult[]>([]);
+	let recentRuns = $state<PredictionRun[]>([]);
 	let activeResultTab = $state('all');
 	let resultPollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -186,10 +188,46 @@
 
 	async function fetchResults() {
 		try {
-			const res = await fetch(`${BASE_URL}/api/v1/strategies/runs?limit=100`, { credentials: 'include' });
-			if (res.ok) {
-				const data = await res.json();
-				results = Array.isArray(data) ? data : [];
+			const [valueRes, runsRes] = await Promise.all([
+				fetch(`${BASE_URL}/api/v1/predictions/value-bets?min_edge=-100&max_results=100`, {
+					credentials: 'include'
+				}),
+				fetch(`${BASE_URL}/api/v1/predictions/runs?per_page=10`, { credentials: 'include' })
+			]);
+
+			if (runsRes.ok) {
+				const data = await runsRes.json();
+				recentRuns = Array.isArray(data) ? data : [];
+			}
+
+			if (valueRes.ok) {
+				const data = await valueRes.json();
+				const items = Array.isArray(data) ? data : (data.items ?? []);
+				results = items.map((item: {
+					id: number;
+					match_id: number;
+					league: string | null;
+					home_team: string;
+					away_team: string;
+					market: string;
+					selection: string;
+					model_prob: number;
+					odds: number;
+					edge: number;
+					confidence: number;
+				}) => ({
+					strategy_id: 0,
+					match_id: item.match_id,
+					match_home: item.home_team,
+					match_away: item.away_team,
+					league: item.league ?? '--',
+					market: item.market,
+					predicted: item.selection,
+					probability: item.model_prob,
+					confidence: item.confidence,
+					edge: item.edge,
+					odds: item.odds
+				}));
 			}
 		} catch {
 			// silently handle
@@ -408,6 +446,18 @@
 				source: 'prediction'
 			})
 		);
+	}
+
+	function formatDateTime(iso: string | null | undefined): string {
+		if (!iso) return '--';
+		const date = new Date(iso);
+		if (Number.isNaN(date.getTime())) return '--';
+		return date.toLocaleString('en-GB', {
+			day: 'numeric',
+			month: 'short',
+			hour: '2-digit',
+			minute: '2-digit'
+		});
 	}
 
 	onMount(() => {
@@ -722,11 +772,49 @@
 		</div>
 	</div>
 
+	{#if recentRuns.length > 0}
+		<Card title="Recent Prediction Runs" variant="prediction">
+			<div class="space-y-2">
+				{#each recentRuns as run (run.id)}
+					<div class="flex flex-wrap items-center justify-between gap-3 border border-border bg-muted/20 px-3 py-2">
+						<div class="min-w-0">
+							<p class="font-mono text-sm text-foreground">Run #{run.id}</p>
+							<p class="text-xs text-muted-foreground">
+								{run.model_type} · {run.matches_count ?? 0} matches · {formatDateTime(run.completed_at ?? run.created_at)}
+							</p>
+						</div>
+						<div class="flex items-center gap-2">
+							<Badge
+								variant={
+									run.status === 'completed'
+										? 'success'
+										: run.status === 'failed'
+											? 'danger'
+											: run.status === 'partial'
+												? 'warning'
+												: 'info'
+								}
+							>
+								{run.status}
+							</Badge>
+							<a href="/data" class="text-xs font-medium text-football-blue hover:text-football-gold">
+								Open Data Hub
+							</a>
+						</div>
+					</div>
+				{/each}
+				<p class="text-xs text-muted-foreground">
+					Value candidates below are loaded from the latest completed prediction run.
+				</p>
+			</div>
+		</Card>
+	{/if}
+
 	<!-- Section 5: Results -->
 	{#if results.length > 0}
 		<div class="space-y-4">
 			<div class="flex items-center justify-between">
-				<h2 class="text-lg font-semibold text-foreground">Results</h2>
+				<h2 class="text-lg font-semibold text-foreground">Prediction Value Candidates</h2>
 				<Button variant="secondary" size="sm" onclick={exportCSV}>
 					Export CSV
 				</Button>
@@ -845,7 +933,9 @@
 	{:else if !loadingStrategies}
 		<Card variant="prediction">
 			<p class="text-sm text-muted-foreground text-center py-6">
-				No prediction results yet. Select strategies and run predictions to see results.
+				{recentRuns.length > 0
+					? 'Prediction runs exist, but no value candidates matched the latest completed run yet.'
+					: 'No prediction results yet. Select strategies and run predictions to see results.'}
 			</p>
 		</Card>
 	{/if}
