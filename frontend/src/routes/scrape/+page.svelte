@@ -10,12 +10,20 @@
 	import Separator from '$lib/components/ui/separator/separator.svelte';
 	import { cn } from '$lib/utils';
 	import type { Country, LeagueInfo, ScrapeJob } from '$lib/types';
-	import { buildScrapeLeagueSlugs, isLeagueScrapeSelectable } from './catalog.helpers';
+	import {
+		buildHistoricSeasons,
+		buildHistoryDateRange,
+		buildScrapeLeagueSlugs,
+		isLeagueScrapeSelectable
+	} from './catalog.helpers';
 
 	const BASE_URL = '';
 
 	type WorldCupPipelineSummary = {
 		future_days: number;
+		target_date?: string | null;
+		target_date_from?: string | null;
+		target_date_to?: string | null;
 		history_years: number;
 		historic_seasons: number[];
 		scrape_jobs: number;
@@ -27,9 +35,13 @@
 		partial_prediction_runs: number;
 		failed_prediction_runs: number;
 		top_candidates: number;
+		watchlist_candidates?: number;
+		ticket_generation_blocked?: boolean;
 		difficulty_tiers: number;
 		tiered_ticket_candidates: number;
 		created_tickets: number;
+		created_experimental_tickets?: number;
+		ticket_generation_mode?: string;
 		scraped_markets: string;
 	};
 
@@ -46,6 +58,10 @@
 		model_types: string[];
 		model_prediction_id: number;
 		expected_return_score: number;
+		is_ticket_eligible?: boolean;
+		reliability?: string;
+		reliability_score?: number;
+		quality_reasons?: string[];
 	};
 
 	type WorldCupDifficultyTicket = {
@@ -73,10 +89,26 @@
 		scrape_job_ids: number[];
 		prediction_run_ids: number[];
 		created_ticket_ids: number[];
+		created_experimental_ticket_ids?: number[];
 		top_candidates: WorldCupTicketCandidate[];
+		watchlist_candidates?: WorldCupTicketCandidate[];
 		difficulty_tiers: WorldCupDifficultyTier[];
+		experimental_difficulty_tiers?: WorldCupDifficultyTier[];
 		errors: { type: string; id: number; error: string }[];
 	};
+
+	function localDateString(date: Date): string {
+		const year = date.getFullYear();
+		const month = String(date.getMonth() + 1).padStart(2, '0');
+		const day = String(date.getDate()).padStart(2, '0');
+		return `${year}-${month}-${day}`;
+	}
+
+	function tomorrowLocalDate(): string {
+		const date = new Date();
+		date.setDate(date.getDate() + 1);
+		return localDateString(date);
+	}
 
 	// --- State ---
 	let countries = $state<Country[]>([]);
@@ -89,6 +121,8 @@
 	let pastEnabled = $state(true);
 	let pastFrom = $state('');
 	let pastTo = $state('');
+	let historyPresetYears = $state('10');
+	let historicMaxPages = $state('1');
 
 	// Future Matches
 	let futureEnabled = $state(true);
@@ -114,6 +148,10 @@
 	let pipelineError = $state('');
 	let pipelineResult = $state<WorldCupPipelineResponse | null>(null);
 	let pipelineStartedJobId = $state<number | null>(null);
+	let pipelineTargetDate = $state(tomorrowLocalDate());
+	let pipelineTicketCount = $state('5');
+	let pipelineTicketStake = $state('10');
+	let pipelineAllowExperimental = $state(true);
 
 	let pollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -171,6 +209,15 @@
 		{ value: 'Weeks', label: 'Weeks' }
 	];
 
+	const historyPresetOptions = [
+		{ value: '5', label: 'Last 5 years' },
+		{ value: '10', label: 'Last 10 years' },
+		{ value: '15', label: 'Last 15 years' },
+		{ value: '20', label: 'Last 20 years' }
+	];
+
+	const historicSeasonPreview = $derived(buildHistoricSeasons(pastFrom, pastTo, buildScrapeLeagueSlugs(allLeagues, selectedLeagues)));
+
 	// --- Data Fetching ---
 	async function fetchCatalog() {
 		try {
@@ -199,6 +246,61 @@
 		}
 	}
 
+	function applyHistoryPreset(yearsValue = historyPresetYears) {
+		const years = Number.parseInt(yearsValue, 10) || 10;
+		const range = buildHistoryDateRange(years);
+		pastEnabled = true;
+		pastFrom = range.from;
+		pastTo = range.to;
+		historyPresetYears = String(years);
+	}
+
+	function buildBaseScrapeParams(scrapeLeagueSlugs: string[]): Record<string, unknown> {
+		const params: Record<string, unknown> = {
+			countries: selectedCountries,
+			leagues: scrapeLeagueSlugs,
+			dedup_skip: dedupSkip,
+			auto_scrape: autoScrape,
+			sport: 'football',
+			headless: true
+		};
+
+		if (autoScrape) {
+			const num = parseInt(autoIntervalNumber, 10) || 24;
+			const unitMap: Record<string, number> = { Hours: 1, Days: 24, Weeks: 168 };
+			params.auto_interval_hours = num * (unitMap[autoIntervalUnit] ?? 1);
+		}
+
+		return params;
+	}
+
+	async function createAndExecuteScrapeJob(params: Record<string, unknown>, league?: string) {
+		const createRes = await fetch(`${BASE_URL}/api/v1/data/scrape`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			credentials: 'include',
+			body: JSON.stringify({ job_type: 'scrape_odds', league, params })
+		});
+
+		if (!createRes.ok) {
+			const err = await createRes.json().catch(() => ({ detail: 'Failed to create job' }));
+			throw new Error(err.detail || `HTTP ${createRes.status}`);
+		}
+
+		const createdJob = (await createRes.json()) as { id: number };
+		const executeRes = await fetch(`${BASE_URL}/api/v1/data/scrape/${createdJob.id}/execute`, {
+			method: 'POST',
+			credentials: 'include'
+		});
+
+		if (!executeRes.ok) {
+			const err = await executeRes.json().catch(() => ({ detail: 'Failed to execute job' }));
+			throw new Error(err.detail || `HTTP ${executeRes.status}`);
+		}
+
+		return createdJob.id;
+	}
+
 	async function startScrape() {
 		submitting = true;
 		submitError = '';
@@ -210,61 +312,65 @@
 			submitting = false;
 			return;
 		}
-
-		const params: Record<string, unknown> = {
-			countries: selectedCountries,
-			leagues: scrapeLeagueSlugs,
-			dedup_skip: dedupSkip,
-			auto_scrape: autoScrape
-		};
-
-		if (pastEnabled && pastFrom && pastTo) {
-			params.past_from = pastFrom;
-			params.past_to = pastTo;
+		if (pastEnabled && scrapeLeagueSlugs.length === 0) {
+			submitError = 'Select at least one supported league before scraping historical seasons';
+			submitting = false;
+			return;
 		}
-
-		if (futureEnabled && futureNumber) {
-			const num = parseInt(futureNumber, 10);
-			const unitMap: Record<string, string> = {
-				Days: 'days',
-				Weeks: 'weeks',
-				Months: 'months',
-				Years: 'years'
-			};
-			params.future_days = unitMap[futureUnit] === 'days' ? num : num * (futureUnit === 'Weeks' ? 7 : futureUnit === 'Months' ? 30 : 365);
-		}
-
-		if (autoScrape) {
-			const num = parseInt(autoIntervalNumber, 10) || 24;
-			const unitMap: Record<string, number> = { Hours: 1, Days: 24, Weeks: 168 };
-			params.auto_interval_hours = num * (unitMap[autoIntervalUnit] ?? 1);
+		if (
+			pastEnabled &&
+			scrapeLeagueSlugs.includes('world-cup') &&
+			scrapeLeagueSlugs.some((slug) => slug !== 'world-cup')
+		) {
+			submitError = 'For historical scraping, run World Cup separately from seasonal leagues';
+			submitting = false;
+			return;
 		}
 
 		try {
-			const createRes = await fetch(`${BASE_URL}/api/v1/data/scrape`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				credentials: 'include',
-				body: JSON.stringify({ job_type: 'scrape_odds', params })
-			});
+			const baseParams = buildBaseScrapeParams(scrapeLeagueSlugs);
+			const createdJobIds: number[] = [];
 
-			if (!createRes.ok) {
-				const err = await createRes.json().catch(() => ({ detail: 'Failed to create job' }));
-				throw new Error(err.detail || `HTTP ${createRes.status}`);
+			if (pastEnabled && pastFrom && pastTo) {
+				const seasons = buildHistoricSeasons(pastFrom, pastTo, scrapeLeagueSlugs);
+				if (seasons.length === 0) {
+					throw new Error('No historical seasons found for the selected range');
+				}
+
+				const maxPages = Number.parseInt(historicMaxPages, 10) || 1;
+				for (const season of seasons) {
+					const jobId = await createAndExecuteScrapeJob(
+						{
+							...baseParams,
+							command: 'historic',
+							season,
+							past_from: pastFrom,
+							past_to: pastTo,
+							history_years: Number.parseInt(historyPresetYears, 10) || undefined,
+							max_pages: maxPages
+						},
+						scrapeLeagueSlugs.length === 1 ? scrapeLeagueSlugs[0] : undefined
+					);
+					createdJobIds.push(jobId);
+				}
 			}
 
-			const createdJob = (await createRes.json()) as { id: number };
-			const executeRes = await fetch(`${BASE_URL}/api/v1/data/scrape/${createdJob.id}/execute`, {
-				method: 'POST',
-				credentials: 'include'
-			});
-
-			if (!executeRes.ok) {
-				const err = await executeRes.json().catch(() => ({ detail: 'Failed to execute job' }));
-				throw new Error(err.detail || `HTTP ${executeRes.status}`);
+			if (futureEnabled && futureNumber) {
+				const num = parseInt(futureNumber, 10);
+				const futureDays = futureUnit === 'Days' ? num : num * (futureUnit === 'Weeks' ? 7 : futureUnit === 'Months' ? 30 : 365);
+				const jobId = await createAndExecuteScrapeJob({
+					...baseParams,
+					command: 'upcoming',
+					future_days: futureDays
+				});
+				createdJobIds.push(jobId);
 			}
 
-			submitSuccess = 'Scrape job started successfully';
+			if (createdJobIds.length === 0) {
+				throw new Error('Enable past history or future matches before starting scrape');
+			}
+
+			submitSuccess = `Started ${createdJobIds.length} scrape job${createdJobIds.length === 1 ? '' : 's'} successfully`;
 			await fetchJobs();
 			setTimeout(() => (submitSuccess = ''), 4000);
 		} catch (err) {
@@ -280,19 +386,28 @@
 		pipelineResult = null;
 
 		try {
+			const targetStart = new Date(`${pipelineTargetDate}T00:00:00`);
+			const targetEnd = new Date(`${pipelineTargetDate}T23:59:59.999`);
+			const ticketCount = Number.parseInt(pipelineTicketCount, 10) || 5;
+			const ticketStake = Number.parseFloat(pipelineTicketStake) || 10;
 			const res = await fetch(`${BASE_URL}/api/v1/data/world-cup-pipeline`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				credentials: 'include',
 				body: JSON.stringify({
-					future_days: 7,
-					history_years: 10,
-					all_markets: true,
-					odds_history: true,
-					ticket_count: 10,
-					ticket_stake: 10,
+					target_date: pipelineTargetDate,
+					target_date_from: targetStart.toISOString(),
+					target_date_to: targetEnd.toISOString(),
+					future_days: 1,
+					history_years: 0,
+					all_markets: false,
+					odds_history: false,
+					max_historic_pages: 1,
+					ticket_count: ticketCount,
+					ticket_stake: ticketStake,
 					create_tickets: true,
-					training_limit: 240
+					allow_experimental_tickets: pipelineAllowExperimental,
+					training_limit: 120
 				})
 			});
 
@@ -390,6 +505,7 @@
 	}
 
 	onMount(() => {
+		applyHistoryPreset(historyPresetYears);
 		fetchCatalog();
 		fetchJobs();
 		pollTimer = setInterval(fetchJobs, 10000);
@@ -409,26 +525,50 @@
 			<div class="space-y-5">
 				<div class="grid grid-cols-2 md:grid-cols-4 gap-3">
 					<div class="border border-border bg-muted/30 p-3">
-						<p class="text-[10px] uppercase tracking-wide text-muted-foreground">Future</p>
-						<p class="mt-1 font-mono text-lg text-foreground">7d</p>
+						<p class="text-[10px] uppercase tracking-wide text-muted-foreground">Target date</p>
+						<p class="mt-1 font-mono text-lg text-foreground">{pipelineTargetDate}</p>
 					</div>
 					<div class="border border-border bg-muted/30 p-3">
 						<p class="text-[10px] uppercase tracking-wide text-muted-foreground">History</p>
-						<p class="mt-1 font-mono text-lg text-foreground">10y</p>
+						<p class="mt-1 font-mono text-lg text-foreground">external</p>
 					</div>
 					<div class="border border-border bg-muted/30 p-3">
 						<p class="text-[10px] uppercase tracking-wide text-muted-foreground">Odds</p>
-						<p class="mt-1 font-mono text-lg text-foreground">All</p>
+						<p class="mt-1 font-mono text-lg text-foreground">Core</p>
 					</div>
 					<div class="border border-border bg-muted/30 p-3">
 						<p class="text-[10px] uppercase tracking-wide text-muted-foreground">Tickets</p>
-						<p class="mt-1 font-mono text-lg text-foreground">10 x 7</p>
+						<p class="mt-1 font-mono text-lg text-foreground">{pipelineTicketCount} x tiers</p>
 					</div>
+				</div>
+
+				<div class="grid grid-cols-1 gap-3 md:grid-cols-4">
+					<div>
+						<label for="world-cup-target-date" class="mb-1 block text-xs text-muted-foreground">Tomorrow / target date</label>
+						<Input id="world-cup-target-date" type="date" bind:value={pipelineTargetDate} />
+					</div>
+					<div>
+						<label for="world-cup-ticket-count" class="mb-1 block text-xs text-muted-foreground">Tickets per tier</label>
+						<Input id="world-cup-ticket-count" type="number" min="1" max="50" bind:value={pipelineTicketCount} />
+					</div>
+					<div>
+						<label for="world-cup-ticket-stake" class="mb-1 block text-xs text-muted-foreground">Stake</label>
+						<Input id="world-cup-ticket-stake" type="number" min="0" step="0.5" bind:value={pipelineTicketStake} />
+					</div>
+					<label class="flex items-center gap-2 border border-border bg-muted/20 px-3 py-2 text-sm text-foreground">
+						<input
+							id="world-cup-experimental"
+							type="checkbox"
+							class="h-4 w-4 accent-football-blue"
+							bind:checked={pipelineAllowExperimental}
+						/>
+						<span>Create watchlist tickets if safe tickets are blocked</span>
+					</label>
 				</div>
 
 				<div class="flex flex-wrap items-center gap-3">
 					<Button variant="glow" onclick={runWorldCupPipeline} disabled={pipelineRunning}>
-						{pipelineRunning ? 'Running World Cup pipeline...' : 'Run World Cup Pipeline'}
+						{pipelineRunning ? 'Generating tomorrow tickets...' : 'Generate Tomorrow World Cup Tickets'}
 					</Button>
 					<a href="/predict" class="text-sm text-football-blue hover:text-football-green">Open predictions</a>
 					<a href="/tickets" class="text-sm text-football-blue hover:text-football-green">Open tickets</a>
@@ -469,7 +609,15 @@
 							</div>
 							<div>
 								<p class="text-xs text-muted-foreground">Created tickets</p>
-								<p class="font-mono text-foreground">{displayedPipelineResult.summary.created_tickets}</p>
+								<p class="font-mono text-foreground">
+									{displayedPipelineResult.summary.created_tickets}
+									{#if displayedPipelineResult.summary.created_experimental_tickets}
+										<span class="text-football-gold">+{displayedPipelineResult.summary.created_experimental_tickets} watchlist</span>
+									{/if}
+								</p>
+								{#if displayedPipelineResult.summary.ticket_generation_mode}
+									<p class="text-[10px] text-muted-foreground">{displayedPipelineResult.summary.ticket_generation_mode}</p>
+								{/if}
 							</div>
 						</div>
 
@@ -484,6 +632,22 @@
 									{/each}
 									{#if displayedPipelineResult.created_ticket_ids.length > 24}
 										<Badge variant="info">+{displayedPipelineResult.created_ticket_ids.length - 24} more</Badge>
+									{/if}
+								</div>
+							</div>
+						{/if}
+
+						{#if (displayedPipelineResult.created_experimental_ticket_ids?.length ?? 0) > 0}
+							<div class="space-y-2">
+								<p class="text-xs uppercase tracking-wide text-muted-foreground">
+									Watchlist ticket IDs ({displayedPipelineResult.created_experimental_ticket_ids?.length ?? 0})
+								</p>
+								<div class="flex flex-wrap gap-1.5">
+									{#each (displayedPipelineResult.created_experimental_ticket_ids ?? []).slice(0, 24) as ticketId (ticketId)}
+										<Badge variant="warning">Watchlist #{ticketId}</Badge>
+									{/each}
+									{#if (displayedPipelineResult.created_experimental_ticket_ids?.length ?? 0) > 24}
+										<Badge variant="info">+{(displayedPipelineResult.created_experimental_ticket_ids?.length ?? 0) - 24} more</Badge>
 									{/if}
 								</div>
 							</div>
@@ -592,6 +756,50 @@
 												<td class="py-2 pr-3">
 													<div class="font-mono text-foreground">{candidate.market} · {candidate.selection}</div>
 													<div class="text-xs text-muted-foreground">{candidate.bookmaker ?? 'best available'}</div>
+												</td>
+												<td class="py-2 text-right font-mono text-football-green">{formatProbability(candidate.probability)}</td>
+												<td class="py-2 text-right font-mono text-foreground">{candidate.odds.toFixed(2)}</td>
+											</tr>
+										{/each}
+									</tbody>
+								</table>
+							</div>
+						{/if}
+
+						{#if (displayedPipelineResult.watchlist_candidates?.length ?? 0) > 0}
+							<div class="overflow-x-auto">
+								<div class="mb-2">
+									<p class="text-sm font-semibold text-foreground">Watchlist candidates</p>
+									<p class="text-xs text-muted-foreground">
+										These are generated when safe tickets are blocked by insufficient history or fallback model usage.
+									</p>
+								</div>
+								<table class="w-full text-sm">
+									<thead class="text-xs uppercase text-muted-foreground">
+										<tr>
+											<th class="py-2 text-left">Match</th>
+											<th class="py-2 text-left">Pick</th>
+											<th class="py-2 text-left">Reliability</th>
+											<th class="py-2 text-right">Probability</th>
+											<th class="py-2 text-right">Odds</th>
+										</tr>
+									</thead>
+									<tbody>
+										{#each (displayedPipelineResult.watchlist_candidates ?? []).slice(0, 10) as candidate (candidate.model_prediction_id)}
+											<tr class="border-t border-border">
+												<td class="py-2 pr-3">
+													<div class="font-medium text-foreground">{candidate.match}</div>
+													<div class="text-xs text-muted-foreground">{candidate.league}</div>
+												</td>
+												<td class="py-2 pr-3">
+													<div class="font-mono text-foreground">{candidate.market} · {candidate.selection}</div>
+													<div class="text-xs text-muted-foreground">{candidate.bookmaker ?? 'best available'}</div>
+												</td>
+												<td class="py-2 pr-3">
+													<Badge variant="warning">{candidate.reliability ?? 'watchlist'}</Badge>
+													<div class="max-w-72 truncate text-[10px] text-muted-foreground" title={(candidate.quality_reasons ?? []).join(', ')}>
+														{(candidate.quality_reasons ?? []).join(', ')}
+													</div>
 												</td>
 												<td class="py-2 text-right font-mono text-football-green">{formatProbability(candidate.probability)}</td>
 												<td class="py-2 text-right font-mono text-foreground">{candidate.odds.toFixed(2)}</td>
@@ -744,6 +952,22 @@
 				</div>
 				{#if pastEnabled}
 					<div class="space-y-3" transition:slide={{ duration: 200 }}>
+						<div class="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto]">
+							<div>
+								<label for="scrape-history-preset" class="text-xs text-muted-foreground mb-1 block">History preset</label>
+								<Select
+									name="scrape-history-preset"
+									bind:value={historyPresetYears}
+									options={historyPresetOptions}
+									onchange={(event: Event) => applyHistoryPreset((event.target as HTMLSelectElement).value)}
+								/>
+							</div>
+							<div class="flex items-end">
+								<Button variant="secondary" size="sm" onclick={() => applyHistoryPreset()}>
+									Fill dates
+								</Button>
+							</div>
+						</div>
 						<div>
 							<label for="scrape-past-from" class="text-xs text-muted-foreground mb-1 block">From</label>
 							<Input id="scrape-past-from" type="date" bind:value={pastFrom} />
@@ -751,6 +975,24 @@
 						<div>
 							<label for="scrape-past-to" class="text-xs text-muted-foreground mb-1 block">To</label>
 							<Input id="scrape-past-to" type="date" bind:value={pastTo} />
+						</div>
+						<div>
+							<label for="scrape-history-pages" class="text-xs text-muted-foreground mb-1 block">Max pages per season</label>
+							<Input id="scrape-history-pages" type="number" min="1" max="50" bind:value={historicMaxPages} />
+						</div>
+						<div class="border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+							<p>
+								History runs as normal <span class="font-mono text-foreground">scrape_odds / historic</span>
+								jobs, not through the ticket pipeline.
+							</p>
+							{#if historicSeasonPreview.length > 0}
+								<p class="mt-2">
+									Seasons to scrape:
+									<span class="font-mono text-foreground">{historicSeasonPreview.join(', ')}</span>
+								</p>
+							{:else}
+								<p class="mt-2">Fill dates to preview the seasons that will be scraped.</p>
+							{/if}
 						</div>
 					</div>
 				{/if}

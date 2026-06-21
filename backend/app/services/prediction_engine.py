@@ -1,4 +1,5 @@
 import asyncio
+import json
 from datetime import date as date_type
 from datetime import datetime, timezone
 
@@ -33,6 +34,50 @@ MODEL_TYPE_ALIASES = {
     "bayesian_hierarchical": "HierarchicalBayesianGoalModel",
     "HierarchicalBayesianGoalModel": "HierarchicalBayesianGoalModel",
 }
+
+
+def prediction_error_payload(summary: dict) -> str:
+    return json.dumps(
+        {
+            "written": summary.get("written", 0),
+            "failed": summary.get("failed", 0),
+            "fallbacks": summary.get("fallbacks", 0),
+            "target_errors": summary.get("target_errors", []),
+        },
+        ensure_ascii=False,
+    )
+
+
+def _is_missing_training_team_error(error: str) -> bool:
+    return "both teams must have been in the training data" in error.lower()
+
+
+def _fallback_market_probabilities(market: str, market_consensus: dict) -> dict[str, float]:
+    probabilities = market_consensus.get("probabilities") or {}
+    outcomes = market_outcomes(market)
+    if outcomes and all(outcome in probabilities for outcome in outcomes):
+        return {outcome: float(probabilities[outcome]) for outcome in outcomes}
+
+    if market == "1x2":
+        return {"home": 1 / 3, "draw": 1 / 3, "away": 1 / 3}
+    if market == "btts":
+        return {"yes": 0.5, "no": 0.5}
+    if market in {"ou_2_5", "over_under_2_5"}:
+        return {"over": 0.5, "under": 0.5}
+    return {outcome: 1 / len(outcomes) for outcome in outcomes} if outcomes else {}
+
+
+def _mark_quality_as_fallback(quality_report: dict, reason: str) -> dict:
+    quality_report["model"]["fallback"] = "market_consensus_or_neutral"
+    quality_report["model"]["fallback_reason"] = reason
+    reliability = quality_report["reliability"]
+    block_reasons = reliability.setdefault("block_reasons", [])
+    if "model_training_team_missing" not in block_reasons:
+        block_reasons.append("model_training_team_missing")
+    reliability["label"] = "unreliable"
+    reliability["is_ticket_eligible"] = False
+    reliability["score"] = min(int(reliability.get("score", 0) or 0), 25)
+    return quality_report
 
 
 def _to_datetime(val: str | None) -> datetime | None:
@@ -335,6 +380,8 @@ async def execute_single_model_run(
     target_mode: str = "future",
     max_goals: int = 10,
     target_match_ids: list[int] | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
     model_kwargs: dict | None = None,
     fit_kwargs: dict | None = None,
     use_time_decay: bool = False,
@@ -345,7 +392,16 @@ async def execute_single_model_run(
     if len(training) < 20:
         raise ValueError(f"Insufficient training data: {len(training)} matches (need >=20)")
 
-    targets = await fetch_target_matches(db, league, sport, target_mode, target_limit, target_match_ids)
+    targets = await fetch_target_matches(
+        db,
+        league,
+        sport,
+        target_mode,
+        target_limit,
+        target_match_ids,
+        date_from=date_from,
+        date_to=date_to,
+    )
     if not targets:
         raise ValueError("No target matches found for this selection.")
     target_odds_map = await fetch_target_odds_map(db, [target.id for target in targets])
@@ -381,10 +437,62 @@ async def execute_single_model_run(
 
     written = 0
     failed = 0
+    fallbacks = 0
+    target_errors: list[dict] = []
     concurrency = 3
 
     async def predict_one(target: Match) -> None:
-        nonlocal written, failed
+        nonlocal written, failed, fallbacks
+
+        async def write_fallback_predictions(reason: str) -> int:
+            rows_written = 0
+            odds_entries = target_odds_map.get(target.id) or []
+            for market in markets:
+                market_consensus = build_market_consensus(market, odds_entries, implied_probabilities=None)
+                market_consensus["implied_source"] = "overround_normalized_fallback"
+                model_probabilities = _fallback_market_probabilities(market, market_consensus)
+                if not model_probabilities:
+                    continue
+                home_prob, draw_prob, away_prob = _row_probability_fields(market, model_probabilities)
+                quality_report = evaluate_prediction_quality(
+                    training_matches=training,
+                    target_match=target,
+                    market=market,
+                    model_probabilities=model_probabilities,
+                    market_consensus=market_consensus,
+                )
+                quality_report = _mark_quality_as_fallback(quality_report, reason)
+                (
+                    home_odds,
+                    draw_odds,
+                    away_odds,
+                    value_home,
+                    value_draw,
+                    value_away,
+                    expected_value,
+                ) = _row_odds_and_value_fields(market, quality_report)
+                db.add(
+                    ModelPrediction(
+                        run_id=run_id,
+                        model_type=model_key,
+                        match_id=target.id,
+                        market=market,
+                        home_prob=home_prob,
+                        draw_prob=draw_prob,
+                        away_prob=away_prob,
+                        home_odds=home_odds,
+                        draw_odds=draw_odds,
+                        away_odds=away_odds,
+                        value_home=value_home,
+                        value_away=value_away,
+                        value_draw=value_draw,
+                        expected_value=expected_value,
+                        quality_report=quality_report,
+                    )
+                )
+                rows_written += 1
+            return rows_written
+
         try:
             response = await run_penaltyblog(
                 {
@@ -409,6 +517,15 @@ async def execute_single_model_run(
             result = response.get("result", {})
             grid = result.get("prediction")
             if not grid:
+                failed += 1
+                target_errors.append(
+                    {
+                        "match_id": target.id,
+                        "home_team": target.home_team,
+                        "away_team": target.away_team,
+                        "error": "Penaltyblog returned no prediction grid",
+                    }
+                )
                 return
 
             for market in markets:
@@ -467,8 +584,42 @@ async def execute_single_model_run(
                 )
                 db.add(row)
                 written += 1
-        except BridgeError:
+        except BridgeError as exc:
+            if _is_missing_training_team_error(str(exc)):
+                fallback_written = await write_fallback_predictions(str(exc))
+                if fallback_written:
+                    written += fallback_written
+                    fallbacks += 1
+                    target_errors.append(
+                        {
+                            "match_id": target.id,
+                            "home_team": target.home_team,
+                            "away_team": target.away_team,
+                            "error": str(exc),
+                            "fallback": "market_consensus_or_neutral",
+                            "fallback_predictions": fallback_written,
+                        }
+                    )
+                    return
             failed += 1
+            target_errors.append(
+                {
+                    "match_id": target.id,
+                    "home_team": target.home_team,
+                    "away_team": target.away_team,
+                    "error": str(exc),
+                }
+            )
+        except Exception as exc:
+            failed += 1
+            target_errors.append(
+                {
+                    "match_id": target.id,
+                    "home_team": target.home_team,
+                    "away_team": target.away_team,
+                    "error": str(exc),
+                }
+            )
 
     index = 0
 
@@ -487,7 +638,9 @@ async def execute_single_model_run(
         "target_matches": len(targets),
         "written": written,
         "failed": failed,
+        "fallbacks": fallbacks,
         "markets": markets,
+        "target_errors": target_errors,
     }
 
 
@@ -500,6 +653,9 @@ async def run_single_prediction(
     training_limit: int = 380,
     target_limit: int = 50,
     target_mode: str = "future",
+    target_match_ids: list[int] | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
     max_goals: int = 10,
     user_id: int | None = None,
 ) -> dict:
@@ -529,12 +685,26 @@ async def run_single_prediction(
             target_limit,
             target_mode,
             max_goals,
+            target_match_ids=target_match_ids,
+            date_from=date_from,
+            date_to=date_to,
         )
-        run.status = "completed"
+        if summary.get("written", 0) <= 0:
+            run.status = "failed"
+        elif summary.get("failed", 0) > 0 or summary.get("fallbacks", 0) > 0:
+            run.status = "partial"
+        else:
+            run.status = "completed"
         run.completed_at = datetime.now(timezone.utc)
         run.matches_count = summary["target_matches"]
+        run.error = None
+        if run.status != "completed":
+            run.error = prediction_error_payload(summary)
         await db.flush()
-        return {"run_id": run.id, "status": run.status}
+        response = {"run_id": run.id, "status": run.status}
+        if run.error:
+            response["error"] = run.error
+        return response
     except Exception as e:
         run.status = "failed"
         run.completed_at = datetime.now(timezone.utc)

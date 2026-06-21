@@ -70,6 +70,9 @@ class RunSingleRequest(BaseModel):
     training_limit: int = 380
     target_mode: str = "future"
     target_limit: int = 50
+    target_match_ids: list[int] | None = None
+    date_from: str | None = None
+    date_to: str | None = None
     max_goals: int = 10
 
 

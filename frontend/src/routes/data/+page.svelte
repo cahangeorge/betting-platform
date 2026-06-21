@@ -15,7 +15,7 @@
 	import { matchesApi } from '$lib/api/matches';
 	import { ticketsApi } from '$lib/api/tickets';
 	import { predictionsApi } from '$lib/api/predictions';
-	import type { Match, Ticket, PredictionRun } from '$lib/types';
+	import type { Match, Ticket, TicketLeg, PredictionRun } from '$lib/types';
 	import type { BackendLoadStatus } from '$lib/types/backend';
 	import Select from '$lib/components/ui/Select.svelte';
 
@@ -158,7 +158,7 @@
 	const filteredTickets = $derived(
 		tickets.filter((t) => {
 			if (searchQuery) {
-				const hay = `${t.reference} ${t.type} ${t.status}`.toLowerCase();
+				const hay = `${t.reference} ${ticketTypeLabel(t)} ${t.status} ${ticketLegsLabel(t.legs)}`.toLowerCase();
 				if (!hay.includes(searchLower)) return false;
 			}
 			return true;
@@ -348,6 +348,7 @@
 				return {
 					...t,
 					date: formatDate(t.created_at),
+					type: ticketTypeLabel(t),
 					legs_count: t.legs.length,
 					stake: formatCurrency(t.stake),
 					odds: t.total_odds.toFixed(2),
@@ -386,6 +387,37 @@
 			month: 'short',
 			year: 'numeric'
 		});
+	}
+
+	function ticketTypeLabel(ticket: Pick<Ticket, 'type' | 'ticket_type'>): string {
+		return ticket.type ?? ticket.ticket_type ?? '--';
+	}
+
+	function ticketLegMatchLabel(leg: unknown): string {
+		const ticketLeg = leg as Partial<TicketLeg> & {
+			home_team?: string | null;
+			away_team?: string | null;
+		};
+		const homeTeam = ticketLeg.match?.home_team ?? ticketLeg.home_team;
+		const awayTeam = ticketLeg.match?.away_team ?? ticketLeg.away_team;
+
+		if (homeTeam && awayTeam) return `${homeTeam} vs ${awayTeam}`;
+		if (ticketLeg.match_id) return `Match #${ticketLeg.match_id}`;
+		return 'Match unavailable';
+	}
+
+	function ticketLegMetaLabel(leg: unknown): string {
+		const ticketLeg = leg as Partial<TicketLeg> & { bookmaker?: string | null };
+		return [ticketLeg.market, ticketLeg.selection, ticketLeg.bookmaker].filter(Boolean).join(' · ');
+	}
+
+	function ticketLegOddsLabel(leg: unknown): string {
+		const ticketLeg = leg as Partial<TicketLeg>;
+		return typeof ticketLeg.odds === 'number' ? ticketLeg.odds.toFixed(2) : '--';
+	}
+
+	function ticketLegsLabel(legs: TicketLeg[] = []): string {
+		return legs.map(ticketLegMatchLabel).join(' ');
 	}
 
 	function statusBadgeVariant(status: string): 'success' | 'danger' | 'info' | 'neutral' {
@@ -632,9 +664,12 @@
 						<h4 class="text-sm font-semibold text-foreground mb-2">Legs</h4>
 							{#each selectedRow.legs as leg ((leg.id ?? `${leg.match_id ?? 'match'}-${leg.selection ?? 'selection'}-${leg.odds ?? 'odds'}`) as string | number)}
 								<div class="p-2 bg-muted/30 border border-border mb-2 text-sm">
-									<div class="flex justify-between">
-										<span>{leg.home_team} vs {leg.away_team}</span>
-									<span class="font-mono">{leg.odds}</span>
+									<div class="flex items-start justify-between gap-3">
+										<div>
+											<p class="font-medium text-foreground">{ticketLegMatchLabel(leg)}</p>
+											<p class="mt-1 text-xs text-muted-foreground">{ticketLegMetaLabel(leg)}</p>
+										</div>
+									<span class="font-mono">{ticketLegOddsLabel(leg)}</span>
 								</div>
 							</div>
 						{/each}

@@ -1,5 +1,6 @@
-from datetime import datetime, timezone
 import re
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,18 +8,17 @@ from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_current_user
 from app.database import get_db
-from app.models.match import OddsEntry
-from app.models.match import Match
+from app.models.match import Match, OddsEntry
 from app.models.prediction import ModelPrediction, PredictionRun
 from app.models.user import User
 from app.schemas.prediction import (
     PredictionCatalogResponse,
     PredictionRunDetailResponse,
     PredictionRunResponse,
-    ValueBetItem,
-    ValueBetResponse,
     RunEnsembleRequest,
     RunSingleRequest,
+    ValueBetItem,
+    ValueBetResponse,
 )
 from app.services.ensemble import run_ensemble_prediction
 from app.services.prediction_engine import PREDICT_MODELS, run_single_prediction
@@ -93,18 +93,12 @@ def _is_eligible_market(prediction_market: str, candidate_market: str) -> bool:
 
 
 def _resolve_market_odds(
-    prediction: ModelPrediction,
-    outcome: str,
-    odds_entries: list[OddsEntry]
+    prediction: ModelPrediction, outcome: str, odds_entries: list[OddsEntry]
 ) -> tuple[float, str] | tuple[None, str]:
     if not odds_entries:
         return None, ""
 
-    candidates = [
-        e
-        for e in odds_entries
-        if _is_eligible_market(prediction.market, e.market)
-    ]
+    candidates = [e for e in odds_entries if _is_eligible_market(prediction.market, e.market)]
     if not candidates:
         return None, ""
 
@@ -237,6 +231,9 @@ async def create_prediction_run(
         training_limit=body.training_limit,
         target_limit=body.target_limit,
         target_mode=body.target_mode,
+        target_match_ids=body.target_match_ids,
+        date_from=body.date_from,
+        date_to=body.date_to,
         max_goals=body.max_goals,
     )
 
@@ -313,9 +310,7 @@ async def list_value_bets(
         select(PredictionRun)
         .where(PredictionRun.user_id == user.id, PredictionRun.status == "completed")
         .options(
-            selectinload(PredictionRun.model_predictions)
-            .selectinload(ModelPrediction.match)
-            .selectinload(Match.odds),
+            selectinload(PredictionRun.model_predictions).selectinload(ModelPrediction.match).selectinload(Match.odds),
         )
         .order_by(PredictionRun.created_at.desc())
         .limit(1)

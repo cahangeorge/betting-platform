@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -21,6 +21,23 @@ from app.schemas.dashboard import (
 )
 
 router = APIRouter()
+
+
+def _parse_dashboard_datetime(value: str, *, end_of_day: bool = False) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid date value: {value}") from exc
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    else:
+        parsed = parsed.astimezone(timezone.utc)
+
+    if end_of_day and "T" not in value:
+        parsed = parsed + timedelta(days=1) - timedelta(microseconds=1)
+
+    return parsed
 
 
 @router.get("/summary", response_model=DashboardSummary)
@@ -82,9 +99,9 @@ async def get_recent_tickets(
         select(Ticket).options(selectinload(Ticket.legs).selectinload(TicketLeg.match)).where(Ticket.user_id == user.id)
     )
     if date_from:
-        stmt = stmt.where(Ticket.created_at >= date_from)
+        stmt = stmt.where(Ticket.created_at >= _parse_dashboard_datetime(date_from))
     if date_to:
-        stmt = stmt.where(Ticket.created_at <= date_to)
+        stmt = stmt.where(Ticket.created_at <= _parse_dashboard_datetime(date_to, end_of_day=True))
     stmt = stmt.order_by(Ticket.created_at.desc()).limit(limit)
 
     result = await db.execute(stmt)

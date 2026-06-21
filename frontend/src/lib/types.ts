@@ -210,7 +210,7 @@ export interface BacktestResult {
 }
 
 // ─── Tickets ──────────────────────────────────────────
-export type TicketStatus = 'open' | 'won' | 'lost' | 'cashed_out' | 'void';
+export type TicketStatus = 'open' | 'watchlist' | 'won' | 'lost' | 'cashed_out' | 'void';
 export type TicketType = 'single' | 'accumulator' | 'system';
 
 export interface Ticket {
@@ -237,7 +237,7 @@ export interface TicketLeg {
 	selection: string;
 	odds: number;
 	status: 'pending' | 'won' | 'lost' | 'void';
-	match: Match | null;
+	match?: Partial<Match> | null;
 }
 
 export interface PlaceBetRequest {
