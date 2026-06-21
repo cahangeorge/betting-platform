@@ -83,12 +83,15 @@ async function insertMatch(input: {
 	return Number((await runSql(sql)).split('\n')[0]?.trim());
 }
 
-async function insertOdds(matchId: number, input: { homeOdds: number; drawOdds: number; awayOdds: number; market?: string }) {
+async function insertOdds(
+	matchId: number,
+	input: { homeOdds: number; drawOdds: number; awayOdds: number; market?: string; bookmaker?: string }
+) {
 	await runSql(`
 		INSERT INTO odds_entries (match_id, bookmaker, market, home_odds, draw_odds, away_odds, timestamp)
 		VALUES (
 			${matchId},
-			'Betfair',
+			${sqlLiteral(input.bookmaker ?? 'Betfair')},
 			${sqlLiteral(input.market ?? '1x2')},
 			${input.homeOdds},
 			${input.drawOdds},
@@ -96,6 +99,13 @@ async function insertOdds(matchId: number, input: { homeOdds: number; drawOdds: 
 			NOW()
 		);
 	`);
+}
+
+export async function addOddsEntryForMatch(
+	matchId: number,
+	input: { bookmaker: string; homeOdds: number; drawOdds: number; awayOdds: number; market?: string }
+): Promise<void> {
+	await insertOdds(matchId, input);
 }
 
 async function insertLiveStats(matchId: number) {
@@ -162,8 +172,35 @@ async function insertModelPrediction(input: {
 	homeOdds?: number;
 	drawOdds?: number;
 	awayOdds?: number;
+	qualityReport?: Record<string, unknown>;
 }) {
 	const hasModelType = await tableHasColumn('model_predictions', 'model_type');
+	const hasQualityReport = await tableHasColumn('model_predictions', 'quality_report');
+	const qualityReport =
+		input.qualityReport ?? {
+			schema_version: 1,
+			training: {
+				total_matches: 80,
+				home_team: { matches: 20 },
+				away_team: { matches: 20 }
+			},
+			model: {
+				pick: 'home',
+				probabilities: { home: input.homeProb, draw: input.drawProb, away: input.awayProb }
+			},
+			market: {
+				pick: 'home',
+				probabilities: { home: 0.55, draw: 0.27, away: 0.18 },
+				odds: {
+					home: { odds: input.homeOdds, bookmaker: 'Betfair' },
+					draw: { odds: input.drawOdds, bookmaker: 'Betfair' },
+					away: { odds: input.awayOdds, bookmaker: 'Betfair' }
+				},
+				implied_source: 'e2e'
+			},
+			edge: { home: 22.24, draw: -28.6, away: -38.5, pick_edge_pct: 22.24 },
+			reliability: { label: 'reliable', score: 92, is_ticket_eligible: true, block_reasons: [] }
+		};
 	const columns = [
 		'run_id',
 		...(hasModelType ? ['model_type'] : []),
@@ -178,7 +215,8 @@ async function insertModelPrediction(input: {
 		'value_home',
 		'value_draw',
 		'value_away',
-		'expected_value'
+		'expected_value',
+		...(hasQualityReport ? ['quality_report'] : [])
 	];
 	const values = [
 		String(input.runId),
@@ -194,7 +232,8 @@ async function insertModelPrediction(input: {
 		'0.09',
 		'0.02',
 		'-0.04',
-		'0.11'
+		'0.11',
+		...(hasQualityReport ? [`${sqlLiteral(JSON.stringify(qualityReport))}::json`] : [])
 	];
 
 	await runSql(`

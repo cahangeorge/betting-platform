@@ -54,6 +54,7 @@ class ModelPrediction(Base):
     value_draw: Mapped[float | None] = mapped_column(Float, nullable=True)
     value_away: Mapped[float | None] = mapped_column(Float, nullable=True)
     expected_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    quality_report: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     run: Mapped["PredictionRun"] = relationship("PredictionRun", back_populates="model_predictions")

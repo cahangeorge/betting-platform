@@ -146,9 +146,12 @@ def _extract_source_id(match_link: str | None) -> str | None:
 
 
 def _derive_match_status(record: dict, match_date: datetime | None) -> str:
+    now = datetime.now(timezone.utc)
+    if match_date and match_date > now:
+        return "scheduled"
     if _coerce_int(record.get("home_score")) is not None and _coerce_int(record.get("away_score")) is not None:
         return "finished"
-    if match_date and match_date <= datetime.now(timezone.utc):
+    if match_date and match_date <= now:
         return "live"
     return "scheduled"
 
@@ -189,16 +192,16 @@ def _market_key_to_odds(
 
     if key == "btts":
         return (
-            _coerce_float(bookmaker_market.get("Yes")),
+            _coerce_float(bookmaker_market.get("Yes") or bookmaker_market.get("odds_yes")),
             None,
-            _coerce_float(bookmaker_market.get("No")),
+            _coerce_float(bookmaker_market.get("No") or bookmaker_market.get("odds_no")),
         )
 
     if key.startswith("over_under"):
         return (
-            _coerce_float(bookmaker_market.get("Over")),
+            _coerce_float(bookmaker_market.get("Over") or bookmaker_market.get("odds_over")),
             None,
-            _coerce_float(bookmaker_market.get("Under")),
+            _coerce_float(bookmaker_market.get("Under") or bookmaker_market.get("odds_under")),
         )
 
     if key.startswith("european_handicap"):
@@ -332,15 +335,22 @@ async def _upsert_match_from_record(db: AsyncSession, record: dict, sport: str) 
         db.add(match)
         await db.flush()
 
+    status = _derive_match_status(record, match_date)
+    home_score = _coerce_int(record.get("home_score"))
+    away_score = _coerce_int(record.get("away_score"))
+    if status == "scheduled":
+        home_score = None
+        away_score = None
+
     match.external_id = source_id or match.external_id
     match.sport = sport
     match.home_team = str(record.get("home_team") or match.home_team)
     match.away_team = str(record.get("away_team") or match.away_team)
-    match.home_score = _coerce_int(record.get("home_score"))
-    match.away_score = _coerce_int(record.get("away_score"))
+    match.home_score = home_score
+    match.away_score = away_score
     match.match_date = match_date
     match.competition = record.get("league_name") or match.competition
-    match.status = _derive_match_status(record, match_date)
+    match.status = status
 
     source_stmt = select(MatchSource).where(MatchSource.match_id == match.id, MatchSource.source == ODDS_SOURCE)
     source_result = await db.execute(source_stmt)

@@ -11,8 +11,8 @@ from app.database import async_session_factory
 from app.models.match import Match, OddsEntry
 from app.models.prediction import ModelPrediction, PredictionRun
 from app.models.scrape import ScrapeJob
-from app.models.ticket import Ticket, TicketBatch
-from app.services.prediction_engine import execute_single_model_run
+from app.models.ticket import TicketBatch
+from app.services.prediction_engine import execute_single_model_run, prediction_error_payload
 from app.services.scraper import FOOTBALL_ALL_MARKETS, create_scrape_job, execute_scrape_job
 from app.services.ticket_engine import create_ticket
 
@@ -35,6 +35,78 @@ DIFFICULTY_TIERS = [
     {"level": 7, "label": "Maximum sevenfolds", "leg_count": 7, "difficulty": "expert"},
 ]
 COMBO_POOL_LIMIT = 80
+
+
+def _parse_pipeline_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.astimezone(timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+async def _publish_pipeline_progress(
+    db: AsyncSession,
+    parent_job_id: int | None,
+    *,
+    stage: str,
+    scrape_jobs: list[ScrapeJob] | None = None,
+    prediction_runs: list[PredictionRun] | None = None,
+    skipped_historic_seasons: list[int] | None = None,
+) -> None:
+    if parent_job_id is None:
+        await db.commit()
+        return
+
+    parent = await db.get(ScrapeJob, parent_job_id)
+    if parent is None:
+        await db.commit()
+        return
+
+    scrape_jobs = scrape_jobs or []
+    prediction_runs = prediction_runs or []
+    skipped_historic_seasons = skipped_historic_seasons or []
+    parent.output = json.dumps(
+        {
+            "status": "running",
+            "stage": stage,
+            "summary": {
+                "scrape_jobs": len(scrape_jobs),
+                "pending_scrape_jobs": sum(1 for job in scrape_jobs if job.status == "pending"),
+                "running_scrape_jobs": sum(1 for job in scrape_jobs if job.status == "running"),
+                "completed_scrape_jobs": sum(1 for job in scrape_jobs if job.status == "completed"),
+                "failed_scrape_jobs": sum(1 for job in scrape_jobs if job.status == "failed"),
+                "skipped_historic_seasons": len(skipped_historic_seasons),
+                "prediction_runs": len(prediction_runs),
+                "completed_prediction_runs": sum(1 for run in prediction_runs if run.status == "completed"),
+                "partial_prediction_runs": sum(1 for run in prediction_runs if run.status == "partial"),
+                "failed_prediction_runs": sum(1 for run in prediction_runs if run.status == "failed"),
+            },
+            "scrape_job_ids": [job.id for job in scrape_jobs],
+            "prediction_run_ids": [run.id for run in prediction_runs],
+            "skipped_historic_seasons": skipped_historic_seasons,
+            "errors": _pipeline_errors(scrape_jobs, prediction_runs),
+        }
+    )
+    await db.commit()
+
+
+def _is_timeout_error(error: str | None) -> bool:
+    return bool(error and "timed out" in error.lower())
+
+
+def _pipeline_errors(scrape_jobs: list[ScrapeJob], prediction_runs: list[PredictionRun]) -> list[dict]:
+    return [
+        {"type": "scrape", "id": job.id, "error": job.error}
+        for job in scrape_jobs
+        if job.status == "failed" and job.error
+    ] + [
+        {"type": "prediction", "id": run.id, "error": run.error}
+        for run in prediction_runs
+        if run.status in {"partial", "failed"} and run.error
+    ]
 
 
 def recent_world_cup_seasons(history_years: int, *, today: datetime | None = None) -> list[int]:
@@ -69,6 +141,33 @@ async def _target_world_cup_match_ids(db: AsyncSession, future_days: int) -> lis
     return [row[0] for row in result.all()]
 
 
+async def _target_world_cup_match_ids_for_window(
+    db: AsyncSession,
+    *,
+    future_days: int,
+    target_date_from: str | None = None,
+    target_date_to: str | None = None,
+) -> list[int]:
+    start = _parse_pipeline_datetime(target_date_from)
+    end = _parse_pipeline_datetime(target_date_to)
+    if start is None or end is None:
+        return await _target_world_cup_match_ids(db, future_days)
+
+    result = await db.execute(
+        select(Match.id)
+        .where(
+            Match.sport == "football",
+            Match.status == "scheduled",
+            Match.match_date.is_not(None),
+            Match.match_date >= start,
+            Match.match_date <= end,
+            _world_cup_competition_clause(),
+        )
+        .order_by(Match.match_date.asc(), Match.id.asc())
+    )
+    return [row[0] for row in result.all()]
+
+
 async def _run_scrape_jobs(
     db: AsyncSession,
     *,
@@ -77,13 +176,21 @@ async def _run_scrape_jobs(
     all_markets: bool,
     odds_history: bool,
     max_historic_pages: int | None,
-) -> list:
+    target_date: str | None = None,
+    parent_job_id: int | None = None,
+) -> tuple[list[ScrapeJob], list[int]]:
     jobs = []
+    skipped_historic_seasons: list[int] = []
     now = datetime.now(timezone.utc)
     markets = FOOTBALL_ALL_MARKETS if all_markets else ["1x2", "btts", "over_under_2_5"]
 
-    for offset in range(max(future_days, 1)):
-        scrape_date = now + timedelta(days=offset)
+    scrape_dates = (
+        [target_date.replace("-", "")]
+        if target_date
+        else [(now + timedelta(days=offset)).strftime("%Y%m%d") for offset in range(max(future_days, 1))]
+    )
+
+    for scrape_date_value in scrape_dates:
         job = await create_scrape_job(
             db,
             "scrape_odds",
@@ -92,7 +199,7 @@ async def _run_scrape_jobs(
                 "command": "upcoming",
                 "sport": "football",
                 "leagues": [WORLD_CUP_LEAGUE_SLUG],
-                "date": scrape_date.strftime("%Y%m%d"),
+                "date": scrape_date_value,
                 "markets": markets,
                 "all_markets": all_markets,
                 "odds_history": odds_history,
@@ -102,7 +209,24 @@ async def _run_scrape_jobs(
                 "request_delay": 1.0,
             },
         )
-        jobs.append(await execute_scrape_job(db, job.id))
+        job.status = "running"
+        job.started_at = datetime.now(timezone.utc)
+        jobs.append(job)
+        await db.flush()
+        await _publish_pipeline_progress(
+            db,
+            parent_job_id,
+            stage=f"scraping_upcoming_{scrape_date_value}",
+            scrape_jobs=jobs,
+        )
+        jobs[-1] = await execute_scrape_job(db, job.id)
+        await _publish_pipeline_progress(
+            db,
+            parent_job_id,
+            stage=f"scraped_upcoming_{scrape_date_value}",
+            scrape_jobs=jobs,
+            skipped_historic_seasons=skipped_historic_seasons,
+        )
 
     for season in recent_world_cup_seasons(history_years, today=now):
         job = await create_scrape_job(
@@ -124,9 +248,40 @@ async def _run_scrape_jobs(
                 "max_pages": max_historic_pages,
             },
         )
-        jobs.append(await execute_scrape_job(db, job.id))
+        job.status = "running"
+        job.started_at = datetime.now(timezone.utc)
+        jobs.append(job)
+        await db.flush()
+        await _publish_pipeline_progress(
+            db,
+            parent_job_id,
+            stage=f"scraping_historic_{season}",
+            scrape_jobs=jobs,
+            skipped_historic_seasons=skipped_historic_seasons,
+        )
+        jobs[-1] = await execute_scrape_job(db, job.id)
+        await _publish_pipeline_progress(
+            db,
+            parent_job_id,
+            stage=f"scraped_historic_{season}",
+            scrape_jobs=jobs,
+            skipped_historic_seasons=skipped_historic_seasons,
+        )
+        if jobs[-1].status == "failed" and _is_timeout_error(jobs[-1].error):
+            remaining_seasons = [
+                remaining for remaining in recent_world_cup_seasons(history_years, today=now) if remaining > season
+            ]
+            skipped_historic_seasons.extend(remaining_seasons)
+            await _publish_pipeline_progress(
+                db,
+                parent_job_id,
+                stage=f"historic_timeout_skip_remaining_after_{season}",
+                scrape_jobs=jobs,
+                skipped_historic_seasons=skipped_historic_seasons,
+            )
+            break
 
-    return jobs
+    return jobs, skipped_historic_seasons
 
 
 async def _run_top_predictions(
@@ -167,10 +322,12 @@ async def _run_top_predictions(
                 target_match_ids=target_match_ids,
                 use_time_decay=model_key == "DixonColesGoalModel",
             )
-            run.status = "completed" if summary.get("failed", 0) == 0 else "partial"
+            run.status = (
+                "completed" if summary.get("failed", 0) == 0 and summary.get("fallbacks", 0) == 0 else "partial"
+            )
             run.matches_count = summary.get("targets", len(target_match_ids))
-            if summary.get("failed", 0):
-                run.error = f"{summary['failed']} target matches failed during prediction"
+            if summary.get("failed", 0) or summary.get("fallbacks", 0):
+                run.error = prediction_error_payload(summary)
         except Exception as exc:
             run.status = "failed"
             run.error = str(exc)
@@ -245,11 +402,34 @@ def _best_odds_for_selection(
     return best_value, best_bookmaker
 
 
+def _prediction_is_ticket_eligible(prediction: ModelPrediction) -> bool:
+    quality = getattr(prediction, "quality_report", None)
+    if not quality:
+        return False
+    reliability = quality.get("reliability", {}) if isinstance(quality, dict) else {}
+    return bool(reliability.get("is_ticket_eligible", False))
+
+
+def _prediction_reliability(prediction: ModelPrediction) -> dict:
+    quality = getattr(prediction, "quality_report", None)
+    if not isinstance(quality, dict):
+        return {"label": "unknown", "score": 0, "block_reasons": ["missing_quality_report"]}
+    reliability = quality.get("reliability", {})
+    if not isinstance(reliability, dict):
+        return {"label": "unknown", "score": 0, "block_reasons": ["missing_reliability_report"]}
+    return {
+        "label": reliability.get("label", "unknown"),
+        "score": reliability.get("score", 0),
+        "block_reasons": reliability.get("block_reasons", []),
+    }
+
+
 async def _build_top_ticket_candidates(
     db: AsyncSession,
     *,
     run_ids: list[int],
     limit: int,
+    include_unreliable: bool = False,
 ) -> list[dict]:
     if not run_ids:
         return []
@@ -266,9 +446,15 @@ async def _build_top_ticket_candidates(
     aggregated: dict[tuple[int, str, str], dict] = {}
 
     for prediction in predictions:
+        is_ticket_eligible = _prediction_is_ticket_eligible(prediction)
+        if not include_unreliable and not is_ticket_eligible:
+            continue
+
         match = prediction.match
         if not match:
             continue
+
+        reliability = _prediction_reliability(prediction)
 
         for selection, probability in _probability_options(prediction):
             if probability <= 0:
@@ -293,12 +479,17 @@ async def _build_top_ticket_candidates(
                     "bookmaker": bookmaker,
                     "model_types": {prediction.model_type},
                     "model_prediction_id": prediction.id,
+                    "is_ticket_eligible": is_ticket_eligible,
+                    "reliability": reliability,
                 }
                 continue
 
             current["probability_sum"] += probability
             current["probability_count"] += 1
             current["model_types"].add(prediction.model_type)
+            current["is_ticket_eligible"] = current["is_ticket_eligible"] or is_ticket_eligible
+            if reliability.get("score", 0) > current["reliability"].get("score", 0):
+                current["reliability"] = reliability
             if odds > current["odds"]:
                 current["odds"] = odds
                 current["bookmaker"] = bookmaker
@@ -322,6 +513,10 @@ async def _build_top_ticket_candidates(
                 "model_types": sorted(item["model_types"]),
                 "model_prediction_id": item["model_prediction_id"],
                 "expected_return_score": probability * item["odds"],
+                "is_ticket_eligible": item["is_ticket_eligible"],
+                "reliability": item["reliability"].get("label", "unknown"),
+                "reliability_score": item["reliability"].get("score", 0),
+                "quality_reasons": item["reliability"].get("block_reasons", []),
             }
         )
 
@@ -403,14 +598,17 @@ async def _create_tiered_tickets(
     user_id: int,
     tiers: list[dict],
     stake: float,
+    batch_name: str = "World Cup probability tickets by difficulty",
+    strategy: str = "world_cup_probability_7_tiers",
+    ticket_status: str = "open",
 ) -> list[int]:
     ticket_candidates = [ticket for tier in tiers for ticket in tier["tickets"]]
     if not ticket_candidates:
         return []
 
     batch = TicketBatch(
-        name="World Cup probability tickets by difficulty",
-        strategy="world_cup_probability_7_tiers",
+        name=batch_name,
+        strategy=strategy,
         tickets_count=0,
         total_stake=0.0,
     )
@@ -438,6 +636,7 @@ async def _create_tiered_tickets(
             ],
         )
         ticket.batch_id = batch.id
+        ticket.status = ticket_status
         ticket_candidate["ticket_id"] = ticket.id
         ticket_ids.append(ticket.id)
         batch.tickets_count += 1
@@ -451,6 +650,7 @@ async def run_world_cup_pipeline(
     db: AsyncSession,
     *,
     user_id: int,
+    parent_job_id: int | None = None,
     future_days: int = 7,
     history_years: int = 10,
     all_markets: bool = True,
@@ -459,22 +659,41 @@ async def run_world_cup_pipeline(
     ticket_count: int = 10,
     ticket_stake: float = 10.0,
     create_tickets: bool = True,
+    allow_experimental_tickets: bool = False,
     training_limit: int = 240,
+    target_date: str | None = None,
+    target_date_from: str | None = None,
+    target_date_to: str | None = None,
 ) -> dict:
-    scrape_jobs = await _run_scrape_jobs(
+    scrape_jobs, skipped_historic_seasons = await _run_scrape_jobs(
         db,
         future_days=future_days,
         history_years=history_years,
         all_markets=all_markets,
         odds_history=odds_history,
         max_historic_pages=max_historic_pages,
+        target_date=target_date,
+        parent_job_id=parent_job_id,
     )
-    target_match_ids = await _target_world_cup_match_ids(db, future_days)
+    target_match_ids = await _target_world_cup_match_ids_for_window(
+        db,
+        future_days=future_days,
+        target_date_from=target_date_from,
+        target_date_to=target_date_to,
+    )
     prediction_runs = await _run_top_predictions(
         db,
         user_id=user_id,
         target_match_ids=target_match_ids,
         training_limit=training_limit,
+    )
+    await _publish_pipeline_progress(
+        db,
+        parent_job_id,
+        stage="predictions_complete",
+        scrape_jobs=scrape_jobs,
+        prediction_runs=prediction_runs,
+        skipped_historic_seasons=skipped_historic_seasons,
     )
     completed_run_ids = [run.id for run in prediction_runs if run.status in {"completed", "partial"}]
     candidate_pool = await _build_top_ticket_candidates(
@@ -482,44 +701,74 @@ async def run_world_cup_pipeline(
         run_ids=completed_run_ids,
         limit=max(ticket_count * len(DIFFICULTY_TIERS) * 2, COMBO_POOL_LIMIT),
     )
+    watchlist_candidates = []
+    if not candidate_pool:
+        watchlist_candidates = await _build_top_ticket_candidates(
+            db,
+            run_ids=completed_run_ids,
+            limit=max(ticket_count * len(DIFFICULTY_TIERS) * 2, COMBO_POOL_LIMIT),
+            include_unreliable=True,
+        )
     difficulty_tiers = _build_difficulty_ticket_tiers(candidate_pool, per_tier_count=ticket_count)
-    ticket_ids = await _create_tiered_tickets(db, user_id=user_id, tiers=difficulty_tiers, stake=ticket_stake) if create_tickets else []
+    ticket_ids = (
+        await _create_tiered_tickets(db, user_id=user_id, tiers=difficulty_tiers, stake=ticket_stake)
+        if create_tickets
+        else []
+    )
+    experimental_ticket_ids: list[int] = []
+    experimental_difficulty_tiers: list[dict] = []
+    if create_tickets and allow_experimental_tickets and not ticket_ids and watchlist_candidates:
+        experimental_difficulty_tiers = _build_difficulty_ticket_tiers(
+            watchlist_candidates, per_tier_count=ticket_count
+        )
+        experimental_ticket_ids = await _create_tiered_tickets(
+            db,
+            user_id=user_id,
+            tiers=experimental_difficulty_tiers,
+            stake=ticket_stake,
+            batch_name="World Cup experimental watchlist tickets",
+            strategy="world_cup_watchlist_experimental",
+            ticket_status="watchlist",
+        )
 
     return {
         "status": "completed",
         "summary": {
             "future_days": future_days,
+            "target_date": target_date,
+            "target_date_from": target_date_from,
+            "target_date_to": target_date_to,
             "history_years": history_years,
             "historic_seasons": recent_world_cup_seasons(history_years),
             "scrape_jobs": len(scrape_jobs),
             "completed_scrape_jobs": sum(1 for job in scrape_jobs if job.status == "completed"),
             "failed_scrape_jobs": sum(1 for job in scrape_jobs if job.status == "failed"),
+            "skipped_historic_seasons": len(skipped_historic_seasons),
             "target_matches": len(target_match_ids),
             "prediction_runs": len(prediction_runs),
             "completed_prediction_runs": sum(1 for run in prediction_runs if run.status == "completed"),
             "partial_prediction_runs": sum(1 for run in prediction_runs if run.status == "partial"),
             "failed_prediction_runs": sum(1 for run in prediction_runs if run.status == "failed"),
             "top_candidates": len(candidate_pool),
+            "watchlist_candidates": len(watchlist_candidates),
+            "ticket_generation_blocked": bool(watchlist_candidates and not candidate_pool),
             "difficulty_tiers": len(difficulty_tiers),
             "tiered_ticket_candidates": sum(len(tier["tickets"]) for tier in difficulty_tiers),
             "created_tickets": len(ticket_ids),
+            "created_experimental_tickets": len(experimental_ticket_ids),
+            "ticket_generation_mode": "experimental_watchlist" if experimental_ticket_ids else "safe",
             "scraped_markets": "all_football" if all_markets else "core_prediction",
         },
         "scrape_job_ids": [job.id for job in scrape_jobs],
         "prediction_run_ids": [run.id for run in prediction_runs],
         "created_ticket_ids": ticket_ids,
+        "created_experimental_ticket_ids": experimental_ticket_ids,
+        "skipped_historic_seasons": skipped_historic_seasons,
         "top_candidates": candidate_pool[:ticket_count],
+        "watchlist_candidates": watchlist_candidates[:ticket_count],
         "difficulty_tiers": difficulty_tiers,
-        "errors": [
-            {"type": "scrape", "id": job.id, "error": job.error}
-            for job in scrape_jobs
-            if job.status == "failed" and job.error
-        ]
-        + [
-            {"type": "prediction", "id": run.id, "error": run.error}
-            for run in prediction_runs
-            if run.status == "failed" and run.error
-        ],
+        "experimental_difficulty_tiers": experimental_difficulty_tiers,
+        "errors": _pipeline_errors(scrape_jobs, prediction_runs),
     }
 
 
@@ -538,6 +787,7 @@ async def execute_world_cup_pipeline_job(job_id: int, user_id: int) -> None:
             result = await run_world_cup_pipeline(
                 db,
                 user_id=user_id,
+                parent_job_id=job.id,
                 future_days=int(params.get("future_days", 7) or 7),
                 history_years=int(params.get("history_years", 10) or 10),
                 all_markets=bool(params.get("all_markets", True)),
@@ -546,7 +796,11 @@ async def execute_world_cup_pipeline_job(job_id: int, user_id: int) -> None:
                 ticket_count=int(params.get("ticket_count", 10) or 10),
                 ticket_stake=float(params.get("ticket_stake", 10.0) or 10.0),
                 create_tickets=bool(params.get("create_tickets", True)),
+                allow_experimental_tickets=bool(params.get("allow_experimental_tickets", False)),
                 training_limit=int(params.get("training_limit", 240) or 240),
+                target_date=params.get("target_date"),
+                target_date_from=params.get("target_date_from"),
+                target_date_to=params.get("target_date_to"),
             )
             job.status = "completed"
             job.output = json.dumps(result)

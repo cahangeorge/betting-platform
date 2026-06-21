@@ -21,6 +21,7 @@ class ModelPredictionResponse(BaseModel):
     value_draw: float | None = None
     value_away: float | None = None
     expected_value: float | None = None
+    quality_report: dict | None = None
     created_at: datetime
 
 
@@ -69,6 +70,9 @@ class RunSingleRequest(BaseModel):
     training_limit: int = 380
     target_mode: str = "future"
     target_limit: int = 50
+    target_match_ids: list[int] | None = None
+    date_from: str | None = None
+    date_to: str | None = None
     max_goals: int = 10
 
 
@@ -104,6 +108,8 @@ class ValueBetItem(BaseModel):
     edge: float
     model_type: str
     confidence: float
+    reliability: str | None = None
+    quality_reasons: list[str] = []
     source: str = "prediction"
 
 

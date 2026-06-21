@@ -36,14 +36,18 @@ class ScrapedDatasetResponse(BaseModel):
 
 
 class WorldCupPipelineRequest(BaseModel):
+    target_date: str | None = None
+    target_date_from: str | None = None
+    target_date_to: str | None = None
     future_days: int = Field(default=7, ge=1, le=31)
-    history_years: int = Field(default=10, ge=1, le=40)
+    history_years: int = Field(default=10, ge=0, le=40)
     all_markets: bool = True
     odds_history: bool = True
     max_historic_pages: int | None = Field(default=None, ge=1, le=50)
     ticket_count: int = Field(default=10, ge=1, le=50)
     ticket_stake: float = Field(default=10.0, ge=0)
     create_tickets: bool = True
+    allow_experimental_tickets: bool = False
     training_limit: int = Field(default=240, ge=20, le=1000)
 
 

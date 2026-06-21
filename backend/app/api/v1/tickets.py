@@ -5,7 +5,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_current_user
 from app.database import get_db
-from app.models.ticket import BetPlacement, Settlement, Ticket, TicketBatch, TicketLeg
+from app.models.ticket import Settlement, Ticket, TicketBatch, TicketLeg
 from app.models.user import User
 from app.schemas.ticket import (
     BetPlacementResponse,
@@ -37,6 +37,19 @@ def _serialize_ticket_summary(
     actual_return: float | None,
     settled_at,
 ) -> TicketResponse:
+    def serialize_leg_match(leg: TicketLeg) -> dict | None:
+        match = getattr(leg, "match", None)
+        if match is None:
+            return None
+        return {
+            "id": match.id,
+            "league": getattr(match, "competition", None) or getattr(match, "league", None),
+            "home_team": match.home_team,
+            "away_team": match.away_team,
+            "start_time": getattr(match, "match_date", None) or getattr(match, "start_time", None),
+            "status": match.status,
+        }
+
     legs = [
         {
             "id": leg.id,
@@ -49,7 +62,7 @@ def _serialize_ticket_summary(
             "bookmaker": leg.bookmaker,
             "status": leg.status,
             "created_at": leg.created_at,
-            "match": getattr(leg, "match", None),
+            "match": serialize_leg_match(leg),
         }
         for leg in getattr(ticket, "legs", []) or []
     ]
@@ -73,13 +86,18 @@ def _serialize_ticket_summary(
     )
 
 
-def _compute_ticket_stats(tickets: list[Ticket], settlements_by_ticket_id: dict[int, Settlement]) -> dict[str, float | int]:
+def _compute_ticket_stats(
+    tickets: list[Ticket], settlements_by_ticket_id: dict[int, Settlement]
+) -> dict[str, float | int]:
     return {
         "total": len(tickets),
         "won": sum(1 for ticket in tickets if ticket.status == "won"),
         "lost": sum(1 for ticket in tickets if ticket.status == "lost"),
         "profit_loss": round(
-            sum((settlements_by_ticket_id.get(ticket.id).pnl if settlements_by_ticket_id.get(ticket.id) else 0.0) for ticket in tickets),
+            sum(
+                (settlements_by_ticket_id.get(ticket.id).pnl if settlements_by_ticket_id.get(ticket.id) else 0.0)
+                for ticket in tickets
+            ),
             2,
         ),
     }
@@ -154,8 +172,12 @@ async def list_tickets(
         _serialize_ticket_summary(
             ticket,
             reference=_resolve_ticket_reference(ticket),
-            actual_return=settlements_by_ticket_id[ticket.id].return_amount if ticket.id in settlements_by_ticket_id else None,
-            settled_at=settlements_by_ticket_id[ticket.id].settled_at if ticket.id in settlements_by_ticket_id else None,
+            actual_return=settlements_by_ticket_id[ticket.id].return_amount
+            if ticket.id in settlements_by_ticket_id
+            else None,
+            settled_at=settlements_by_ticket_id[ticket.id].settled_at
+            if ticket.id in settlements_by_ticket_id
+            else None,
         )
         for ticket in tickets
     ]

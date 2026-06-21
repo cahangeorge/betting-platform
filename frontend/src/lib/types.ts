@@ -82,7 +82,14 @@ export interface MatchFilter {
 }
 
 // ─── Predictions ──────────────────────────────────────
-export type ModelType = 'poisson' | 'bivariate_poisson' | 'skellam' | 'elo' | 'ensemble' | 'xgb';
+export type ModelType =
+	| 'poisson'
+	| 'bivariate_poisson'
+	| 'skellam'
+	| 'elo'
+	| 'ensemble'
+	| 'xgb'
+	| string;
 
 export interface PredictionModel {
 	id: string;
@@ -94,17 +101,71 @@ export interface PredictionModel {
 
 export interface PredictionRun {
 	id: number;
-	model_type: ModelType;
+	user_id?: number | null;
+	name?: string | null;
+	model_type: string;
+	ensemble?: boolean;
 	status: RunStatus;
-	matches: number[];
-	parameters: Record<string, unknown>;
+	matches_count: number;
+	matches?: number[];
+	parameters?: Record<string, unknown>;
+	started_at?: string | null;
 	created_at: string;
 	completed_at: string | null;
-	results: PredictionResult[] | null;
+	model_predictions?: ModelPrediction[];
+	ensemble_predictions?: ModelPrediction[];
+	results?: PredictionResult[] | null;
 	error: string | null;
 }
 
-export type RunStatus = 'pending' | 'running' | 'completed' | 'failed';
+export type RunStatus = 'pending' | 'running' | 'completed' | 'partial' | 'failed';
+
+export interface PredictionQualityReport {
+	schema_version: number;
+	training?: {
+		total_matches?: number;
+		home_team?: { matches?: number; [key: string]: number | undefined };
+		away_team?: { matches?: number; [key: string]: number | undefined };
+		[key: string]: unknown;
+	};
+	model?: {
+		pick?: string | null;
+		probabilities?: Record<string, number>;
+	};
+	market?: {
+		pick?: string | null;
+		probabilities?: Record<string, number>;
+		odds?: Record<string, { odds: number; bookmaker?: string } | null>;
+		implied_source?: string;
+	};
+	edge?: Record<string, number | null>;
+	reliability?: {
+		label?: string | null;
+		score?: number;
+		is_ticket_eligible?: boolean;
+		block_reasons?: string[];
+	};
+}
+
+export interface ModelPrediction {
+	id: number;
+	run_id: number;
+	model_type: string;
+	match_id: number;
+	market: string;
+	home_prob: number;
+	draw_prob: number | null;
+	away_prob: number;
+	home_odds: number | null;
+	draw_odds: number | null;
+	away_odds: number | null;
+	value_home: number | null;
+	value_draw: number | null;
+	value_away: number | null;
+	expected_value: number | null;
+	quality_report: PredictionQualityReport | null;
+	created_at: string;
+}
 
 export interface PredictionResult {
 	match_id: number;
@@ -149,7 +210,7 @@ export interface BacktestResult {
 }
 
 // ─── Tickets ──────────────────────────────────────────
-export type TicketStatus = 'open' | 'won' | 'lost' | 'cashed_out' | 'void';
+export type TicketStatus = 'open' | 'watchlist' | 'won' | 'lost' | 'cashed_out' | 'void';
 export type TicketType = 'single' | 'accumulator' | 'system';
 
 export interface Ticket {
@@ -176,7 +237,7 @@ export interface TicketLeg {
 	selection: string;
 	odds: number;
 	status: 'pending' | 'won' | 'lost' | 'void';
-	match: Match | null;
+	match?: Partial<Match> | null;
 }
 
 export interface PlaceBetRequest {

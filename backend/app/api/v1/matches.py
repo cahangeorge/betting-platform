@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,6 +12,18 @@ from app.models.user import User
 from app.schemas.match import MatchDetailResponse, MatchListResponse, MatchResponse, OddsEntryResponse
 
 router = APIRouter()
+
+
+def _parse_match_filter_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 @router.get("", response_model=MatchListResponse)
@@ -36,12 +50,14 @@ async def list_matches(
     if team:
         query = query.where((Match.home_team.ilike(f"%{team}%")) | (Match.away_team.ilike(f"%{team}%")))
         count_query = count_query.where((Match.home_team.ilike(f"%{team}%")) | (Match.away_team.ilike(f"%{team}%")))
-    if date_from:
-        query = query.where(Match.match_date >= date_from)
-        count_query = count_query.where(Match.match_date >= date_from)
-    if date_to:
-        query = query.where(Match.match_date <= date_to)
-        count_query = count_query.where(Match.match_date <= date_to)
+    parsed_date_from = _parse_match_filter_datetime(date_from)
+    parsed_date_to = _parse_match_filter_datetime(date_to)
+    if parsed_date_from:
+        query = query.where(Match.match_date >= parsed_date_from)
+        count_query = count_query.where(Match.match_date >= parsed_date_from)
+    if parsed_date_to:
+        query = query.where(Match.match_date <= parsed_date_to)
+        count_query = count_query.where(Match.match_date <= parsed_date_to)
 
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0

@@ -16,6 +16,7 @@ class TicketLegResponse(BaseModel):
     bookmaker: str | None = None
     status: str = "pending"
     created_at: datetime
+    match: dict | None = None
 
 
 class BetPlacementResponse(BaseModel):

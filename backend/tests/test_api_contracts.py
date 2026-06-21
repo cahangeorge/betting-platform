@@ -6,11 +6,13 @@ from fastapi import HTTPException
 from starlette.requests import Request
 
 from app.api.deps import get_current_user
+from app.api.v1 import dashboard as dashboard_api
 from app.api.v1 import data as data_api
+from app.api.v1 import matches as matches_api
 from app.api.v1 import tickets as tickets_api
 from app.api.v1.catalog import CATALOG
+from app.schemas.data import ScrapeJobCreateRequest, WorldCupPipelineRequest
 from app.schemas.match import MatchResponse
-from app.schemas.data import ScrapeJobCreateRequest
 from app.schemas.ticket import TicketCreateRequest
 
 
@@ -131,6 +133,21 @@ async def test_scrape_start_returns_created_job(monkeypatch):
     assert result is fake_job
 
 
+def test_world_cup_pipeline_request_defaults_to_safe_ticket_generation():
+    default_request = WorldCupPipelineRequest()
+    explicit_request = WorldCupPipelineRequest(allow_experimental_tickets=True)
+    tomorrow_request = WorldCupPipelineRequest(
+        target_date="2026-06-21",
+        target_date_from="2026-06-20T21:00:00.000Z",
+        target_date_to="2026-06-21T20:59:59.999Z",
+    )
+
+    assert default_request.allow_experimental_tickets is False
+    assert explicit_request.allow_experimental_tickets is True
+    assert tomorrow_request.target_date == "2026-06-21"
+    assert tomorrow_request.target_date_from == "2026-06-20T21:00:00.000Z"
+
+
 def test_serialize_ticket_summary_includes_reference_returns_and_legs():
     ticket = SimpleNamespace(
         id=18,
@@ -156,6 +173,14 @@ def test_serialize_ticket_summary_includes_reference_returns_and_legs():
                 bookmaker="Pinnacle",
                 status="won",
                 created_at=datetime(2026, 6, 16, 9, 0, tzinfo=timezone.utc),
+                match=SimpleNamespace(
+                    id=55,
+                    competition="World Championship 2026",
+                    home_team="Spain",
+                    away_team="Saudi Arabia",
+                    match_date=datetime(2026, 6, 21, 19, 0, tzinfo=timezone.utc),
+                    status="scheduled",
+                ),
             )
         ],
     )
@@ -172,6 +197,14 @@ def test_serialize_ticket_summary_includes_reference_returns_and_legs():
     assert summary.settled_at.isoformat() == "2026-06-16T12:00:00+00:00"
     assert len(summary.legs) == 1
     assert summary.legs[0].model_prediction_id == 42
+    assert summary.legs[0].match == {
+        "id": 55,
+        "league": "World Championship 2026",
+        "home_team": "Spain",
+        "away_team": "Saudi Arabia",
+        "start_time": datetime(2026, 6, 21, 19, 0, tzinfo=timezone.utc),
+        "status": "scheduled",
+    }
 
 
 def test_compute_ticket_stats_summarizes_history():
@@ -190,6 +223,14 @@ def test_compute_ticket_stats_summarizes_history():
     stats = tickets_api._compute_ticket_stats(tickets, settlements)
 
     assert stats == {"total": 4, "won": 2, "lost": 1, "profit_loss": 11.5}
+
+
+def test_dashboard_date_parser_returns_timezone_aware_bounds():
+    start = dashboard_api._parse_dashboard_datetime("2026-06-13")
+    end = dashboard_api._parse_dashboard_datetime("2026-06-13", end_of_day=True)
+
+    assert start.isoformat() == "2026-06-13T00:00:00+00:00"
+    assert end.isoformat() == "2026-06-13T23:59:59.999999+00:00"
 
 
 def test_match_response_maps_competition_date_and_odds():
@@ -229,12 +270,20 @@ def test_match_response_maps_competition_date_and_odds():
     assert payload.odds[0].home_odds == 1.95
 
 
+def test_match_filter_datetime_parser_accepts_browser_iso_offsets():
+    parsed = matches_api._parse_match_filter_datetime("2026-06-19T00:00:00+00:00")
+
+    assert parsed == datetime(2026, 6, 19, 0, 0, tzinfo=timezone.utc)
+
+
+def test_match_filter_datetime_parser_accepts_browser_utc_z_suffix():
+    parsed = matches_api._parse_match_filter_datetime("2026-06-19T23:59:59Z")
+
+    assert parsed == datetime(2026, 6, 19, 23, 59, 59, tzinfo=timezone.utc)
+
+
 def test_catalog_exposes_scrape_slugs_and_world_cup():
-    leagues = {
-        league.id: league
-        for country in CATALOG
-        for league in country.leagues
-    }
+    leagues = {league.id: league for country in CATALOG for league in country.leagues}
 
     assert leagues["premier_league"].scrape_slug == "england-premier-league"
     assert leagues["world_cup"].name == "World Cup"

@@ -21,6 +21,9 @@
 	import { cn } from '$lib/utils';
 	import type {
 		Country,
+		Match,
+		ModelPrediction,
+		PredictionRun,
 		Strategy,
 		StrategyCreateRequest,
 		StrategyRunResult
@@ -74,6 +77,31 @@
 
 	// --- Results State ---
 	let results = $state<StrategyRunResult[]>([]);
+	let recentRuns = $state<PredictionRun[]>([]);
+	let modelPredictionRows = $state<
+		{
+			runId: number;
+			predictionId: number;
+			model: string;
+			matchId: number;
+			match: string;
+			league: string;
+			market: string;
+			selection: string;
+			probability: number;
+			homeProb: number;
+			drawProb: number | null;
+			awayProb: number;
+			bestOdds: number | null;
+			bookmaker: string | null;
+			edge: number | null;
+			reliability: string;
+			ticketEligible: boolean | null;
+			qualityReasons: string[];
+			marketPick: string | null;
+			marketProbability: number | null;
+		}[]
+	>([]);
 	let activeResultTab = $state('all');
 	let resultPollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -123,6 +151,14 @@
 
 	const sortedResults = $derived.by(() => {
 		return [...filteredResults].sort((a, b) => b.edge - a.edge);
+	});
+
+	const sortedModelPredictionRows = $derived.by(() => {
+		return [...modelPredictionRows].sort((a, b) => {
+			const aScore = a.edge ?? a.probability;
+			const bScore = b.edge ?? b.probability;
+			return bScore - aScore;
+		});
 	});
 
 	const unitOptions = [
@@ -184,12 +220,181 @@
 		}
 	}
 
+	type ValueBetApiItem = {
+		id: number;
+		match_id: number;
+		league: string | null;
+		home_team: string;
+		away_team: string;
+		market: string;
+		selection: string;
+		model_prob: number;
+		odds: number;
+		edge: number;
+		confidence: number;
+	};
+
+	function predictionSelection(prediction: ModelPrediction): { selection: string; probability: number } {
+		const options = [
+			{ selection: 'home', probability: prediction.home_prob },
+			{ selection: 'draw', probability: prediction.draw_prob ?? 0 },
+			{ selection: 'away', probability: prediction.away_prob }
+		];
+
+		return options.reduce((best, candidate) =>
+			candidate.probability > best.probability ? candidate : best
+		);
+	}
+
+	function bestOddsForSelection(
+		match: Match | undefined,
+		market: string,
+		selection: string
+	): { odds: number | null; bookmaker: string | null } {
+		if (!match) return { odds: null, bookmaker: null };
+		const marketKey = market.toLowerCase();
+		const candidates = match.odds.filter((odd) => {
+			const oddMarket = odd.market.toLowerCase();
+			const oddBase = oddMarket.split(':', 1)[0];
+			if (marketKey === '1x2') return oddBase === '1x2' || oddBase === 'match_winner';
+			if (marketKey === 'btts') return oddBase === 'btts' || oddBase === 'both_teams_to_score';
+			if (marketKey === 'ou_2_5' || marketKey === 'over_under_2.5') {
+				return ['ou_2_5', 'over_under_2_5', 'over_under'].includes(oddBase);
+			}
+			return oddMarket === marketKey;
+		});
+
+		let best: { odds: number; bookmaker: string } | null = null;
+		for (const odd of candidates) {
+			const odds =
+				selection === 'home'
+					? odd.home_odds
+					: selection === 'draw'
+						? odd.draw_odds
+						: odd.away_odds;
+			if (!odds || odds <= 0) continue;
+			if (!best || odds > best.odds) {
+				best = { odds, bookmaker: odd.bookmaker };
+			}
+		}
+
+		return best ?? { odds: null, bookmaker: null };
+	}
+
+	function reliabilityVariant(label: string): 'success' | 'warning' | 'danger' | 'neutral' {
+		if (label === 'reliable') return 'success';
+		if (label === 'moderate') return 'warning';
+		if (label === 'unreliable') return 'danger';
+		return 'neutral';
+	}
+
+	async function loadMatchMap(matchIds: number[]): Promise<Map<number, Match>> {
+		const uniqueIds = Array.from(new Set(matchIds));
+		const entries = await Promise.all(
+			uniqueIds.map(async (id) => {
+				try {
+					const res = await fetch(`${BASE_URL}/api/v1/matches/${id}`, { credentials: 'include' });
+					if (!res.ok) return null;
+					return [id, (await res.json()) as Match] as const;
+				} catch {
+					return null;
+				}
+			})
+		);
+
+		return new Map(entries.filter((entry): entry is readonly [number, Match] => entry !== null));
+	}
+
 	async function fetchResults() {
 		try {
-			const res = await fetch(`${BASE_URL}/api/v1/strategies/runs?limit=100`, { credentials: 'include' });
-			if (res.ok) {
-				const data = await res.json();
-				results = Array.isArray(data) ? data : [];
+			const [valueRes, runsRes] = await Promise.all([
+				fetch(`${BASE_URL}/api/v1/predictions/value-bets?min_edge=-100&max_results=100`, {
+					credentials: 'include'
+				}),
+				fetch(`${BASE_URL}/api/v1/predictions/runs?per_page=10`, { credentials: 'include' })
+			]);
+
+			if (runsRes.ok) {
+				const data = await runsRes.json();
+				const runs = Array.isArray(data) ? (data as PredictionRun[]) : [];
+				const detailedRuns = await Promise.all(
+					runs.slice(0, 5).map(async (run) => {
+						try {
+							const res = await fetch(`${BASE_URL}/api/v1/predictions/runs/${run.id}`, {
+								credentials: 'include'
+							});
+							return res.ok ? ((await res.json()) as PredictionRun) : run;
+						} catch {
+							return run;
+						}
+					})
+				);
+				recentRuns = detailedRuns;
+
+				const predictions = detailedRuns.flatMap((run) =>
+					(run.model_predictions ?? []).map((prediction) => ({ run, prediction }))
+				);
+				const matchMap = await loadMatchMap(predictions.map(({ prediction }) => prediction.match_id));
+				modelPredictionRows = predictions.map(({ run, prediction }) => {
+					const match = matchMap.get(prediction.match_id);
+					const selected = predictionSelection(prediction);
+					const bestOdds = bestOddsForSelection(match, prediction.market, selected.selection);
+					const impliedProbability = bestOdds.odds ? 1 / bestOdds.odds : null;
+					const edge =
+						impliedProbability !== null
+							? (selected.probability - impliedProbability) * 100
+							: null;
+					const reliability = prediction.quality_report?.reliability ?? null;
+					const marketPick = prediction.quality_report?.market?.pick ?? null;
+					const marketProbability =
+						selected.selection && prediction.quality_report?.market?.probabilities
+							? (prediction.quality_report.market.probabilities[selected.selection] ?? null)
+							: null;
+
+					return {
+						runId: run.id,
+						predictionId: prediction.id,
+						model: prediction.model_type || run.model_type,
+						matchId: prediction.match_id,
+						match: match
+							? `${match.home_team} vs ${match.away_team}`
+							: `Match #${prediction.match_id}`,
+						league: match?.league ?? '--',
+						market: prediction.market,
+						selection: selected.selection,
+						probability: selected.probability,
+						homeProb: prediction.home_prob,
+						drawProb: prediction.draw_prob,
+						awayProb: prediction.away_prob,
+						bestOdds: bestOdds.odds,
+						bookmaker: bestOdds.bookmaker,
+						edge,
+						reliability: reliability?.label ?? 'legacy/no-report',
+						ticketEligible:
+							reliability?.is_ticket_eligible === undefined ? null : reliability.is_ticket_eligible,
+						qualityReasons: reliability?.block_reasons ?? [],
+						marketPick,
+						marketProbability
+					};
+				});
+			}
+
+			if (valueRes.ok) {
+				const data = await valueRes.json();
+				const items: ValueBetApiItem[] = Array.isArray(data) ? data : (data.items ?? []);
+				results = items.map((item) => ({
+					strategy_id: 0,
+					match_id: item.match_id,
+					match_home: item.home_team,
+					match_away: item.away_team,
+					league: item.league ?? '--',
+					market: item.market,
+					predicted: item.selection,
+					probability: item.model_prob,
+					confidence: item.confidence,
+					edge: item.edge,
+					odds: item.odds
+				}));
 			}
 		} catch {
 			// silently handle
@@ -408,6 +613,18 @@
 				source: 'prediction'
 			})
 		);
+	}
+
+	function formatDateTime(iso: string | null | undefined): string {
+		if (!iso) return '--';
+		const date = new Date(iso);
+		if (Number.isNaN(date.getTime())) return '--';
+		return date.toLocaleString('en-GB', {
+			day: 'numeric',
+			month: 'short',
+			hour: '2-digit',
+			minute: '2-digit'
+		});
 	}
 
 	onMount(() => {
@@ -722,11 +939,153 @@
 		</div>
 	</div>
 
+	{#if recentRuns.length > 0}
+		<Card title="Recent Prediction Runs" variant="prediction">
+			<div class="space-y-2">
+				{#each recentRuns as run (run.id)}
+					<div class="flex flex-wrap items-center justify-between gap-3 border border-border bg-muted/20 px-3 py-2">
+						<div class="min-w-0">
+							<p class="font-mono text-sm text-foreground">Run #{run.id}</p>
+							<p class="text-xs text-muted-foreground">
+								{run.model_type} · {run.matches_count ?? 0} matches · {formatDateTime(run.completed_at ?? run.created_at)}
+							</p>
+						</div>
+						<div class="flex items-center gap-2">
+							<Badge
+								variant={
+									run.status === 'completed'
+										? 'success'
+										: run.status === 'failed'
+											? 'danger'
+											: run.status === 'partial'
+												? 'warning'
+												: 'info'
+								}
+							>
+								{run.status}
+							</Badge>
+							<a href="/data" class="text-xs font-medium text-football-blue hover:text-football-gold">
+								Open Data Hub
+							</a>
+						</div>
+					</div>
+				{/each}
+				<p class="text-xs text-muted-foreground">
+					Value candidates below are loaded from the latest completed prediction run.
+				</p>
+			</div>
+		</Card>
+	{/if}
+
+	{#if sortedModelPredictionRows.length > 0}
+		<Card title="Model Predictions" variant="prediction">
+			<div class="space-y-3">
+				<p class="text-sm text-muted-foreground">
+					These are the raw model outputs. The pick is the highest-probability 1X2 outcome for each match.
+				</p>
+				<div class="overflow-x-auto">
+					<table class="w-full text-sm">
+						<thead class="border-b border-border bg-muted/50 text-xs uppercase text-muted-foreground">
+							<tr>
+								<th class="px-3 py-2 text-left">Run</th>
+								<th class="px-3 py-2 text-left">Match</th>
+								<th class="px-3 py-2 text-left">Model</th>
+								<th class="px-3 py-2 text-left">Pick</th>
+								<th class="px-3 py-2 text-left">Reliability</th>
+								<th class="px-3 py-2 text-left">Market</th>
+								<th class="px-3 py-2 text-right">Home</th>
+								<th class="px-3 py-2 text-right">Draw</th>
+								<th class="px-3 py-2 text-right">Away</th>
+								<th class="px-3 py-2 text-right">Best Odds</th>
+								<th class="px-3 py-2 text-right">Edge</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each sortedModelPredictionRows.slice(0, 30) as prediction (prediction.predictionId)}
+								<tr class="border-b border-border last:border-0 hover:bg-muted/30">
+									<td class="px-3 py-2 font-mono text-xs">#{prediction.runId}</td>
+									<td class="px-3 py-2">
+										<div class="font-medium text-foreground">{prediction.match}</div>
+										<div class="text-xs text-muted-foreground">{prediction.league}</div>
+									</td>
+									<td class="px-3 py-2 text-xs text-muted-foreground">{prediction.model}</td>
+									<td class="px-3 py-2">
+										<Badge variant="success">{prediction.selection}</Badge>
+										<span class="ml-2 font-mono text-xs">
+											{(prediction.probability * 100).toFixed(1)}%
+										</span>
+									</td>
+									<td class="px-3 py-2">
+										<div class="flex flex-col gap-1">
+											<Badge variant={reliabilityVariant(prediction.reliability)}>
+												{prediction.reliability}
+											</Badge>
+											<span class="text-[10px] text-muted-foreground">
+												{prediction.ticketEligible === null
+													? 'legacy prediction'
+													: prediction.ticketEligible
+														? 'ticket eligible'
+														: 'blocked from tickets'}
+											</span>
+											{#if prediction.qualityReasons.length > 0}
+												<span class="max-w-44 truncate text-[10px] text-muted-foreground" title={prediction.qualityReasons.join(', ')}>
+													{prediction.qualityReasons.join(', ')}
+												</span>
+											{/if}
+										</div>
+									</td>
+									<td class="px-3 py-2 text-xs">
+										{#if prediction.marketPick}
+											<div class="font-medium text-foreground">{prediction.marketPick}</div>
+											<div class="font-mono text-[10px] text-muted-foreground">
+												{prediction.marketProbability === null
+													? '--'
+													: `${(prediction.marketProbability * 100).toFixed(1)}% market`}
+											</div>
+										{:else}
+											<span class="text-muted-foreground">--</span>
+										{/if}
+									</td>
+									<td class="px-3 py-2 text-right font-mono text-xs">
+										{(prediction.homeProb * 100).toFixed(1)}%
+									</td>
+									<td class="px-3 py-2 text-right font-mono text-xs">
+										{prediction.drawProb === null ? '--' : `${(prediction.drawProb * 100).toFixed(1)}%`}
+									</td>
+									<td class="px-3 py-2 text-right font-mono text-xs">
+										{(prediction.awayProb * 100).toFixed(1)}%
+									</td>
+									<td class="px-3 py-2 text-right">
+										{#if prediction.bestOdds}
+											<div class="font-mono text-xs">{prediction.bestOdds.toFixed(2)}</div>
+											<div class="text-[10px] text-muted-foreground">{prediction.bookmaker}</div>
+										{:else}
+											<span class="text-xs text-muted-foreground">--</span>
+										{/if}
+									</td>
+									<td class="px-3 py-2 text-right">
+										{#if prediction.edge !== null}
+											<span class={cn('font-mono text-xs font-semibold', edgeColor(prediction.edge))}>
+												{prediction.edge > 0 ? '+' : ''}{prediction.edge.toFixed(2)}%
+											</span>
+										{:else}
+											<span class="text-xs text-muted-foreground">--</span>
+										{/if}
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			</div>
+		</Card>
+	{/if}
+
 	<!-- Section 5: Results -->
 	{#if results.length > 0}
 		<div class="space-y-4">
 			<div class="flex items-center justify-between">
-				<h2 class="text-lg font-semibold text-foreground">Results</h2>
+				<h2 class="text-lg font-semibold text-foreground">Prediction Value Candidates</h2>
 				<Button variant="secondary" size="sm" onclick={exportCSV}>
 					Export CSV
 				</Button>
@@ -845,7 +1204,9 @@
 	{:else if !loadingStrategies}
 		<Card variant="prediction">
 			<p class="text-sm text-muted-foreground text-center py-6">
-				No prediction results yet. Select strategies and run predictions to see results.
+				{recentRuns.length > 0
+					? 'Prediction runs exist, but no value candidates matched the latest completed run yet.'
+					: 'No prediction results yet. Select strategies and run predictions to see results.'}
 			</p>
 		</Card>
 	{/if}
