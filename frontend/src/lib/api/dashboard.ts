@@ -1,5 +1,11 @@
 import { ApiClient } from './client';
-import type { DashboardSummary, DashboardTicket, UpcomingMatch, JobLog } from '$lib/types';
+import type {
+	DashboardSummary,
+	DashboardTicket,
+	DashboardTicketOutcomeResponse,
+	UpcomingMatch,
+	JobLog
+} from '$lib/types';
 
 class DashboardApi extends ApiClient {
 	async getSummary(): Promise<DashboardSummary> {
@@ -17,6 +23,24 @@ class DashboardApi extends ApiClient {
 		if (params?.date_to) sp.set('date_to', params.date_to);
 		const qs = sp.toString();
 		return this.get<DashboardTicket[]>(`/api/v1/dashboard/recent-tickets${qs ? `?${qs}` : ''}`);
+	}
+
+	async getTicketOutcomes(range = '7d'): Promise<DashboardTicketOutcomeResponse> {
+		return this.get<DashboardTicketOutcomeResponse>(
+			`/api/v1/dashboard/ticket-outcomes?range=${encodeURIComponent(range)}`
+		);
+	}
+
+	async getTicketOutcomeTickets(params: {
+		date_from: string;
+		date_to: string;
+		limit?: number;
+	}): Promise<DashboardTicket[]> {
+		const sp = new URLSearchParams();
+		sp.set('date_from', params.date_from);
+		sp.set('date_to', params.date_to);
+		if (params.limit !== undefined) sp.set('limit', String(params.limit));
+		return this.get<DashboardTicket[]>(`/api/v1/dashboard/ticket-outcomes/tickets?${sp.toString()}`);
 	}
 
 	async getUpcoming(days?: number): Promise<UpcomingMatch[]> {

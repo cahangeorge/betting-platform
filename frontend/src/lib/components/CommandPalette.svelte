@@ -5,12 +5,12 @@
 		Ticket,
 		Database,
 		Download,
-		LayoutDashboard,
 		User,
 		Search,
 		Zap,
 		Plus,
-		Eye
+		Eye,
+		Settings
 	} from 'lucide-svelte';
 	import { goto } from '$app/navigation';
 	import { cn } from '$lib/utils';
@@ -74,12 +74,12 @@
 			action: () => goto('/data')
 		},
 		{
-			id: 'board',
-			label: 'Board',
-			icon: LayoutDashboard,
-			shortcut: 'B',
+			id: 'configuratii',
+			label: 'Configuratii',
+			icon: Settings,
+			shortcut: 'C',
 			group: 'secondary',
-			action: () => goto('/board')
+			action: () => goto('/configuratii')
 		},
 		{
 			id: 'live',

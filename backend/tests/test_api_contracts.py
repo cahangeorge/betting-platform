@@ -9,6 +9,7 @@ from app.api.deps import get_current_user
 from app.api.v1 import dashboard as dashboard_api
 from app.api.v1 import data as data_api
 from app.api.v1 import matches as matches_api
+from app.api.v1 import predictions as predictions_api
 from app.api.v1 import tickets as tickets_api
 from app.api.v1.catalog import CATALOG
 from app.schemas.data import ScrapeJobCreateRequest, WorldCupPipelineRequest
@@ -133,6 +134,53 @@ async def test_scrape_start_returns_created_job(monkeypatch):
     assert result is fake_job
 
 
+@pytest.mark.asyncio
+async def test_scrape_background_execute_queues_task():
+    fake_job = SimpleNamespace(id=45, job_type="scrape_odds", status="pending")
+
+    class _DB:
+        async def get(self, model, job_id):
+            assert job_id == fake_job.id
+            return fake_job
+
+    queued = []
+
+    class _BackgroundTasks:
+        def add_task(self, func, *args):
+            queued.append((func, args))
+
+    result = await data_api.run_scrape_job_background(
+        job_id=fake_job.id,
+        background_tasks=_BackgroundTasks(),
+        db=_DB(),
+        user=SimpleNamespace(id=12),
+    )
+
+    assert result is fake_job
+    assert queued == [(data_api._execute_scrape_job_background, (fake_job.id,))]
+
+
+@pytest.mark.asyncio
+async def test_scrape_background_execute_returns_404_when_missing():
+    class _DB:
+        async def get(self, model, job_id):
+            return None
+
+    class _BackgroundTasks:
+        def add_task(self, *_args):
+            raise AssertionError("background task should not be queued")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await data_api.run_scrape_job_background(
+            job_id=999,
+            background_tasks=_BackgroundTasks(),
+            db=_DB(),
+            user=SimpleNamespace(id=12),
+        )
+
+    assert exc_info.value.status_code == 404
+
+
 def test_world_cup_pipeline_request_defaults_to_safe_ticket_generation():
     default_request = WorldCupPipelineRequest()
     explicit_request = WorldCupPipelineRequest(allow_experimental_tickets=True)
@@ -140,12 +188,50 @@ def test_world_cup_pipeline_request_defaults_to_safe_ticket_generation():
         target_date="2026-06-21",
         target_date_from="2026-06-20T21:00:00.000Z",
         target_date_to="2026-06-21T20:59:59.999Z",
+        max_historic_seasons=2,
+        upcoming_timeout_seconds=900,
+        historic_timeout_seconds=120,
     )
 
     assert default_request.allow_experimental_tickets is False
+    assert default_request.scraper_engine == "playwright"
     assert explicit_request.allow_experimental_tickets is True
     assert tomorrow_request.target_date == "2026-06-21"
     assert tomorrow_request.target_date_from == "2026-06-20T21:00:00.000Z"
+    assert tomorrow_request.max_historic_seasons == 2
+    assert tomorrow_request.upcoming_timeout_seconds == 900
+    assert tomorrow_request.historic_timeout_seconds == 120
+
+
+def test_prediction_verification_maps_pick_to_probability_and_odds():
+    prediction = SimpleNamespace(
+        market="1x2",
+        home_prob=0.61,
+        draw_prob=0.22,
+        away_prob=0.17,
+        home_odds=1.91,
+        draw_odds=3.4,
+        away_odds=4.8,
+    )
+
+    assert predictions_api._prediction_value_for_selection(prediction, "home", "prob") == 0.61
+    assert predictions_api._prediction_value_for_selection(prediction, "home", "odds") == 1.91
+    assert predictions_api._prediction_value_for_selection(prediction, "draw", "prob") == 0.22
+
+
+def test_prediction_verification_maps_btts_and_totals_to_home_away_fields():
+    prediction = SimpleNamespace(
+        market="over_under_2_5",
+        home_prob=0.57,
+        draw_prob=None,
+        away_prob=0.43,
+        home_odds=1.85,
+        draw_odds=None,
+        away_odds=2.05,
+    )
+
+    assert predictions_api._prediction_value_for_selection(prediction, "over", "prob") == 0.57
+    assert predictions_api._prediction_value_for_selection(prediction, "under", "odds") == 2.05
 
 
 def test_serialize_ticket_summary_includes_reference_returns_and_legs():
@@ -231,6 +317,48 @@ def test_dashboard_date_parser_returns_timezone_aware_bounds():
 
     assert start.isoformat() == "2026-06-13T00:00:00+00:00"
     assert end.isoformat() == "2026-06-13T23:59:59.999999+00:00"
+
+
+def test_dashboard_range_bounds_support_requested_selector_values():
+    now = datetime(2026, 6, 23, 16, 30, tzinfo=timezone.utc)
+
+    today_start, today_end = dashboard_api._dashboard_range_bounds("today", now=now)
+    week_start, week_end = dashboard_api._dashboard_range_bounds("7d", now=now)
+    month_start, month_end = dashboard_api._dashboard_range_bounds("1m", now=now)
+    quarter_start, quarter_end = dashboard_api._dashboard_range_bounds("3m", now=now)
+    half_start, half_end = dashboard_api._dashboard_range_bounds("6m", now=now)
+    year_start, year_end = dashboard_api._dashboard_range_bounds("1y", now=now)
+
+    assert today_start.isoformat() == "2026-06-23T00:00:00+00:00"
+    assert (today_end - today_start).days == 1
+    assert (week_end - week_start).days == 7
+    assert (month_end - month_start).days == 31
+    assert (quarter_end - quarter_start).days == 93
+    assert (half_end - half_start).days == 186
+    assert (year_end - year_start).days == 366
+
+
+def test_dashboard_ticket_outcome_buckets_count_statuses_by_day():
+    start = datetime(2026, 6, 21, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 6, 24, 0, 0, tzinfo=timezone.utc)
+    tickets = [
+        SimpleNamespace(id=1, status="won", created_at=datetime(2026, 6, 21, 12, 0, tzinfo=timezone.utc)),
+        SimpleNamespace(id=2, status="lost", created_at=datetime(2026, 6, 21, 13, 0, tzinfo=timezone.utc)),
+        SimpleNamespace(id=3, status="open", created_at=datetime(2026, 6, 22, 9, 0, tzinfo=timezone.utc)),
+        SimpleNamespace(id=4, status="void", created_at=datetime(2026, 6, 23, 10, 0, tzinfo=timezone.utc)),
+    ]
+
+    response = dashboard_api._build_ticket_outcome_buckets(tickets, range_key="7d", start=start, end=end)
+
+    assert response.range == "7d"
+    assert len(response.items) == 3
+    assert response.items[0].won == 1
+    assert response.items[0].lost == 1
+    assert response.items[0].ticket_ids == [1, 2]
+    assert response.items[1].pending == 1
+    assert response.items[1].ticket_ids == [3]
+    assert response.items[2].void == 1
+    assert response.items[2].ticket_ids == [4]
 
 
 def test_match_response_maps_competition_date_and_odds():

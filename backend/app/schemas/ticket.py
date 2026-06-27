@@ -67,6 +67,13 @@ class TicketDetailResponse(TicketResponse):
     placements: list[BetPlacementResponse] = []
 
 
+class TicketPageResponse(BaseModel):
+    items: list[TicketResponse] = []
+    total: int = 0
+    page: int = 1
+    per_page: int = 20
+
+
 class TicketBatchResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -84,6 +91,43 @@ class TicketStatsResponse(BaseModel):
     won: int = 0
     lost: int = 0
     profit_loss: float = 0.0
+
+
+class TicketSettlementRunResponse(BaseModel):
+    checked_tickets: int = 0
+    settled_tickets: int = 0
+    won_tickets: int = 0
+    lost_tickets: int = 0
+    void_tickets: int = 0
+    pending_tickets: int = 0
+    updated_legs: int = 0
+
+
+class TicketGenerateRequest(BaseModel):
+    bankroll_id: int | None = None
+    ticket_count: int = 5
+    difficulty: str = "balanced"
+    market_types: list[str] = ["1x2"]
+    min_odds: float = 1.01
+    max_odds: float = 100.0
+    stake: float = 10.0
+
+
+class TicketGenerateResponse(BaseModel):
+    batch_id: int
+    tickets: list[TicketResponse] = []
+
+
+class TicketSwapLegsRequest(BaseModel):
+    source_ticket_id: int
+    source_leg_id: int
+    target_ticket_id: int
+    target_leg_id: int
+
+
+class TicketSwapLegsResponse(BaseModel):
+    source_ticket: TicketResponse
+    target_ticket: TicketResponse
 
 
 class TicketCreateRequest(BaseModel):

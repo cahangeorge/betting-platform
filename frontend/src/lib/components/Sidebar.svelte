@@ -6,11 +6,11 @@
 		Ticket,
 		Download,
 		Database,
-		LayoutGrid,
 		User,
 		Info,
 		Zap,
-		Radio
+		Radio,
+		Settings
 	} from 'lucide-svelte';
 	import { cn } from '$lib/utils';
 	import Button from './ui/Button.svelte';
@@ -41,7 +41,7 @@
 
 	const secondaryNavItems = [
 		{ href: '/data', label: 'Data', icon: Database },
-		{ href: '/board', label: 'Board', icon: LayoutGrid },
+		{ href: '/configuratii', label: 'Configuratii', icon: Settings },
 		{ href: '/value-bets', label: 'Value Bets', icon: Zap },
 		{ href: '/live', label: 'Live', icon: Radio },
 		{ href: '/about', label: 'About', icon: Info }

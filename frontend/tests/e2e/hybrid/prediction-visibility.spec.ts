@@ -20,7 +20,14 @@ test('generated predictions are visible on Predict and Data Hub pages', async ({
 		await expect(page.getByText('ticket eligible').first()).toBeVisible();
 
 		await page.goto('/data');
-		await page.getByRole('tab', { name: 'Predictions' }).click();
+		await expect(page.getByRole('heading', { name: 'Data Hub' })).toBeVisible();
+		await page.waitForLoadState('networkidle');
+
+		const predictionsTab = page.getByRole('tab', { name: 'Predictions' });
+		await expect(predictionsTab).toBeVisible();
+		await predictionsTab.click();
+		await expect(predictionsTab).toHaveAttribute('data-state', 'active');
+
 		await expect(page.getByText(fixtures.scheduledMatchLabel).first()).toBeVisible({ timeout: 20_000 });
 		await expect(page.getByText('PoissonGoalsModel').first()).toBeVisible();
 		await expect(page.getByText('reliable').first()).toBeVisible();

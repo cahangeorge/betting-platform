@@ -11,7 +11,7 @@
 		activeTab = $bindable(),
 		children
 	}: {
-		tabs: { id: string; label: string; count?: number }[];
+		tabs: { id: string; label: string; count?: number; ariaLabel?: string }[];
 		activeTab: string;
 		children?: Snippet;
 	} = $props();
@@ -19,11 +19,12 @@
 
 <div class="w-full">
 	<TabsRoot bind:value={activeTab}>
-		<TabsList class="w-full justify-start  border-b bg-transparent p-0 h-auto">
+		<TabsList class="flex w-full flex-wrap justify-start gap-1 border-b bg-transparent p-0 h-auto">
 			{#each tabs as tab (tab.id)}
 				<TabsTrigger
 					value={tab.id}
-					class=" border-b-2 border-transparent px-4 py-3 text-sm font-medium data-[state=active]:border-primary data-[state=active]:shadow-none transition-colors duration-200"
+					aria-label={tab.ariaLabel ?? tab.label}
+					class="min-w-0 whitespace-normal border-b-2 border-transparent px-4 py-3 text-sm font-medium data-[state=active]:border-primary data-[state=active]:shadow-none transition-colors duration-200"
 				>
 					{tab.label}
 					{#if tab.count !== undefined}

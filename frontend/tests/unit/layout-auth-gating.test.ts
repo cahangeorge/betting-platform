@@ -27,14 +27,14 @@ test('protected routes redirect to /login without an access token', async () => 
 	);
 });
 
-test('root path redirects guests to /board before auth lookup', async () => {
+test('root path redirects guests to /login', async () => {
 	await assert.rejects(
 		async () => {
 			await load(makeEvent('/'));
 		},
 		(error: unknown) => {
 			assert.equal((error as { status?: number }).status, 302);
-			assert.equal((error as { location?: string }).location, '/board');
+			assert.equal((error as { location?: string }).location, '/login');
 			return true;
 		}
 	);

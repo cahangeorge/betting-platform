@@ -1,10 +1,20 @@
 <script lang="ts">
 	import TicketsPanel from '$lib/components/TicketsPanel.svelte';
+	import type { Bankroll, Match, Ticket, TicketBatch } from '$lib/types';
 	import type { BackendLoadStatus } from '$lib/types/backend';
 	import { fade } from 'svelte/transition';
 
 	let { data }: import('./$types').PageProps = $props();
-	const backendStatus = $derived(((data as { backendStatus?: BackendLoadStatus }).backendStatus as BackendLoadStatus | undefined) ?? {
+	type TicketsPageData = {
+		tickets?: Ticket[];
+		matches?: Match[];
+		stats?: { total: number; won: number; lost: number; profit_loss: number };
+		bankrolls?: Bankroll[];
+		batches?: TicketBatch[];
+		backendStatus?: BackendLoadStatus;
+	};
+	const pageData = $derived(data as TicketsPageData);
+	const backendStatus = $derived(pageData.backendStatus ?? {
 		state: 'ready',
 		message: null,
 		failedEndpoints: []
@@ -24,8 +34,10 @@
 	{/if}
 
 	<TicketsPanel
-		serverTickets={((data as any).tickets) ?? []}
-		serverMatches={((data as any).matches) ?? []}
-		serverStats={((data as any).stats) ?? { total: 0, won: 0, lost: 0, profit_loss: 0 }}
+		serverTickets={pageData.tickets ?? []}
+		serverMatches={pageData.matches ?? []}
+		serverStats={pageData.stats ?? { total: 0, won: 0, lost: 0, profit_loss: 0 }}
+		serverBankrolls={pageData.bankrolls ?? []}
+		serverBatches={pageData.batches ?? []}
 	/>
 </div>

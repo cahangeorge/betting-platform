@@ -61,6 +61,13 @@ class PredictionRunDetailResponse(PredictionRunResponse):
     ensemble_predictions: list[EnsemblePredictionResponse] = []
 
 
+class PredictionRunPageResponse(BaseModel):
+    items: list[PredictionRunResponse] = []
+    total: int = 0
+    page: int = 1
+    per_page: int = 20
+
+
 class RunSingleRequest(BaseModel):
     league: str
     sport: str = "football"
@@ -118,3 +125,34 @@ class ValueBetResponse(BaseModel):
     source: str = "prediction"
     is_demo: bool = False
     generated_at: str
+
+
+class PredictionVerificationItem(BaseModel):
+    prediction_id: int
+    run_id: int
+    match_id: int
+    model_type: str | None = None
+    league: str | None = None
+    kickoff: datetime | None = None
+    market: str
+    predicted_selection: str | None = None
+    actual_selection: str | None = None
+    model_probability: float | None = None
+    market_odds: float | None = None
+    status: str
+    home_team: str
+    away_team: str
+    home_score: int | None = None
+    away_score: int | None = None
+
+
+class PredictionVerificationResponse(BaseModel):
+    checked_predictions: int = 0
+    resolved_predictions: int = 0
+    correct_predictions: int = 0
+    incorrect_predictions: int = 0
+    pending_predictions: int = 0
+    void_predictions: int = 0
+    unsupported_predictions: int = 0
+    accuracy: float | None = None
+    items: list[PredictionVerificationItem] = []

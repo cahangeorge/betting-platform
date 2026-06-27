@@ -1,9 +1,46 @@
 import { ApiClient } from './client';
-import type { Ticket, PlaceBetRequest, SettleRequest } from '$lib/types';
+import type {
+	TicketBatch,
+	Ticket,
+	PlaceBetRequest,
+	SettleRequest,
+	TicketGenerateRequest,
+	TicketGenerateResponse,
+	TicketSettlementRun,
+	TicketSwapLegsRequest,
+	TicketSwapLegsResponse,
+	PaginatedResponse
+} from '$lib/types';
 
 class TicketsApi extends ApiClient {
 	async getTickets(status?: string): Promise<Ticket[]> {
-		return this.get<Ticket[]>('/api/v1/tickets');
+		const sp = new URLSearchParams();
+		if (status) sp.set('status', status);
+		const qs = sp.toString();
+		return this.get<Ticket[]>(`/api/v1/tickets${qs ? `?${qs}` : ''}`);
+	}
+
+	async getBatchTickets(batchId: number): Promise<Ticket[]> {
+		return this.get<Ticket[]>(`/api/v1/tickets/batches/${batchId}/tickets?per_page=300`);
+	}
+
+	async getBatches(): Promise<TicketBatch[]> {
+		return this.get<TicketBatch[]>('/api/v1/tickets/batches');
+	}
+
+	async getTicketsPage(params?: {
+		page?: number;
+		per_page?: number;
+		status?: string;
+		batch_id?: number;
+	}): Promise<PaginatedResponse<Ticket>> {
+		const sp = new URLSearchParams();
+		if (params?.page !== undefined) sp.set('page', String(params.page));
+		if (params?.per_page !== undefined) sp.set('per_page', String(params.per_page));
+		if (params?.status) sp.set('status', params.status);
+		if (params?.batch_id !== undefined) sp.set('batch_id', String(params.batch_id));
+		const qs = sp.toString();
+		return this.get<PaginatedResponse<Ticket>>(`/api/v1/tickets/page${qs ? `?${qs}` : ''}`);
 	}
 
 	async getTicket(id: number): Promise<Ticket> {
@@ -16,6 +53,21 @@ class TicketsApi extends ApiClient {
 
 	async settleTicket(data: SettleRequest): Promise<Ticket> {
 		return this.post<Ticket>(`/api/v1/tickets/${data.ticket_id}/settle`, { outcome: data.outcome, return_amount: data.return_amount } as unknown as Record<string, unknown>);
+	}
+
+	async settleDue(): Promise<TicketSettlementRun> {
+		return this.post<TicketSettlementRun>('/api/v1/tickets/settle-due');
+	}
+
+	async generate(data: TicketGenerateRequest): Promise<TicketGenerateResponse> {
+		return this.post<TicketGenerateResponse>('/api/v1/tickets/generate', data as unknown as Record<string, unknown>);
+	}
+
+	async swapLegs(batchId: number, data: TicketSwapLegsRequest): Promise<TicketSwapLegsResponse> {
+		return this.post<TicketSwapLegsResponse>(
+			`/api/v1/tickets/batches/${batchId}/swap-legs`,
+			data as unknown as Record<string, unknown>
+		);
 	}
 
 	async getStats(): Promise<{ total: number; won: number; lost: number; profit_loss: number }> {

@@ -18,6 +18,25 @@ class ScrapeJobResponse(BaseModel):
     created_at: datetime
 
 
+class ScrapeJobLogResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    job_id: int
+    level: str
+    action: str
+    message: str
+    metadata_json: dict | None = None
+    created_at: datetime
+
+
+class ScrapeJobLogPageResponse(BaseModel):
+    items: list[ScrapeJobLogResponse] = []
+    total: int = 0
+    page: int = 1
+    per_page: int = 100
+
+
 class ScrapeJobCreateRequest(BaseModel):
     job_type: str = Field(validation_alias=AliasChoices("job_type", "type"))
     league: str | None = None
@@ -44,6 +63,10 @@ class WorldCupPipelineRequest(BaseModel):
     all_markets: bool = True
     odds_history: bool = True
     max_historic_pages: int | None = Field(default=None, ge=1, le=50)
+    max_historic_seasons: int | None = Field(default=None, ge=0, le=20)
+    upcoming_timeout_seconds: int | None = Field(default=None, ge=30, le=3600)
+    historic_timeout_seconds: int | None = Field(default=None, ge=30, le=3600)
+    scraper_engine: str = Field(default="playwright", pattern="^(playwright|auto|scrapling-http|scrapling-stealth)$")
     ticket_count: int = Field(default=10, ge=1, le=50)
     ticket_stake: float = Field(default=10.0, ge=0)
     create_tickets: bool = True

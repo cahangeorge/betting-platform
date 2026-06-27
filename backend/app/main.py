@@ -9,6 +9,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from app.api.v1.router import v1_router
 from app.config import get_settings
 from app.services.python_bridge import bridge_runtime_summary, validate_bridge_runtime
+from app.services.scheduled_jobs import start_scheduler, stop_scheduler
 
 settings = get_settings()
 
@@ -64,7 +65,12 @@ async def lifespan(app: FastAPI):
         warnings.warn(f"Bridge runtime prerequisite issue: {issue}")
 
     app.state.bridge_runtime = bridge_runtime_summary()
-    yield
+    if settings.scheduled_jobs_enabled:
+        start_scheduler(interval_seconds=settings.scheduled_jobs_interval_seconds)
+    try:
+        yield
+    finally:
+        await stop_scheduler()
 
 
 app = FastAPI(

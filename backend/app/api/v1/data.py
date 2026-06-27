@@ -1,14 +1,15 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
-from app.database import get_db
-from app.models.scrape import ScrapedDataset, ScrapeJob
+from app.database import async_session_factory, get_db
+from app.models.scrape import ScrapedDataset, ScrapeJob, ScrapeJobLog
 from app.models.user import User
 from app.schemas.data import (
     ScrapedDatasetResponse,
     ScrapeJobCreateRequest,
+    ScrapeJobLogPageResponse,
     ScrapeJobResponse,
     WorldCupPipelineRequest,
 )
@@ -16,6 +17,16 @@ from app.services.scraper import create_scrape_job, execute_scrape_job
 from app.services.world_cup_pipeline import execute_world_cup_pipeline_job
 
 router = APIRouter()
+
+
+async def _execute_scrape_job_background(job_id: int) -> None:
+    async with async_session_factory() as session:
+        try:
+            await execute_scrape_job(session, job_id)
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
 
 
 @router.post("/scrape", response_model=ScrapeJobResponse, status_code=201)
@@ -38,6 +49,20 @@ async def run_scrape_job(
         job = await execute_scrape_job(db, job_id)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return job
+
+
+@router.post("/scrape/{job_id}/execute-background", response_model=ScrapeJobResponse, status_code=202)
+async def run_scrape_job_background(
+    job_id: int,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    job = await db.get(ScrapeJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Scrape job not found")
+    background_tasks.add_task(_execute_scrape_job_background, job.id)
     return job
 
 
@@ -81,6 +106,41 @@ async def get_scrape_job(
     if not job:
         raise HTTPException(status_code=404, detail="Scrape job not found")
     return job
+
+
+@router.get("/scrape/{job_id}/logs", response_model=ScrapeJobLogPageResponse)
+async def get_scrape_job_logs(
+    job_id: int,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(100, ge=1, le=500),
+    level: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    job = await db.get(ScrapeJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Scrape job not found")
+
+    count_stmt = select(func.count(ScrapeJobLog.id)).where(ScrapeJobLog.job_id == job_id)
+    stmt = select(ScrapeJobLog).where(ScrapeJobLog.job_id == job_id)
+    if level:
+        count_stmt = count_stmt.where(ScrapeJobLog.level == level)
+        stmt = stmt.where(ScrapeJobLog.level == level)
+
+    total_result = await db.execute(count_stmt)
+    total = total_result.scalar() or 0
+    stmt = (
+        stmt.order_by(ScrapeJobLog.created_at.asc(), ScrapeJobLog.id.asc())
+        .offset((page - 1) * per_page)
+        .limit(per_page)
+    )
+    result = await db.execute(stmt)
+    return ScrapeJobLogPageResponse(
+        items=list(result.scalars().all()),
+        total=total,
+        page=page,
+        per_page=per_page,
+    )
 
 
 @router.get("/datasets", response_model=list[ScrapedDatasetResponse])

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+	HISTORY_PRESET_OPTIONS,
 	buildFootballSeasonsFromDateRange,
 	buildHistoricSeasons,
 	buildHistoryDateRange,
@@ -9,6 +10,13 @@ import {
 	buildWorldCupSeasonsFromDateRange,
 	isLeagueScrapeSelectable
 } from '../../src/routes/scrape/catalog.helpers.ts';
+
+test('history presets expose long World Cup backfill ranges', () => {
+	assert.deepEqual(
+		HISTORY_PRESET_OPTIONS.map((option) => option.value),
+		['5', '10', '15', '20', '30', '40']
+	);
+});
 
 test('maps selected catalog leagues to scrape slugs', () => {
 	const slugs = buildScrapeLeagueSlugs(
@@ -55,11 +63,30 @@ test('builds football season ranges from explicit history dates', () => {
 });
 
 test('builds World Cup seasons as single tournament years', () => {
-	assert.deepEqual(buildWorldCupSeasonsFromDateRange('2011-06-20', '2026-06-20'), [
-		'2022',
-		'2018',
-		'2014'
-	]);
+	assert.deepEqual(
+		buildWorldCupSeasonsFromDateRange('2011-06-20', '2026-06-20', new Date('2026-06-24T00:00:00Z')),
+		[
+			'2022',
+			'2018',
+			'2014'
+		]
+	);
+	assert.deepEqual(
+		buildWorldCupSeasonsFromDateRange('1998-01-01', '2026-06-20', new Date('2026-06-24T00:00:00Z')),
+		[
+			'2022',
+			'2018',
+			'2014',
+			'2010',
+			'2006',
+			'2002',
+			'1998'
+		]
+	);
+	assert.deepEqual(
+		buildWorldCupSeasonsFromDateRange('2022-01-01', '2022-12-31', new Date('2026-06-24T00:00:00Z')),
+		['2022']
+	);
 	assert.deepEqual(buildHistoricSeasons('2016-06-20', '2026-06-20', ['world-cup']), [
 		'2022',
 		'2018'

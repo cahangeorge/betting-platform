@@ -2,7 +2,7 @@ import re
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -14,7 +14,10 @@ from app.models.user import User
 from app.schemas.prediction import (
     PredictionCatalogResponse,
     PredictionRunDetailResponse,
+    PredictionRunPageResponse,
     PredictionRunResponse,
+    PredictionVerificationItem,
+    PredictionVerificationResponse,
     RunEnsembleRequest,
     RunSingleRequest,
     ValueBetItem,
@@ -22,8 +25,34 @@ from app.schemas.prediction import (
 )
 from app.services.ensemble import run_ensemble_prediction
 from app.services.prediction_engine import PREDICT_MODELS, run_single_prediction
+from app.services.result_settlement import evaluate_model_prediction
 
 router = APIRouter()
+
+
+def _prediction_value_for_selection(prediction: ModelPrediction, selection: str | None, suffix: str) -> float | None:
+    if not selection:
+        return None
+
+    normalized_market = (prediction.market or "").lower()
+    normalized_selection = selection.lower()
+    if normalized_selection == "home":
+        field = f"home_{suffix}"
+    elif normalized_selection == "draw":
+        field = f"draw_{suffix}"
+    elif normalized_selection == "away":
+        field = f"away_{suffix}"
+    elif normalized_selection in {"yes", "over"}:
+        field = f"home_{suffix}"
+    elif normalized_selection in {"no", "under"}:
+        field = f"away_{suffix}"
+    elif normalized_market in {"btts", "both_teams_to_score"}:
+        field = f"home_{suffix}" if normalized_selection == "yes" else f"away_{suffix}"
+    else:
+        return None
+
+    value = getattr(prediction, field, None)
+    return float(value) if value is not None else None
 
 
 def _normalize_market_market(value: str) -> str:
@@ -275,6 +304,106 @@ async def list_prediction_runs(
     )
     result = await db.execute(stmt)
     return result.scalars().all()
+
+
+@router.get("/runs/page", response_model=PredictionRunPageResponse)
+async def list_prediction_runs_page(
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    count_result = await db.execute(
+        select(func.count(PredictionRun.id)).where(PredictionRun.user_id == user.id)
+    )
+    total = count_result.scalar() or 0
+    stmt = (
+        select(PredictionRun)
+        .where(PredictionRun.user_id == user.id)
+        .order_by(PredictionRun.created_at.desc())
+        .offset((page - 1) * per_page)
+        .limit(per_page)
+    )
+    result = await db.execute(stmt)
+    return PredictionRunPageResponse(
+        items=list(result.scalars().all()),
+        total=total,
+        page=page,
+        per_page=per_page,
+    )
+
+
+@router.get("/verification", response_model=PredictionVerificationResponse)
+async def verify_predictions(
+    run_id: int | None = None,
+    max_results: int = Query(100, ge=1, le=1000),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    stmt = (
+        select(ModelPrediction)
+        .join(PredictionRun, ModelPrediction.run_id == PredictionRun.id)
+        .options(selectinload(ModelPrediction.match))
+        .where(PredictionRun.user_id == user.id)
+        .order_by(ModelPrediction.created_at.desc())
+        .limit(max_results)
+    )
+    if run_id is not None:
+        stmt = stmt.where(ModelPrediction.run_id == run_id)
+
+    result = await db.execute(stmt)
+    predictions = result.scalars().all()
+
+    items: list[PredictionVerificationItem] = []
+    correct = incorrect = pending = void = unsupported = 0
+    for prediction in predictions:
+        evaluation = evaluate_model_prediction(prediction)
+        if evaluation.status == "won":
+            correct += 1
+        elif evaluation.status == "lost":
+            incorrect += 1
+        elif evaluation.status == "pending":
+            pending += 1
+        elif evaluation.status == "void":
+            void += 1
+        else:
+            unsupported += 1
+
+        match = prediction.match
+        items.append(
+            PredictionVerificationItem(
+                prediction_id=prediction.id,
+                run_id=prediction.run_id,
+                match_id=prediction.match_id,
+                model_type=prediction.model_type,
+                league=match.competition if match else None,
+                kickoff=match.match_date if match else None,
+                market=prediction.market,
+                predicted_selection=evaluation.predicted_selection,
+                actual_selection=evaluation.actual_selection,
+                model_probability=_prediction_value_for_selection(prediction, evaluation.predicted_selection, "prob"),
+                market_odds=_prediction_value_for_selection(prediction, evaluation.predicted_selection, "odds"),
+                status=evaluation.status,
+                home_team=match.home_team if match else "",
+                away_team=match.away_team if match else "",
+                home_score=match.home_score if match else None,
+                away_score=match.away_score if match else None,
+            )
+        )
+
+    resolved = correct + incorrect
+    accuracy = round(correct / resolved * 100, 2) if resolved else None
+    return PredictionVerificationResponse(
+        checked_predictions=len(predictions),
+        resolved_predictions=resolved,
+        correct_predictions=correct,
+        incorrect_predictions=incorrect,
+        pending_predictions=pending,
+        void_predictions=void,
+        unsupported_predictions=unsupported,
+        accuracy=accuracy,
+        items=items,
+    )
 
 
 @router.get("/runs/{run_id}", response_model=PredictionRunDetailResponse)

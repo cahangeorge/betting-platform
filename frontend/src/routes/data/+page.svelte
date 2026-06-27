@@ -21,10 +21,19 @@
 
 	let { data }: import('./$types').PageProps = $props();
 
-	// Safe access with fallbacks — server load may not have all fields yet
-	const serverData = $derived(data ?? {});
+	type DataPageData = {
+		matches?: Match[];
+		matchesTotal?: number;
+		tickets?: Ticket[];
+		ticketsTotal?: number;
+		predictionRuns?: PredictionRun[];
+		predictionRunsTotal?: number;
+		backendStatus?: BackendLoadStatus;
+	};
+
+	const serverData = $derived(data as DataPageData);
 	const backendStatus = $derived(
-		((serverData as { backendStatus?: BackendLoadStatus }).backendStatus as BackendLoadStatus | undefined) ?? {
+		serverData.backendStatus ?? {
 			state: 'ready',
 			message: null,
 			failedEndpoints: []
@@ -34,11 +43,18 @@
 	let tickets = $state<Ticket[]>([]);
 	let predictionRuns = $state<PredictionRun[]>([]);
 	let predictionMatchMap = $state<Record<number, Match>>({});
+	let matchesTotal = $state(0);
+	let ticketsTotal = $state(0);
+	let predictionRunsTotal = $state(0);
+	let hasMounted = $state(false);
 
 	$effect(() => {
-		matches = (serverData as any).matches ?? [];
-		tickets = (serverData as any).tickets ?? [];
-		predictionRuns = (serverData as any).predictionRuns ?? [];
+		matches = serverData.matches ?? [];
+		matchesTotal = serverData.matchesTotal ?? matches.length;
+		tickets = serverData.tickets ?? [];
+		ticketsTotal = serverData.ticketsTotal ?? tickets.length;
+		predictionRuns = serverData.predictionRuns ?? [];
+		predictionRunsTotal = serverData.predictionRunsTotal ?? predictionRuns.length;
 	});
 
 	// ── State ──────────────────────────────────────────
@@ -58,9 +74,9 @@
 	let selectedTabLabel = $state('');
 
 	const tabs = [
-		{ id: 'matches', label: 'Matches' },
-		{ id: 'predictions', label: 'Predictions' },
-		{ id: 'tickets', label: 'Tickets' }
+		{ id: 'matches', label: 'meciuri scrapeuite', ariaLabel: 'Matches' },
+		{ id: 'predictions', label: 'predictii generate', ariaLabel: 'Predictions' },
+		{ id: 'tickets', label: 'bilete generate', ariaLabel: 'Tickets' }
 	];
 
 	const perPageOptions = [
@@ -73,16 +89,25 @@
 	async function fetchMatches() {
 		matchesLoading = true;
 		try {
-			const filter: Record<string, string> = {};
+			const filter: Record<string, string | number> = { page, per_page: perPage };
 			if (dateFrom) filter.date_from = dateFrom;
 			if (dateTo) filter.date_to = dateTo;
-			matches = await matchesApi.getMatches(
+			const response = await matchesApi.getMatchesPage(
 				Object.keys(filter).length > 0
-					? (filter as { date_from?: string; date_to?: string; status?: 'scheduled' | 'live' | 'finished' | 'postponed' | 'cancelled' })
+					? (filter as {
+							date_from?: string;
+							date_to?: string;
+							status?: 'scheduled' | 'live' | 'finished' | 'postponed' | 'cancelled';
+							page?: number;
+							per_page?: number;
+						})
 					: undefined
 			);
+			matches = response.items;
+			matchesTotal = response.total;
 		} catch {
 			matches = [];
+			matchesTotal = 0;
 		}
 		matchesLoading = false;
 	}
@@ -90,9 +115,12 @@
 	async function fetchTickets() {
 		ticketsLoading = true;
 		try {
-			tickets = await ticketsApi.getTickets();
+			const response = await ticketsApi.getTicketsPage({ page, per_page: perPage });
+			tickets = response.items;
+			ticketsTotal = response.total;
 		} catch {
 			tickets = [];
+			ticketsTotal = 0;
 		}
 		ticketsLoading = false;
 	}
@@ -100,7 +128,9 @@
 	async function fetchPredictions() {
 		predictionsLoading = true;
 		try {
-			const runs = await predictionsApi.getRuns();
+			const response = await predictionsApi.getRunsPage({ page, per_page: perPage });
+			const runs = response.items;
+			predictionRunsTotal = response.total;
 			predictionRuns = await Promise.all(
 				runs.map(async (run) => {
 					try {
@@ -132,6 +162,7 @@
 		} catch {
 			predictionRuns = [];
 			predictionMatchMap = {};
+			predictionRunsTotal = 0;
 		}
 		predictionsLoading = false;
 	}
@@ -270,17 +301,16 @@
 				: activeTab === 'tickets'
 					? filteredTickets
 					: filteredPredictions;
-		const start = (page - 1) * perPage;
-		return source.slice(start, start + perPage);
+		return source;
 	});
 
 	const totalPages = $derived.by(() => {
 		const total =
 			activeTab === 'matches'
-				? filteredMatches.length
+				? matchesTotal
 				: activeTab === 'tickets'
-					? filteredTickets.length
-					: filteredPredictions.length;
+					? ticketsTotal
+					: predictionRunsTotal;
 		return Math.max(1, Math.ceil(total / perPage));
 	});
 
@@ -471,6 +501,7 @@
 		if (matches.length === 0) fetchMatches();
 		if (tickets.length === 0) fetchTickets();
 		fetchPredictions();
+		hasMounted = true;
 	});
 
 	$effect(() => {
@@ -482,13 +513,23 @@
 		void searchQuery;
 		resetPagination();
 	});
+
+	$effect(() => {
+		if (!hasMounted) return;
+		void activeTab;
+		void page;
+		void perPage;
+		void dateFrom;
+		void dateTo;
+		fetchCurrent();
+	});
 </script>
 
-<div class="space-y-6" transition:fade={{ duration: 200 }}>
+<div class="space-y-6 overflow-hidden" transition:fade={{ duration: 200 }}>
 	<div class="flex items-center justify-between">
 		<div>
 			<h1 class="text-2xl font-extrabold font-sport text-foreground">Data Hub</h1>
-			<p class="mt-1 text-muted-foreground">Browse matches, predictions, and tickets</p>
+			<p class="mt-1 text-muted-foreground">Browse scraped matches, generated predictions, and generated tickets</p>
 		</div>
 		<Button variant="secondary" size="sm" onclick={exportCsv}>
 			<svg class="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -540,7 +581,42 @@
 
 	<Tabs bind:activeTab {tabs}>
 		<!-- Data Table -->
-		<div class="mt-4">
+		<div class="mt-4 space-y-4">
+			<div class="flex flex-col gap-3 border border-border bg-card p-3 sm:flex-row sm:items-center sm:justify-between">
+				<div class="flex items-center gap-2">
+					<span class="text-xs text-muted-foreground">Rows per page:</span>
+					<Select
+						value={String(perPage)}
+						options={perPageOptions}
+						onchange={(e: Event) => {
+							perPage = Number((e.target as HTMLSelectElement).value);
+							resetPagination();
+						}}
+					/>
+				</div>
+				<div class="flex items-center gap-2">
+					<span class="text-xs text-muted-foreground">
+						Page {page} of {totalPages} · {activeTab === 'matches' ? matchesTotal : activeTab === 'tickets' ? ticketsTotal : predictionRunsTotal} total
+					</span>
+					<Button
+						variant="secondary"
+						size="sm"
+						disabled={page <= 1}
+						onclick={() => (page = Math.max(1, page - 1))}
+					>
+						Prev
+					</Button>
+					<Button
+						variant="secondary"
+						size="sm"
+						disabled={page >= totalPages}
+						onclick={() => (page = Math.min(totalPages, page + 1))}
+					>
+						Next
+					</Button>
+				</div>
+			</div>
+
 				{#if (activeTab === 'matches' && matchesLoading) || (activeTab === 'tickets' && ticketsLoading) || (activeTab === 'predictions' && predictionsLoading)}
 					<div class="space-y-2">
 						{#each Array.from({ length: 5 }, (_, index) => index) as skeletonIndex (skeletonIndex)}
@@ -599,41 +675,6 @@
 					</table>
 				</div>
 
-				<!-- Pagination -->
-				<div class="flex items-center justify-between mt-4">
-					<div class="flex items-center gap-2">
-						<span class="text-xs text-muted-foreground">Rows per page:</span>
-						<Select
-							value={String(perPage)}
-							options={perPageOptions}
-							onchange={(e: Event) => {
-								perPage = Number((e.target as HTMLSelectElement).value);
-								resetPagination();
-							}}
-						/>
-					</div>
-					<div class="flex items-center gap-2">
-						<span class="text-xs text-muted-foreground">
-							Page {page} of {totalPages}
-						</span>
-						<Button
-							variant="secondary"
-							size="sm"
-							disabled={page <= 1}
-							onclick={() => (page = Math.max(1, page - 1))}
-						>
-							Prev
-						</Button>
-						<Button
-							variant="secondary"
-							size="sm"
-							disabled={page >= totalPages}
-							onclick={() => (page = Math.min(totalPages, page + 1))}
-						>
-							Next
-						</Button>
-					</div>
-				</div>
 			{/if}
 		</div>
 	</Tabs>
