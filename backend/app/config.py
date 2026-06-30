@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     bridge_timeout_seconds: int = 180
     oddsharvester_timeout_seconds: int = 600
 
+    scheduled_jobs_enabled: bool = True
+    scheduled_jobs_interval_seconds: int = 60
+
     penaltyblog_python: str = ""
     penaltyblog_bridge: str = ""
     soccerdata_python: str = ""

@@ -17,20 +17,27 @@
 	import DialogHeader from '$lib/components/ui/dialog/dialog-header.svelte';
 	import DialogTitle from '$lib/components/ui/dialog/dialog-title.svelte';
 	import DialogFooter from '$lib/components/ui/dialog/dialog-footer.svelte';
+	import { jobsApi } from '$lib/api/jobs';
+	import { predictionsApi } from '$lib/api/predictions';
+	import { ApiClientError } from '$lib/api/client';
+	import { apiBaseUrl } from '$lib/api/base';
+	import { cronFromInterval, describeScheduledJob, scheduledJobsForArea } from '$lib/scheduled-jobs.helpers';
 	import { hasStrategyAvgEdge, normalizeStrategies } from './strategy.helpers';
 	import { cn } from '$lib/utils';
 	import type {
 		Country,
 		Match,
 		ModelPrediction,
+		PredictionVerification,
 		PredictionRun,
+		ScheduledJob,
 		Strategy,
 		StrategyCreateRequest,
 		StrategyRunResult
 	} from '$lib/types';
 
 	// Use same-origin /api requests so the frontend auth cookie is sent through the proxy.
-	const BASE_URL = '';
+	const BASE_URL = apiBaseUrl();
 
 	// --- Catalog State ---
 	let countries = $state<Country[]>([]);
@@ -57,12 +64,15 @@
 	let createError = $state('');
 
 		// --- Market State ---
-		const marketOptions = [
-			{ id: '1x2', label: '1X2' },
-			{ id: 'over_under_2.5', label: 'Over/Under 2.5' },
-			{ id: 'btts', label: 'BTTS' }
-		];
-		let selectedMarkets = $state<string[]>(['1x2']);
+	type MarketOption = { id: string; label: string };
+	let marketOptions = $state<MarketOption[]>([
+		{ id: '1x2', label: '1X2' },
+		{ id: 'over_under_2.5', label: 'Over/Under 2.5' },
+		{ id: 'btts', label: 'BTTS' }
+	]);
+	let selectedMarkets = $state<string[]>(['1x2']);
+	let loadingPredictionCatalog = $state(true);
+	let predictionCatalogError = $state('');
 
 	// --- Run State ---
 	let running = $state(false);
@@ -73,11 +83,22 @@
 	let autoPredict = $state(false);
 	let autoInterval = $state('24');
 	let autoIntervalUnit = $state('Hours');
+	let avoidReprediction = $state(true);
+	let predictionFutureDays = $state('7');
+	let predictionFutureWeeks = $state('0');
+	let predictionFutureMonths = $state('0');
+	let predictionFutureYears = $state('0');
 	let pollTimer: ReturnType<typeof setInterval> | null = null;
+	let scheduledJobs = $state<ScheduledJob[]>([]);
+	let loadingScheduledJobs = $state(true);
+	let scheduledJobsError = $state('');
+	let savingScheduledJob = $state(false);
 
 	// --- Results State ---
 	let results = $state<StrategyRunResult[]>([]);
 	let recentRuns = $state<PredictionRun[]>([]);
+	let verification = $state<PredictionVerification | null>(null);
+	let verificationError = $state('');
 	let modelPredictionRows = $state<
 		{
 			runId: number;
@@ -161,6 +182,33 @@
 		});
 	});
 
+	const predictionFutureTotalDays = $derived(
+		intervalToDays(predictionFutureDays, predictionFutureWeeks, predictionFutureMonths, predictionFutureYears)
+	);
+
+	const completedRunCount = $derived(recentRuns.filter((run) => run.status === 'completed').length);
+	const activeRunCount = $derived(recentRuns.filter((run) => run.status === 'running' || run.status === 'pending').length);
+	const selectedFilterCount = $derived(
+		selectedCountries.length + selectedLeagues.length + selectedMarkets.length + selectedStrategyIds.length
+	);
+	const automaticPredictionJobs = $derived(scheduledJobsForArea(scheduledJobs, 'prediction'));
+	const predictionWinRate = $derived(
+		verification?.resolved_predictions
+			? (verification.correct_predictions / verification.resolved_predictions) * 100
+			: null
+	);
+
+	const predictionControlNotes = $derived.by(() => {
+		const notes: string[] = [];
+		if (avoidReprediction) {
+			notes.push('Avoid reprediction is active: identical successful strategy inputs reuse the existing run.');
+		}
+		if (autoPredict) {
+			notes.push('Autopredict can be saved as a persistent /api/v1/jobs action with the Save autopredict button.');
+		}
+		return notes;
+	});
+
 	const unitOptions = [
 		{ value: 'Hours', label: 'Hours' },
 		{ value: 'Days', label: 'Days' },
@@ -185,6 +233,46 @@
 		weibull: 'success'
 	};
 
+	function positiveInteger(value: string): number {
+		const parsed = Number.parseInt(value, 10);
+		return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+	}
+
+	function intervalToDays(days: string, weeks: string, months: string, years: string): number {
+		return (
+			positiveInteger(days) +
+			positiveInteger(weeks) * 7 +
+			positiveInteger(months) * 30 +
+			positiveInteger(years) * 365
+		);
+	}
+
+	function localDateString(date: Date): string {
+		const year = date.getFullYear();
+		const month = String(date.getMonth() + 1).padStart(2, '0');
+		const day = String(date.getDate()).padStart(2, '0');
+		return `${year}-${month}-${day}`;
+	}
+
+	function marketLabel(market: string): string {
+		const labels: Record<string, string> = {
+			'1x2': '1X2',
+			btts: 'BTTS',
+			ou_2_5: 'Over/Under 2.5',
+			'over_under_2.5': 'Over/Under 2.5'
+		};
+		return labels[market] ?? market;
+	}
+
+	function applyFuturePredictionInterval() {
+		if (predictionFutureTotalDays <= 0) return;
+		const start = new Date();
+		const end = new Date();
+		end.setDate(end.getDate() + predictionFutureTotalDays);
+		dateFrom = localDateString(start);
+		dateTo = localDateString(end);
+	}
+
 	// --- Data Fetching ---
 	async function fetchCatalog() {
 		try {
@@ -199,6 +287,28 @@
 			// silently handle
 		} finally {
 			loadingCatalog = false;
+		}
+	}
+
+	async function fetchPredictionCatalog() {
+		predictionCatalogError = '';
+		try {
+			const res = await fetch(`${BASE_URL}/api/v1/predictions/catalog`, { credentials: 'include' });
+			if (!res.ok) {
+				const err = await res.json().catch(() => ({ detail: 'Failed to load prediction catalog' }));
+				throw new Error(err.detail || `HTTP ${res.status}`);
+			}
+			const data = (await res.json()) as { markets?: string[] };
+			if (Array.isArray(data.markets) && data.markets.length > 0) {
+				const availableMarkets = data.markets;
+				marketOptions = availableMarkets.map((market) => ({ id: market, label: marketLabel(market) }));
+				selectedMarkets = selectedMarkets.filter((market) => availableMarkets.includes(market));
+				if (selectedMarkets.length === 0) selectedMarkets = [availableMarkets[0]];
+			}
+		} catch (err) {
+			predictionCatalogError = err instanceof Error ? err.message : 'Failed to load prediction catalog';
+		} finally {
+			loadingPredictionCatalog = false;
 		}
 	}
 
@@ -217,6 +327,72 @@
 			strategyLoadError = err instanceof Error ? err.message : 'Failed to load strategies';
 		} finally {
 			loadingStrategies = false;
+		}
+	}
+
+	async function fetchScheduledJobs() {
+		loadingScheduledJobs = true;
+		scheduledJobsError = '';
+		try {
+			scheduledJobs = await jobsApi.getScheduledJobs();
+		} catch (err) {
+			scheduledJobsError = err instanceof ApiClientError ? err.message : 'Scheduled prediction jobs are unavailable';
+		} finally {
+			loadingScheduledJobs = false;
+		}
+	}
+
+	async function fetchVerification() {
+		verificationError = '';
+		try {
+			verification = await predictionsApi.verify();
+		} catch (err) {
+			verificationError = err instanceof ApiClientError ? err.message : 'Prediction verification metrics are unavailable';
+		}
+	}
+
+	async function toggleScheduledJob(jobId: number) {
+		scheduledJobsError = '';
+		try {
+			const updated = await jobsApi.toggleJob(jobId);
+			scheduledJobs = scheduledJobs.map((job) => (job.id === jobId ? updated : job));
+		} catch (err) {
+			scheduledJobsError = err instanceof ApiClientError ? err.message : 'Could not toggle scheduled prediction job';
+		}
+	}
+
+	async function saveAutomaticPredictionAction() {
+		if (selectedStrategyIds.length === 0 || selectedMarkets.length === 0) {
+			scheduledJobsError = 'Select at least one strategy and one market before saving autopredict';
+			return;
+		}
+
+		savingScheduledJob = true;
+		scheduledJobsError = '';
+		try {
+			const created = await jobsApi.createScheduledJob({
+				name: `Autopredict ${selectedStrategyIds.length} strateg${selectedStrategyIds.length === 1 ? 'y' : 'ies'}`,
+				task_type: 'run_predictions',
+				cron_expression: cronFromInterval(autoInterval, autoIntervalUnit),
+				config: {
+					source_page: 'predict',
+					area: 'prediction',
+					strategy_ids: selectedStrategyIds,
+					markets: selectedMarkets,
+					filters: {
+						countries: selectedCountries,
+						leagues: selectedLeagues,
+						date_from: dateFrom || undefined,
+						date_to: dateTo || undefined
+					},
+					avoid_reprediction: avoidReprediction
+				}
+			});
+			scheduledJobs = [created, ...scheduledJobs.filter((job) => job.id !== created.id)];
+		} catch (err) {
+			scheduledJobsError = err instanceof ApiClientError ? err.message : 'Could not save automatic prediction action';
+		} finally {
+			savingScheduledJob = false;
 		}
 	}
 
@@ -406,6 +582,7 @@
 		status: string;
 		matches_count?: number;
 		error?: string | null;
+		deduped?: boolean;
 	};
 
 	async function runPredictions() {
@@ -439,7 +616,9 @@
 							leagues: selectedLeagues,
 							date_from: dateFrom || undefined,
 							date_to: dateTo || undefined
-						}
+						},
+						avoid_reprediction: avoidReprediction,
+						autopredict: autoPredict
 					})
 				});
 
@@ -458,6 +637,9 @@
 				if (payload.status === 'partial') {
 					warnings.push(payload.error || 'Prediction run completed partially');
 				}
+				if (payload.deduped || payload.status === 'deduped') {
+					warnings.push(`Strategy ${strategyId}: reused existing prediction run #${payload.run_id}`);
+				}
 			}
 
 			clearInterval(progressInterval);
@@ -465,6 +647,7 @@
 			runSuccess = warnings.length > 0 ? 'Predictions completed with warnings' : 'Predictions completed successfully';
 			runWarning = warnings.join(' ');
 			await fetchResults();
+			await fetchVerification();
 			setTimeout(() => {
 				runSuccess = '';
 				runWarning = '';
@@ -629,8 +812,12 @@
 
 	onMount(() => {
 		fetchCatalog();
+		fetchPredictionCatalog();
 		fetchStrategies();
+		fetchScheduledJobs();
 		fetchResults();
+		fetchVerification();
+		applyFuturePredictionInterval();
 	});
 
 	$effect(() => {
@@ -671,8 +858,60 @@
 		</div>
 	{/if}
 
-	<!-- Section 1: Data Selectors -->
-	<Card title="Data Selection" variant="prediction">
+	<Card title="Metrics" variant="prediction">
+		<div class="grid grid-cols-2 gap-3 md:grid-cols-4">
+			<div class="border border-border bg-muted/30 p-3">
+				<p class="text-[10px] uppercase tracking-wide text-muted-foreground">Predictii castigate</p>
+				<p class="mt-1 font-mono text-lg text-football-green">{verification?.correct_predictions ?? 0}</p>
+			</div>
+			<div class="border border-border bg-muted/30 p-3">
+				<p class="text-[10px] uppercase tracking-wide text-muted-foreground">Predictii pierdute</p>
+				<p class="mt-1 font-mono text-lg text-football-red">{verification?.incorrect_predictions ?? 0}</p>
+			</div>
+			<div class="border border-border bg-muted/30 p-3">
+				<p class="text-[10px] uppercase tracking-wide text-muted-foreground">Win rate</p>
+				<p class="mt-1 font-mono text-lg text-football-gold">
+					{predictionWinRate === null ? '--' : `${predictionWinRate.toFixed(1)}%`}
+				</p>
+			</div>
+			<div class="border border-border bg-muted/30 p-3">
+				<p class="text-[10px] uppercase tracking-wide text-muted-foreground">Value candidates</p>
+				<p class="mt-1 font-mono text-lg text-foreground">{results.length}</p>
+			</div>
+		</div>
+		<div class="mt-3 flex flex-wrap gap-3 text-xs text-muted-foreground">
+			<span>Recent runs: <span class="font-mono text-foreground">{recentRuns.length}</span></span>
+			<span>Completed: <span class="font-mono text-football-green">{completedRunCount}</span></span>
+			<span>Active: <span class="font-mono text-football-gold">{activeRunCount}</span></span>
+			<span>Resolved predictions: <span class="font-mono text-foreground">{verification?.resolved_predictions ?? 0}</span></span>
+		</div>
+		{#if verificationError}
+			<p class="mt-2 text-xs text-football-gold">{verificationError}</p>
+		{/if}
+	</Card>
+
+	<Card title="Predictii pentru meciuri viitoare" variant="prediction">
+		<div class="space-y-4">
+			<div class="grid grid-cols-2 gap-3 md:grid-cols-4">
+				<Input label="Future days" name="predict-future-days" type="number" min="0" bind:value={predictionFutureDays} />
+				<Input label="Future weeks" name="predict-future-weeks" type="number" min="0" bind:value={predictionFutureWeeks} />
+				<Input label="Future months" name="predict-future-months" type="number" min="0" bind:value={predictionFutureMonths} />
+				<Input label="Future years" name="predict-future-years" type="number" min="0" bind:value={predictionFutureYears} />
+			</div>
+			<div class="flex flex-wrap items-center gap-3">
+				<Button variant="secondary" size="sm" onclick={applyFuturePredictionInterval} disabled={predictionFutureTotalDays <= 0}>
+					Apply future window ({predictionFutureTotalDays} days)
+				</Button>
+				<span class="text-xs text-muted-foreground">Sets the backend-supported strategy filters <span class="font-mono">date_from</span> and <span class="font-mono">date_to</span>.</span>
+			</div>
+			<div class="border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+				Current prediction target window: <span class="font-mono text-foreground">{dateFrom || 'not set'}</span> → <span class="font-mono text-foreground">{dateTo || 'not set'}</span>.
+			</div>
+		</div>
+	</Card>
+
+	<!-- Section 1: Prediction run form -->
+	<Card title="Prediction run form" variant="prediction">
 		<div class="space-y-6">
 			<!-- Countries -->
 			<div>
@@ -774,13 +1013,19 @@
 					</div>
 				</div>
 			</div>
+
+			<Separator />
+
+			<div class="border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+				Run form summary: <span class="font-mono text-foreground">{selectedFilterCount}</span> selected filters across country, league, market, and strategy controls. Markets and strategies are selected in the sections below.
+			</div>
 		</div>
 	</Card>
 
 	<!-- Section 2: Strategy Selection -->
 	<div class="space-y-4">
 		<div class="flex items-center justify-between">
-			<h2 class="text-lg font-semibold text-foreground">Strategies</h2>
+			<h2 class="text-lg font-semibold text-foreground">Strategy selectors</h2>
 			<Button variant="secondary" size="sm" onclick={() => (dialogOpen = true)}>
 				+ Add New Strategy
 			</Button>
@@ -838,12 +1083,17 @@
 		{/if}
 	</div>
 
-		<!-- Section 3: Market Selection -->
-		<Card title="Markets" variant="prediction">
+		<!-- Section 3: Market selectors -->
+		<Card title="Market selectors" variant="prediction">
 			<div class="space-y-3">
 				<p class="text-sm text-muted-foreground">
-					Select at least one market to predict. This route currently returns 1X2, Over/Under 2.5, and BTTS from the penaltyblog goal models.
+					Select at least one market to predict. Options are loaded from the existing prediction catalog when available; fallback labels are shown only if that endpoint is unavailable.
 				</p>
+				{#if loadingPredictionCatalog}
+					<p class="text-xs text-muted-foreground">Loading prediction catalog...</p>
+				{:else if predictionCatalogError}
+					<p class="text-xs text-football-gold">{predictionCatalogError}; using local fallback market labels.</p>
+				{/if}
 				<div class="grid grid-cols-2 md:grid-cols-3 gap-2">
 					{#each marketOptions as market (market.id)}
 						<label class={cn(
@@ -865,8 +1115,54 @@
 			</div>
 		</Card>
 
-	<!-- Section 4: Run -->
-	<div class="space-y-4">
+	<!-- Section 4: Automatic prediction actions -->
+	<Card title="Automatic prediction actions" variant="prediction">
+		<div class="space-y-4">
+		<div class="space-y-3 border border-border bg-muted/20 p-3">
+			<div class="flex flex-wrap items-center justify-between gap-2">
+				<div>
+					<p class="text-sm font-semibold text-foreground">Predictii automate salvate</p>
+					<p class="text-xs text-muted-foreground">
+						Butoanele se incarca din joburile persistente <span class="font-mono">/api/v1/jobs</span>.
+					</p>
+				</div>
+				<div class="flex flex-wrap gap-2">
+					<Button variant="secondary" size="sm" onclick={fetchScheduledJobs} disabled={loadingScheduledJobs}>
+						Refresh
+					</Button>
+					<Button variant="glow" size="sm" onclick={saveAutomaticPredictionAction} disabled={savingScheduledJob}>
+						{savingScheduledJob ? 'Saving...' : 'Save autopredict'}
+					</Button>
+				</div>
+			</div>
+
+			{#if scheduledJobsError}
+				<p class="text-xs text-destructive">{scheduledJobsError}</p>
+			{/if}
+
+			{#if loadingScheduledJobs}
+				<p class="text-xs text-muted-foreground">Loading saved prediction actions...</p>
+			{:else if automaticPredictionJobs.length === 0}
+				<p class="text-xs text-muted-foreground">Nu exista inca predictii automate salvate.</p>
+			{:else}
+				<div class="flex flex-wrap gap-2">
+					{#each automaticPredictionJobs as scheduledJob (scheduledJob.id)}
+						<Button
+							variant={scheduledJob.enabled ? 'secondary' : 'ghost'}
+							size="sm"
+							title={describeScheduledJob(scheduledJob)}
+							onclick={() => toggleScheduledJob(scheduledJob.id)}
+						>
+							{scheduledJob.name}
+							<span class="ml-1 font-mono text-[10px]">
+								{scheduledJob.enabled ? 'running' : 'paused'}
+							</span>
+						</Button>
+					{/each}
+				</div>
+			{/if}
+		</div>
+
 		<!-- Progress bar -->
 		{#if running}
 			<div class="space-y-2" transition:slide={{ duration: 200 }}>
@@ -901,43 +1197,66 @@
 			</div>
 		{/if}
 
-		<div class="flex items-center gap-4">
-			<Button
-				variant="glow"
-				size="lg"
-				disabled={running || selectedStrategyIds.length === 0 || selectedMarkets.length === 0}
-				onclick={runPredictions}
-			>
-				{#if running}
-					<span class="flex items-center gap-2">
-						<span class="h-4 w-4 border-2 border-foreground border-t-transparent animate-spin"></span>
-						Running...
-					</span>
-				{:else}
-					Run Predictions
-				{/if}
-			</Button>
+		<div class="space-y-4">
+			<div class="flex flex-wrap items-center gap-4">
+				<Button
+					variant="glow"
+					size="lg"
+					disabled={running || selectedStrategyIds.length === 0 || selectedMarkets.length === 0}
+					onclick={runPredictions}
+				>
+					{#if running}
+						<span class="flex items-center gap-2">
+							<span class="h-4 w-4 border-2 border-foreground border-t-transparent animate-spin"></span>
+							Running...
+						</span>
+					{:else}
+						Run Predictions
+					{/if}
+				</Button>
 
-			<div class="flex items-center gap-2 ml-4">
-				<label class="relative inline-flex items-center cursor-pointer">
-					<input
-						type="checkbox"
-						checked={autoPredict}
-						onchange={() => (autoPredict = !autoPredict)}
-						class="sr-only peer"
-					/>
-					<div class="w-9 h-5 bg-muted border border-border peer-checked:bg-football-green peer-checked:border-football-green transition-colors after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-foreground after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full"></div>
-				</label>
-				<span class="text-sm text-muted-foreground">Auto</span>
-				{#if autoPredict}
-					<div class="flex items-center gap-1" transition:slide={{ duration: 200 }}>
-						<Input type="number" bind:value={autoInterval} class="w-20" />
-						<Select bind:value={autoIntervalUnit} options={unitOptions} />
-					</div>
-				{/if}
+				<div class="flex flex-wrap items-center gap-3">
+					<label class="flex items-center gap-2 text-sm text-muted-foreground">
+						<input
+							type="checkbox"
+							checked={autoPredict}
+							onchange={() => (autoPredict = !autoPredict)}
+							class="h-4 w-4 accent-[hsl(var(--football-green))]"
+						/>
+						Autopredict
+					</label>
+					<label class="flex items-center gap-2 text-sm text-muted-foreground">
+						<input
+							type="checkbox"
+							checked={avoidReprediction}
+							onchange={() => (avoidReprediction = !avoidReprediction)}
+							class="h-4 w-4 accent-[hsl(var(--football-gold))]"
+						/>
+						Avoid reprediction
+					</label>
+				</div>
 			</div>
+
+			{#if autoPredict}
+				<div class="flex items-end gap-2 border-l-2 border-football-green/30 pl-4" transition:slide={{ duration: 200 }}>
+					<div>
+						<label for="predict-auto-interval" class="text-xs text-muted-foreground mb-1 block">Autopredict interval</label>
+						<Input id="predict-auto-interval" type="number" bind:value={autoInterval} class="w-24" />
+					</div>
+					<Select bind:value={autoIntervalUnit} options={unitOptions} />
+				</div>
+			{/if}
+
+			{#if predictionControlNotes.length > 0}
+				<div class="space-y-1 border border-football-gold/30 bg-football-gold/10 p-3 text-xs text-football-gold">
+					{#each predictionControlNotes as note (note)}
+						<p>{note}</p>
+					{/each}
+				</div>
+			{/if}
 		</div>
-	</div>
+		</div>
+	</Card>
 
 	{#if recentRuns.length > 0}
 		<Card title="Recent Prediction Runs" variant="prediction">

@@ -44,9 +44,94 @@ def test_build_strategy_execution_config_resolves_penaltyblog_model_and_paramete
     }
 
 
+def test_strategy_run_hash_is_stable_for_equivalent_multiselect_order():
+    strategy = SimpleNamespace(id=7, model_type="poisson", parameters={"training_limit": 200})
+    filters_a = SimpleNamespace(
+        countries=["Romania", "England"],
+        leagues=["premier-league", "liga-1"],
+        date_from="2026-06-23",
+        date_to=None,
+    )
+    filters_b = SimpleNamespace(
+        countries=["England", "Romania"],
+        leagues=["liga-1", "premier-league"],
+        date_from="2026-06-23",
+        date_to=None,
+    )
+
+    config = strategies_api._build_strategy_execution_config(strategy)
+    hash_a = strategies_api._strategy_run_input_hash(
+        strategy=strategy,
+        execution_config=config,
+        markets=["btts", "1x2"],
+        match_ids=[22, 11],
+        filters=filters_a,
+    )
+    hash_b = strategies_api._strategy_run_input_hash(
+        strategy=strategy,
+        execution_config=config,
+        markets=["1x2", "btts"],
+        match_ids=[11, 22],
+        filters=filters_b,
+    )
+
+    assert hash_a == hash_b
+    assert strategies_api._strategy_run_name(strategy, hash_a).startswith("Strategy: ")
+    assert "input:" in strategies_api._strategy_run_name(strategy, hash_a)
+
+
+def test_strategy_run_hash_changes_when_inputs_change():
+    strategy = SimpleNamespace(id=7, model_type="poisson", parameters={"training_limit": 200})
+    config = strategies_api._build_strategy_execution_config(strategy)
+
+    hash_a = strategies_api._strategy_run_input_hash(
+        strategy=strategy,
+        execution_config=config,
+        markets=["1x2"],
+        match_ids=[11],
+        filters=None,
+    )
+    hash_b = strategies_api._strategy_run_input_hash(
+        strategy=strategy,
+        execution_config=config,
+        markets=["btts"],
+        match_ids=[11],
+        filters=None,
+    )
+
+    assert hash_a != hash_b
+
+
 def test_resolve_prediction_model_key_supports_ui_aliases():
     assert prediction_engine.resolve_prediction_model_key("poisson") == "PoissonGoalsModel"
     assert prediction_engine.resolve_prediction_model_key("PoissonGoalsModel") == "PoissonGoalsModel"
+
+
+def test_build_strategy_duplicate_copies_editable_configuration_only():
+    source = SimpleNamespace(
+        id=12,
+        name="Balanced 1x2",
+        description="Prefer stable leagues",
+        model_type="dixon_coles",
+        parameters={"training_limit": 220, "nested": {"enabled": True}},
+        weights={"home": 0.55},
+        is_active=False,
+        created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 6, 2, tzinfo=timezone.utc),
+    )
+
+    duplicate = strategies_api._build_strategy_duplicate(source, name="Copy of Balanced 1x2")
+
+    assert duplicate.id is None
+    assert duplicate.name == "Copy of Balanced 1x2"
+    assert duplicate.description == source.description
+    assert duplicate.model_type == source.model_type
+    assert duplicate.parameters == source.parameters
+    assert duplicate.parameters is not source.parameters
+    assert duplicate.parameters["nested"] is not source.parameters["nested"]
+    assert duplicate.weights == source.weights
+    assert duplicate.weights is not source.weights
+    assert duplicate.is_active is False
 
 
 @pytest.mark.asyncio

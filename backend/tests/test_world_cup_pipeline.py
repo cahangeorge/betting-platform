@@ -13,7 +13,52 @@ def test_recent_world_cup_seasons_uses_last_ten_years():
         today=datetime(2026, 6, 17, tzinfo=timezone.utc),
     )
 
-    assert seasons == [2018, 2022]
+    assert seasons == [2022, 2018]
+
+
+def test_recent_world_cup_seasons_supports_older_tournaments_newest_first():
+    seasons = world_cup_pipeline.recent_world_cup_seasons(
+        28,
+        today=datetime(2026, 6, 17, tzinfo=timezone.utc),
+    )
+
+    assert seasons == [2022, 2018, 2014, 2010, 2006, 2002, 1998]
+
+
+def test_recent_world_cup_seasons_allows_zero_history_to_skip_historic_scrapes():
+    seasons = world_cup_pipeline.recent_world_cup_seasons(
+        0,
+        today=datetime(2026, 6, 17, tzinfo=timezone.utc),
+    )
+
+    assert seasons == []
+
+
+def test_selected_world_cup_seasons_can_limit_long_backfills():
+    seasons = world_cup_pipeline.selected_world_cup_seasons(
+        28,
+        max_historic_seasons=2,
+        today=datetime(2026, 6, 17, tzinfo=timezone.utc),
+    )
+
+    assert seasons == [2022, 2018]
+
+
+def test_expensive_upcoming_world_cup_scrapes_get_longer_timeout():
+    assert world_cup_pipeline._world_cup_upcoming_timeout(all_markets=True, odds_history=False) == 1800
+    assert world_cup_pipeline._world_cup_upcoming_timeout(all_markets=False, odds_history=True) == 1800
+    assert world_cup_pipeline._world_cup_upcoming_timeout(all_markets=False, odds_history=False) is None
+    assert world_cup_pipeline._world_cup_upcoming_timeout(
+        all_markets=True,
+        odds_history=True,
+        timeout_seconds=900,
+    ) == 900
+
+
+def test_world_cup_historic_pages_uses_safe_minimum():
+    assert world_cup_pipeline._world_cup_historic_max_pages(None) == 3
+    assert world_cup_pipeline._world_cup_historic_max_pages(1) == 3
+    assert world_cup_pipeline._world_cup_historic_max_pages(5) == 5
 
 
 def test_market_matching_accepts_prediction_aliases():
@@ -132,7 +177,7 @@ async def test_publish_pipeline_progress_writes_parent_output_and_commits():
 
 
 @pytest.mark.asyncio
-async def test_run_scrape_jobs_publishes_running_subjobs_and_skips_after_historic_timeout(monkeypatch):
+async def test_run_scrape_jobs_publishes_running_subjobs_and_continues_after_historic_timeout(monkeypatch):
     class _DB:
         def __init__(self):
             self.flushes = 0
@@ -158,7 +203,7 @@ async def test_run_scrape_jobs_publishes_running_subjobs_and_skips_after_histori
 
     async def fake_execute_scrape_job(_db, job_id):
         job = created_jobs[job_id]
-        if job.params["command"] == "historic":
+        if job.params["command"] == "historic" and job.params["season"] == "2018":
             job.status = "failed"
             job.error = "OddsHarvester request timed out after 600s"
             return job
@@ -179,7 +224,7 @@ async def test_run_scrape_jobs_publishes_running_subjobs_and_skips_after_histori
     monkeypatch.setattr(world_cup_pipeline, "create_scrape_job", fake_create_scrape_job)
     monkeypatch.setattr(world_cup_pipeline, "execute_scrape_job", fake_execute_scrape_job)
     monkeypatch.setattr(world_cup_pipeline, "_publish_pipeline_progress", fake_publish)
-    monkeypatch.setattr(world_cup_pipeline, "recent_world_cup_seasons", lambda *_args, **_kwargs: [2018, 2022])
+    monkeypatch.setattr(world_cup_pipeline, "recent_world_cup_seasons", lambda *_args, **_kwargs: [2022, 2018])
 
     jobs, skipped = await world_cup_pipeline._run_scrape_jobs(
         _DB(),
@@ -191,12 +236,81 @@ async def test_run_scrape_jobs_publishes_running_subjobs_and_skips_after_histori
         parent_job_id=99,
     )
 
-    assert [job.params["command"] for job in jobs] == ["upcoming", "historic"]
-    assert skipped == [2022]
+    assert [job.params["command"] for job in jobs] == ["upcoming", "historic", "historic"]
+    assert all(job.params["scraper_engine"] == "playwright" for job in jobs)
+    assert [job.params.get("season") for job in jobs if job.params["command"] == "historic"] == ["2022", "2018"]
+    assert all((job.params.get("max_pages") or 0) >= 3 for job in jobs if job.params["command"] == "historic")
+    assert all(
+        job.params.get("timeout_seconds") == world_cup_pipeline.WORLD_CUP_HISTORIC_TIMEOUT_SECONDS
+        for job in jobs
+        if job.params["command"] == "historic"
+    )
+    assert skipped == []
     assert any(stage["stage"].startswith("scraping_upcoming_") and "running" in stage["statuses"] for stage in stages)
     assert any(stage["stage"] == "scraping_historic_2018" and "running" in stage["statuses"] for stage in stages)
-    assert stages[-1]["stage"] == "historic_timeout_skip_remaining_after_2018"
-    assert stages[-1]["skipped"] == [2022]
+    assert stages[-1]["stage"] == "historic_timeout_continuing_after_2018"
+    assert stages[-1]["skipped"] == []
+
+
+@pytest.mark.asyncio
+async def test_run_scrape_jobs_bounds_historic_seasons_and_uses_timeout_overrides(monkeypatch):
+    class _DB:
+        async def flush(self):
+            return None
+
+    created_jobs = {}
+
+    async def fake_create_scrape_job(_db, job_type, league, params):
+        job = SimpleNamespace(
+            id=len(created_jobs) + 1,
+            job_type=job_type,
+            league=league,
+            params=params,
+            status="pending",
+            started_at=None,
+            error=None,
+        )
+        created_jobs[job.id] = job
+        return job
+
+    async def fake_execute_scrape_job(_db, job_id):
+        job = created_jobs[job_id]
+        job.status = "completed"
+        return job
+
+    async def fake_publish(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(world_cup_pipeline, "create_scrape_job", fake_create_scrape_job)
+    monkeypatch.setattr(world_cup_pipeline, "execute_scrape_job", fake_execute_scrape_job)
+    monkeypatch.setattr(world_cup_pipeline, "_publish_pipeline_progress", fake_publish)
+    monkeypatch.setattr(
+        world_cup_pipeline,
+        "recent_world_cup_seasons",
+        lambda *_args, **_kwargs: [2022, 2018, 2014],
+    )
+
+    jobs, skipped = await world_cup_pipeline._run_scrape_jobs(
+        _DB(),
+        future_days=1,
+        history_years=28,
+        all_markets=True,
+        odds_history=True,
+        max_historic_pages=1,
+        max_historic_seasons=1,
+        upcoming_timeout_seconds=900,
+        historic_timeout_seconds=120,
+        parent_job_id=99,
+        scraper_engine="auto",
+    )
+
+    assert [job.params["command"] for job in jobs] == ["upcoming", "historic"]
+    assert all(job.params["scraper_engine"] == "auto" for job in jobs)
+    assert jobs[0].params["timeout_seconds"] == 900
+    assert jobs[1].params["season"] == "2022"
+    assert jobs[1].params["max_pages"] == 3
+    assert jobs[1].params["timeout_seconds"] == 120
+    assert skipped == []
 
 
 @pytest.mark.asyncio
@@ -454,3 +568,76 @@ async def test_run_top_predictions_preserves_target_errors(monkeypatch):
     assert len(runs) == 4
     payload = json.loads(runs[0].error)
     assert payload["target_errors"] == [{"match_id": 9, "error": "bridge failed"}]
+
+
+@pytest.mark.asyncio
+async def test_execute_world_cup_pipeline_job_preserves_zero_history_years(monkeypatch):
+    class _SessionManager:
+        def __init__(self, db):
+            self.db = db
+
+        async def __aenter__(self):
+            return self.db
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class _DB:
+        def __init__(self, job):
+            self.job = job
+            self.commits = 0
+
+        async def get(self, model, job_id):
+            assert model.__name__ == "ScrapeJob"
+            assert job_id == self.job.id
+            return self.job
+
+        async def commit(self):
+            self.commits += 1
+
+    captured_kwargs = {}
+    job = SimpleNamespace(
+        id=51,
+        params={
+            "future_days": 1,
+            "history_years": 0,
+            "all_markets": "false",
+            "odds_history": "false",
+            "create_tickets": "false",
+            "allow_experimental_tickets": "false",
+            "max_historic_pages": "3",
+            "max_historic_seasons": "1",
+            "upcoming_timeout_seconds": "900",
+            "historic_timeout_seconds": "120",
+            "scraper_engine": "auto",
+        },
+        status="pending",
+        started_at=None,
+        completed_at=None,
+        output=None,
+        error=None,
+    )
+    db = _DB(job)
+
+    async def fake_run_world_cup_pipeline(_db, **kwargs):
+        captured_kwargs.update(kwargs)
+        return {"status": "completed"}
+
+    monkeypatch.setattr(world_cup_pipeline, "async_session_factory", lambda: _SessionManager(db))
+    monkeypatch.setattr(world_cup_pipeline, "run_world_cup_pipeline", fake_run_world_cup_pipeline)
+
+    await world_cup_pipeline.execute_world_cup_pipeline_job(job.id, user_id=7)
+
+    assert captured_kwargs["history_years"] == 0
+    assert captured_kwargs["all_markets"] is False
+    assert captured_kwargs["odds_history"] is False
+    assert captured_kwargs["create_tickets"] is False
+    assert captured_kwargs["allow_experimental_tickets"] is False
+    assert captured_kwargs["max_historic_pages"] == 3
+    assert captured_kwargs["max_historic_seasons"] == 1
+    assert captured_kwargs["upcoming_timeout_seconds"] == 900
+    assert captured_kwargs["historic_timeout_seconds"] == 120
+    assert captured_kwargs["scraper_engine"] == "auto"
+    assert job.status == "completed"
+    assert json.loads(job.output) == {"status": "completed"}
+    assert db.commits == 2

@@ -33,7 +33,7 @@
 	let isNavigating = $state(false);
 	let prevUrl = $state('');
 
-	const shelllessRoutes = ['/login', '/signup', '/about', '/board'];
+	const shelllessRoutes = ['/login', '/signup', '/about'];
 	const useAppShell = $derived.by(
 		() => !shelllessRoutes.some((route) => $page.url.pathname.startsWith(route))
 	);
@@ -92,21 +92,21 @@
 	</div>
 
 	{#if useAppShell}
-		<div class="hidden min-h-screen grid-cols-[220px_1fr_320px] pt-16 lg:grid">
+		<div class="hidden min-h-screen min-w-0 grid-cols-[220px_minmax(0,1fr)_320px] pt-16 lg:grid">
 			<aside class="relative" aria-label="Navigation sidebar">
 				<div class="fixed left-0 top-16 z-30 h-[calc(100vh-64px)] w-[220px]">
 					<Sidebar bind:open={sidebarOpen} user={data.user} />
 				</div>
 			</aside>
 
-			<main id="main-content" class="min-h-[calc(100vh-4rem)]">
-				<div class="max-w-none p-4 lg:p-6">
+			<main id="main-content" class="min-h-[calc(100vh-4rem)] min-w-0">
+				<div class="min-w-0 max-w-none p-4 lg:p-6">
 					{#if isNavigating}
 						<div class="flex items-center justify-center py-20" transition:fade={{ duration: 150 }}>
 							<Loading message="Loading..." />
 						</div>
 					{:else}
-						<div transition:fade={{ duration: 200, delay: 50 }}>
+						<div class="min-w-0" transition:fade={{ duration: 200, delay: 50 }}>
 							{@render children()}
 						</div>
 					{/if}
@@ -125,14 +125,14 @@
 				<Sidebar bind:open={sidebarOpen} user={data.user} />
 			{/if}
 
-			<main id="main-content-mobile" class="min-h-[calc(100vh-4rem)]">
-				<div class="max-w-none p-4">
+			<main id="main-content-mobile" class="min-h-[calc(100vh-4rem)] min-w-0">
+				<div class="min-w-0 max-w-none p-4">
 					{#if isNavigating}
 						<div class="flex items-center justify-center py-20" transition:fade={{ duration: 150 }}>
 							<Loading message="Loading..." />
 						</div>
 					{:else}
-						<div transition:fade={{ duration: 200, delay: 50 }}>
+						<div class="min-w-0" transition:fade={{ duration: 200, delay: 50 }}>
 							{@render children()}
 						</div>
 					{/if}

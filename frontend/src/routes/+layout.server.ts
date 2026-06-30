@@ -2,11 +2,7 @@ import type { LayoutServerLoad } from './$types';
 import { redirect } from '@sveltejs/kit';
 
 export const load: LayoutServerLoad = async ({ url, cookies }) => {
-	if (url.pathname === '/' && !cookies.get('access_token')) {
-		redirect(302, '/board');
-	}
-
-	const publicRoutes = ['/login', '/signup', '/board', '/about'];
+	const publicRoutes = ['/login', '/signup', '/about'];
 	const isPublicRoute =
 		publicRoutes.some((route) => url.pathname.startsWith(route));
 
@@ -30,10 +26,6 @@ export const load: LayoutServerLoad = async ({ url, cookies }) => {
 
 	if (!user && !isPublicRoute) {
 		redirect(302, '/login');
-	}
-
-	if (user && url.pathname === '/board') {
-		redirect(302, '/');
 	}
 
 	return {

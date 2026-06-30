@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.match import Match, MatchSource, OddsEntry
-from app.models.scrape import ScrapedDataset, ScrapeJob
+from app.models.scrape import ScrapedDataset, ScrapeJob, ScrapeJobLog
 from app.services.python_bridge import BridgeError, run_oddsharvester_json
 
 ODDS_SOURCE = "OddsHarvester"
@@ -78,6 +78,92 @@ FOOTBALL_ALL_MARKETS = [
     "asian_handicap_+2",
 ]
 
+SCRAPE_DEDUP_CONTROL_KEYS = {
+    "auto_interval_hours",
+    "auto_scrape",
+    "auto_scrape_requested",
+    "avoid_rescraping",
+    "dedup_skip",
+    "dedup_skip_requested",
+}
+
+
+def _normalize_scrape_value(value):
+    if isinstance(value, dict):
+        return {
+            key: _normalize_scrape_value(value[key])
+            for key in sorted(value)
+            if key not in SCRAPE_DEDUP_CONTROL_KEYS and value[key] is not None
+        }
+    if isinstance(value, list):
+        normalized = [_normalize_scrape_value(item) for item in value if item is not None]
+        if all(not isinstance(item, (dict, list)) for item in normalized):
+            return sorted(normalized)
+        return normalized
+    return value
+
+
+def _scrape_dedup_key(job: ScrapeJob) -> str:
+    return json.dumps(
+        {
+            "job_type": job.job_type,
+            "league": job.league,
+            "params": _normalize_scrape_value(job.params or {}),
+        },
+        sort_keys=True,
+        default=str,
+    )
+
+
+def _avoid_rescraping_requested(job: ScrapeJob) -> bool:
+    params = job.params or {}
+    return bool(params.get("dedup_skip_requested") or params.get("dedup_skip") or params.get("avoid_rescraping"))
+
+
+async def _find_completed_duplicate_scrape_job(db: AsyncSession, job: ScrapeJob) -> ScrapeJob | None:
+    stmt = (
+        select(ScrapeJob)
+        .where(
+            ScrapeJob.id != job.id,
+            ScrapeJob.job_type == job.job_type,
+            ScrapeJob.status == "completed",
+        )
+        .order_by(ScrapeJob.created_at.desc())
+        .limit(100)
+    )
+    if job.league is None:
+        stmt = stmt.where(ScrapeJob.league.is_(None))
+    else:
+        stmt = stmt.where(ScrapeJob.league == job.league)
+
+    target_key = _scrape_dedup_key(job)
+    result = await db.execute(stmt)
+    for candidate in result.scalars().all():
+        if _scrape_dedup_key(candidate) == target_key:
+            return candidate
+    return None
+
+
+async def append_scrape_job_log(
+    db: AsyncSession,
+    job_id: int,
+    *,
+    action: str,
+    message: str,
+    level: str = "info",
+    metadata: dict | None = None,
+) -> ScrapeJobLog:
+    log = ScrapeJobLog(
+        job_id=job_id,
+        level=level,
+        action=action,
+        message=message,
+        metadata_json=metadata,
+    )
+    db.add(log)
+    await db.flush()
+    return log
+
 
 async def create_scrape_job(
     db: AsyncSession,
@@ -93,6 +179,13 @@ async def create_scrape_job(
     )
     db.add(job)
     await db.flush()
+    await append_scrape_job_log(
+        db,
+        job.id,
+        action="job_created",
+        message=f"Created scrape job {job.id}",
+        metadata={"job_type": job_type, "league": league, "params": params or {}},
+    )
     return job
 
 
@@ -289,6 +382,9 @@ def _build_oddsharvester_args(job: ScrapeJob) -> list[str]:
     if params.get("odds_history"):
         args.append("--odds-history")
 
+    if params.get("preview_submarkets_only") or params.get("preview_only"):
+        args.append("--preview-only")
+
     if params.get("headless", True):
         args.append("--headless")
 
@@ -304,7 +400,15 @@ def _build_oddsharvester_args(job: ScrapeJob) -> list[str]:
     if params.get("request_delay"):
         args.extend(["--request-delay", str(params["request_delay"])])
 
+    if params.get("scraper_engine"):
+        args.extend(["--engine", str(params["scraper_engine"])])
+
     return args
+
+
+def _job_oddsharvester_timeout(job: ScrapeJob) -> int | None:
+    params = job.params or {}
+    return _coerce_int(params.get("timeout_seconds") or params.get("oddsharvester_timeout_seconds"))
 
 
 async def _upsert_match_from_record(db: AsyncSession, record: dict, sport: str) -> Match:
@@ -426,6 +530,14 @@ async def _ingest_scraped_payload(db: AsyncSession, job: ScrapeJob, payload: lis
     params = job.params or {}
     sport = str(params.get("sport", "football"))
 
+    await append_scrape_job_log(
+        db,
+        job.id,
+        action="payload_received",
+        message=f"Received {len(payload)} scraped records",
+        metadata={"records": len(payload), "sport": sport},
+    )
+
     dataset = ScrapedDataset(
         name=f"{_job_label(job)}:{datetime.now(timezone.utc).isoformat()}",
         source=ODDS_SOURCE,
@@ -440,15 +552,36 @@ async def _ingest_scraped_payload(db: AsyncSession, job: ScrapeJob, payload: lis
     )
     db.add(dataset)
     await db.flush()
+    await append_scrape_job_log(
+        db,
+        job.id,
+        action="dataset_created",
+        message=f"Created scraped dataset {dataset.id}",
+        metadata={"dataset_id": dataset.id, "records": len(payload)},
+    )
 
     matches_written = 0
     odds_written = 0
+    skipped_records = 0
     for record in payload:
         if not isinstance(record, dict):
+            skipped_records += 1
             continue
         match = await _upsert_match_from_record(db, record, sport=sport)
         matches_written += 1
         odds_written += await _ingest_match_odds(db, match, record)
+
+    await append_scrape_job_log(
+        db,
+        job.id,
+        action="records_upserted",
+        message=f"Upserted {matches_written} matches and wrote {odds_written} odds rows",
+        metadata={
+            "matches_upserted": matches_written,
+            "odds_written": odds_written,
+            "skipped_records": skipped_records,
+        },
+    )
 
     return {
         "dataset_id": dataset.id,
@@ -466,26 +599,104 @@ async def execute_scrape_job(db: AsyncSession, job_id: int) -> ScrapeJob:
     job.status = "running"
     job.started_at = datetime.now(timezone.utc)
     await db.flush()
+    await append_scrape_job_log(
+        db,
+        job.id,
+        action="job_started",
+        message=f"Started scrape job {job.id}",
+        metadata={"job_type": job.job_type, "league": job.league, "params": job.params or {}},
+    )
 
     try:
+        if _avoid_rescraping_requested(job):
+            duplicate = await _find_completed_duplicate_scrape_job(db, job)
+            if duplicate is not None:
+                summary = {
+                    "skipped": True,
+                    "reason": "duplicate_completed_job",
+                    "reused_job_id": duplicate.id,
+                }
+                job.status = "completed"
+                job.output = json.dumps(summary)
+                job.completed_at = datetime.now(timezone.utc)
+                await append_scrape_job_log(
+                    db,
+                    job.id,
+                    action="rescrape_skipped",
+                    message=f"Skipped scrape job {job.id}; reused completed job {duplicate.id}",
+                    metadata=summary,
+                )
+                await db.flush()
+                return job
+
         if job.job_type in {"oddsportal", "scrape_odds"}:
             args = _build_oddsharvester_args(job)
-            payload = await run_oddsharvester_json(args, label=f"scrape_job_{job.id}")
+            timeout_seconds = _job_oddsharvester_timeout(job)
+            scraper_engine = (job.params or {}).get("scraper_engine") or "playwright"
+            await append_scrape_job_log(
+                db,
+                job.id,
+                action="engine_selected",
+                message=f"Selected scraper engine: {scraper_engine}",
+                metadata={"scraper_engine": scraper_engine},
+            )
+            await append_scrape_job_log(
+                db,
+                job.id,
+                action="bridge_invocation",
+                message="Invoking OddsHarvester bridge",
+                metadata={"args": args, "timeout_seconds": timeout_seconds, "scraper_engine": scraper_engine},
+            )
+            payload = await run_oddsharvester_json(
+                args,
+                label=f"scrape_job_{job.id}",
+                timeout=timeout_seconds,
+            )
             summary = await _ingest_scraped_payload(db, job, payload)
             job.status = "completed"
             job.output = json.dumps(summary)
+            await append_scrape_job_log(
+                db,
+                job.id,
+                action="job_completed",
+                message=f"Completed scrape job {job.id}",
+                metadata=summary,
+            )
         else:
             job.status = "completed"
+            await append_scrape_job_log(
+                db,
+                job.id,
+                action="job_completed",
+                message=f"Completed scrape job {job.id} without scraper bridge",
+                metadata={"job_type": job.job_type},
+            )
 
         job.completed_at = datetime.now(timezone.utc)
     except BridgeError as e:
         job.status = "failed"
         job.error = str(e)
         job.completed_at = datetime.now(timezone.utc)
+        await append_scrape_job_log(
+            db,
+            job.id,
+            action="job_failed",
+            message=str(e),
+            level="error",
+            metadata={"error_type": e.__class__.__name__},
+        )
     except Exception as e:
         job.status = "failed"
         job.error = str(e)
         job.completed_at = datetime.now(timezone.utc)
+        await append_scrape_job_log(
+            db,
+            job.id,
+            action="job_failed",
+            message=str(e),
+            level="error",
+            metadata={"error_type": e.__class__.__name__},
+        )
 
     await db.flush()
     return job

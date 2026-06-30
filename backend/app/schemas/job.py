@@ -22,3 +22,10 @@ class ScheduledJobCreateRequest(BaseModel):
     task_type: str
     cron_expression: str
     config: dict | None = None
+
+
+class ScheduledJobRunResponse(BaseModel):
+    job_id: int
+    task_type: str
+    status: str
+    detail: str | None = None

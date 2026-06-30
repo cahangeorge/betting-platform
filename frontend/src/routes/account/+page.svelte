@@ -1,9 +1,17 @@
 <script lang="ts">
 	import AccountPanel from '$lib/components/AccountPanel.svelte';
+	import type { Bankroll, BookmakerAccount, LedgerEntry } from '$lib/types';
 	import type { BackendLoadStatus } from '$lib/types/backend';
 
 	let { data }: import('./$types').PageProps = $props();
-	const backendStatus = $derived(((data as { backendStatus?: BackendLoadStatus }).backendStatus as BackendLoadStatus | undefined) ?? {
+	type AccountPageData = {
+		bankrolls?: Bankroll[];
+		accounts?: BookmakerAccount[];
+		ledger?: LedgerEntry[];
+		backendStatus?: BackendLoadStatus;
+	};
+	const pageData = $derived(data as AccountPageData);
+	const backendStatus = $derived(pageData.backendStatus ?? {
 		state: 'ready',
 		message: null,
 		failedEndpoints: []
@@ -22,8 +30,8 @@
 		</div>
 	{/if}
 	<AccountPanel
-		serverBankrolls={((data as any)?.bankrolls) ?? []}
-		serverAccounts={((data as any)?.accounts) ?? []}
-		serverLedger={((data as any)?.ledger) ?? []}
+		serverBankrolls={pageData.bankrolls ?? []}
+		serverAccounts={pageData.accounts ?? []}
+		serverLedger={pageData.ledger ?? []}
 	/>
 </div>

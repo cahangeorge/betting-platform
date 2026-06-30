@@ -36,6 +36,22 @@ class DashboardTicket(BaseModel):
     created_at: datetime
 
 
+class DashboardTicketOutcomeBucket(BaseModel):
+    bucket_start: datetime
+    bucket_end: datetime
+    won: int = 0
+    lost: int = 0
+    void: int = 0
+    pending: int = 0
+    ticket_ids: list[int] = []
+
+
+class DashboardTicketOutcomeResponse(BaseModel):
+    range: str
+    bucket: str = "day"
+    items: list[DashboardTicketOutcomeBucket] = []
+
+
 class DashboardUpcomingMatch(BaseModel):
     id: int
     home_team: str

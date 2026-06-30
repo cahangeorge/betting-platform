@@ -10,6 +10,37 @@ export type LiveMessage =
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'reconnecting';
 
+const LIVE_WS_PATH = '/api/v1/live/ws';
+const LOCAL_FRONTEND_PORTS = new Set(['5174', '5175']);
+
+function getConfiguredPublicApiUrl(): string {
+	return ((import.meta as unknown as { env?: Record<string, string | undefined> }).env?.PUBLIC_API_URL ?? '').trim();
+}
+
+export function buildLiveWebSocketUrl(location: Location | URL, publicApiUrl = getConfiguredPublicApiUrl()): string {
+	const configuredBase = publicApiUrl.trim();
+	if (configuredBase) {
+		const url = new URL(configuredBase);
+		url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+		url.pathname = LIVE_WS_PATH;
+		url.search = '';
+		url.hash = '';
+		return url.toString();
+	}
+
+	const isLocalFrontend =
+		(location.hostname === '127.0.0.1' || location.hostname === 'localhost') &&
+		LOCAL_FRONTEND_PORTS.has(location.port);
+
+	if (isLocalFrontend) {
+		const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+		return `${proto}//${location.hostname}:8001${LIVE_WS_PATH}`;
+	}
+
+	const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+	return `${proto}//${location.host}${LIVE_WS_PATH}`;
+}
+
 function createLiveSocketStore() {
   const { subscribe, set, update } = writable<{
     status: ConnectionStatus;
@@ -30,8 +61,7 @@ function createLiveSocketStore() {
 
   function getWsUrl(): string {
     // Compute at call time — never during SSR
-    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    return `${proto}//${window.location.host}/api/v1/live/ws`;
+    return buildLiveWebSocketUrl(window.location);
   }
 
   function connect() {

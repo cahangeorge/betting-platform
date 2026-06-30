@@ -114,7 +114,7 @@ async def run_soccerdata(payload: dict) -> dict:
     )
 
 
-async def run_oddsharvester(args: list[str]) -> str:
+async def run_oddsharvester(args: list[str], *, timeout: int | None = None) -> str:
     python_bin = settings.resolved_oddsharvester_python
     if not python_bin or not Path(python_bin).exists():
         raise BridgeError(
@@ -130,18 +130,24 @@ async def run_oddsharvester(args: list[str]) -> str:
             stderr=asyncio.subprocess.PIPE,
             env={**os.environ, "PYTHONUNBUFFERED": "1"},
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=ODDSHARVESTER_TIMEOUT)
+        effective_timeout = timeout or ODDSHARVESTER_TIMEOUT
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=effective_timeout)
         if proc.returncode != 0:
             raise BridgeError(stderr.decode().strip() or f"OddsHarvester exited with code {proc.returncode}")
         return stdout.decode().strip()
     except asyncio.TimeoutError:
         proc.kill()
-        raise BridgeError(f"OddsHarvester request timed out after {ODDSHARVESTER_TIMEOUT}s")
+        raise BridgeError(f"OddsHarvester request timed out after {timeout or ODDSHARVESTER_TIMEOUT}s")
 
 
-async def run_oddsharvester_json(args: list[str], label: str = "oddsharvester") -> list[dict]:
+async def run_oddsharvester_json(
+    args: list[str],
+    label: str = "oddsharvester",
+    *,
+    timeout: int | None = None,
+) -> list[dict]:
     output_path = TEMP_DIR / f"{label}_{os.getpid()}_{abs(hash(tuple(args)))}.json"
-    raw_output = await run_oddsharvester([*args, "--output", str(output_path), "--format", "json"])
+    raw_output = await run_oddsharvester([*args, "--output", str(output_path), "--format", "json"], timeout=timeout)
 
     if not output_path.exists():
         raise BridgeError(

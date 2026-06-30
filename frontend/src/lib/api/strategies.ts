@@ -1,18 +1,12 @@
 import { ApiClient } from './client';
-import type { Strategy } from '$lib/types';
+import type { Strategy, StrategyCreateRequest } from '$lib/types';
 
 class StrategiesApi extends ApiClient {
 	async list(): Promise<Strategy[]> {
 		return this.get<Strategy[]>('/api/v1/strategies');
 	}
 
-	async create(data: {
-		name: string;
-		model_type: string;
-		description?: string;
-		parameters?: Record<string, unknown>;
-		weights?: Record<string, unknown>;
-	}): Promise<Strategy> {
+	async create(data: StrategyCreateRequest): Promise<Strategy> {
 		return this.post<Strategy>('/api/v1/strategies', data as unknown as Record<string, unknown>);
 	}
 
@@ -25,8 +19,9 @@ class StrategiesApi extends ApiClient {
 		data: Partial<{
 			name: string;
 			description: string;
+			model_type: string;
 			parameters: Record<string, unknown>;
-			weights: Record<string, unknown>;
+			weights: Record<string, unknown> | null;
 			is_active: boolean;
 		}>
 	): Promise<Strategy> {
@@ -38,6 +33,10 @@ class StrategiesApi extends ApiClient {
 
 	async remove(id: number): Promise<void> {
 		return this.del<void>(`/api/v1/strategies/${id}`);
+	}
+
+	async duplicate(id: number, name?: string): Promise<Strategy> {
+		return this.post<Strategy>(`/api/v1/strategies/${id}/duplicate`, { name });
 	}
 
 	async run(

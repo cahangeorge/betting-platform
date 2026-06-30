@@ -35,6 +35,9 @@ DIFFICULTY_TIERS = [
     {"level": 7, "label": "Maximum sevenfolds", "leg_count": 7, "difficulty": "expert"},
 ]
 COMBO_POOL_LIMIT = 80
+WORLD_CUP_UPCOMING_LONG_TIMEOUT_SECONDS = 1800
+WORLD_CUP_HISTORIC_MIN_PAGES = 3
+WORLD_CUP_HISTORIC_TIMEOUT_SECONDS = 2400
 
 
 def _parse_pipeline_datetime(value: str | None) -> datetime | None:
@@ -97,6 +100,31 @@ def _is_timeout_error(error: str | None) -> bool:
     return bool(error and "timed out" in error.lower())
 
 
+def _int_param(params: dict, key: str, default: int) -> int:
+    value = params.get(key, default)
+    if value in (None, ""):
+        return default
+    return int(value)
+
+
+def _optional_int_param(params: dict, key: str) -> int | None:
+    value = params.get(key)
+    if value in (None, ""):
+        return None
+    return int(value)
+
+
+def _bool_param(params: dict, key: str, default: bool) -> bool:
+    value = params.get(key, default)
+    if value in (None, ""):
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
 def _pipeline_errors(scrape_jobs: list[ScrapeJob], prediction_runs: list[PredictionRun]) -> list[dict]:
     return [
         {"type": "scrape", "id": job.id, "error": job.error}
@@ -112,7 +140,37 @@ def _pipeline_errors(scrape_jobs: list[ScrapeJob], prediction_runs: list[Predict
 def recent_world_cup_seasons(history_years: int, *, today: datetime | None = None) -> list[int]:
     now = today or datetime.now(timezone.utc)
     start_year = now.year - history_years
-    return [year for year in range(start_year, now.year) if year % 4 == 2]
+    return [year for year in range(now.year - 1, start_year - 1, -1) if year % 4 == 2]
+
+
+def selected_world_cup_seasons(
+    history_years: int,
+    *,
+    max_historic_seasons: int | None = None,
+    today: datetime | None = None,
+) -> list[int]:
+    seasons = recent_world_cup_seasons(history_years, today=today)
+    if max_historic_seasons is None:
+        return seasons
+    return seasons[:max(max_historic_seasons, 0)]
+
+
+def _world_cup_historic_max_pages(max_historic_pages: int | None) -> int:
+    if max_historic_pages is None:
+        return WORLD_CUP_HISTORIC_MIN_PAGES
+    return max(max_historic_pages, WORLD_CUP_HISTORIC_MIN_PAGES)
+
+
+def _world_cup_upcoming_timeout(
+    all_markets: bool,
+    odds_history: bool,
+    timeout_seconds: int | None = None,
+) -> int | None:
+    if timeout_seconds is not None:
+        return timeout_seconds
+    if all_markets or odds_history:
+        return WORLD_CUP_UPCOMING_LONG_TIMEOUT_SECONDS
+    return None
 
 
 def _world_cup_competition_clause():
@@ -176,6 +234,10 @@ async def _run_scrape_jobs(
     all_markets: bool,
     odds_history: bool,
     max_historic_pages: int | None,
+    max_historic_seasons: int | None = None,
+    upcoming_timeout_seconds: int | None = None,
+    historic_timeout_seconds: int | None = None,
+    scraper_engine: str = "playwright",
     target_date: str | None = None,
     parent_job_id: int | None = None,
 ) -> tuple[list[ScrapeJob], list[int]]:
@@ -190,24 +252,29 @@ async def _run_scrape_jobs(
         else [(now + timedelta(days=offset)).strftime("%Y%m%d") for offset in range(max(future_days, 1))]
     )
 
+    upcoming_timeout = _world_cup_upcoming_timeout(all_markets, odds_history, upcoming_timeout_seconds)
     for scrape_date_value in scrape_dates:
+        params = {
+            "command": "upcoming",
+            "sport": "football",
+            "leagues": [WORLD_CUP_LEAGUE_SLUG],
+            "date": scrape_date_value,
+            "markets": markets,
+            "all_markets": all_markets,
+            "odds_history": odds_history,
+            "headless": True,
+            "bookies_filter": "all",
+            "concurrency": 2,
+            "request_delay": 1.0,
+            "scraper_engine": scraper_engine,
+        }
+        if upcoming_timeout is not None:
+            params["timeout_seconds"] = upcoming_timeout
         job = await create_scrape_job(
             db,
             "scrape_odds",
             WORLD_CUP_LEAGUE_SLUG,
-            {
-                "command": "upcoming",
-                "sport": "football",
-                "leagues": [WORLD_CUP_LEAGUE_SLUG],
-                "date": scrape_date_value,
-                "markets": markets,
-                "all_markets": all_markets,
-                "odds_history": odds_history,
-                "headless": True,
-                "bookies_filter": "all",
-                "concurrency": 2,
-                "request_delay": 1.0,
-            },
+            params,
         )
         job.status = "running"
         job.started_at = datetime.now(timezone.utc)
@@ -228,7 +295,13 @@ async def _run_scrape_jobs(
             skipped_historic_seasons=skipped_historic_seasons,
         )
 
-    for season in recent_world_cup_seasons(history_years, today=now):
+    historic_max_pages = _world_cup_historic_max_pages(max_historic_pages)
+    historic_timeout = historic_timeout_seconds or WORLD_CUP_HISTORIC_TIMEOUT_SECONDS
+    for season in selected_world_cup_seasons(
+        history_years,
+        max_historic_seasons=max_historic_seasons,
+        today=now,
+    ):
         job = await create_scrape_job(
             db,
             "scrape_odds",
@@ -245,7 +318,9 @@ async def _run_scrape_jobs(
                 "bookies_filter": "all",
                 "concurrency": 2,
                 "request_delay": 1.0,
-                "max_pages": max_historic_pages,
+                "scraper_engine": scraper_engine,
+                "max_pages": historic_max_pages,
+                "timeout_seconds": historic_timeout,
             },
         )
         job.status = "running"
@@ -268,18 +343,13 @@ async def _run_scrape_jobs(
             skipped_historic_seasons=skipped_historic_seasons,
         )
         if jobs[-1].status == "failed" and _is_timeout_error(jobs[-1].error):
-            remaining_seasons = [
-                remaining for remaining in recent_world_cup_seasons(history_years, today=now) if remaining > season
-            ]
-            skipped_historic_seasons.extend(remaining_seasons)
             await _publish_pipeline_progress(
                 db,
                 parent_job_id,
-                stage=f"historic_timeout_skip_remaining_after_{season}",
+                stage=f"historic_timeout_continuing_after_{season}",
                 scrape_jobs=jobs,
                 skipped_historic_seasons=skipped_historic_seasons,
             )
-            break
 
     return jobs, skipped_historic_seasons
 
@@ -656,6 +726,10 @@ async def run_world_cup_pipeline(
     all_markets: bool = True,
     odds_history: bool = True,
     max_historic_pages: int | None = None,
+    max_historic_seasons: int | None = None,
+    upcoming_timeout_seconds: int | None = None,
+    historic_timeout_seconds: int | None = None,
+    scraper_engine: str = "playwright",
     ticket_count: int = 10,
     ticket_stake: float = 10.0,
     create_tickets: bool = True,
@@ -672,6 +746,10 @@ async def run_world_cup_pipeline(
         all_markets=all_markets,
         odds_history=odds_history,
         max_historic_pages=max_historic_pages,
+        max_historic_seasons=max_historic_seasons,
+        upcoming_timeout_seconds=upcoming_timeout_seconds,
+        historic_timeout_seconds=historic_timeout_seconds,
+        scraper_engine=scraper_engine,
         target_date=target_date,
         parent_job_id=parent_job_id,
     )
@@ -739,7 +817,17 @@ async def run_world_cup_pipeline(
             "target_date_from": target_date_from,
             "target_date_to": target_date_to,
             "history_years": history_years,
-            "historic_seasons": recent_world_cup_seasons(history_years),
+            "historic_seasons": selected_world_cup_seasons(
+                history_years,
+                max_historic_seasons=max_historic_seasons,
+            ),
+            "max_historic_seasons": max_historic_seasons,
+            "upcoming_timeout_seconds": _world_cup_upcoming_timeout(
+                all_markets,
+                odds_history,
+                upcoming_timeout_seconds,
+            ),
+            "historic_timeout_seconds": historic_timeout_seconds or WORLD_CUP_HISTORIC_TIMEOUT_SECONDS,
             "scrape_jobs": len(scrape_jobs),
             "completed_scrape_jobs": sum(1 for job in scrape_jobs if job.status == "completed"),
             "failed_scrape_jobs": sum(1 for job in scrape_jobs if job.status == "failed"),
@@ -788,16 +876,20 @@ async def execute_world_cup_pipeline_job(job_id: int, user_id: int) -> None:
                 db,
                 user_id=user_id,
                 parent_job_id=job.id,
-                future_days=int(params.get("future_days", 7) or 7),
-                history_years=int(params.get("history_years", 10) or 10),
-                all_markets=bool(params.get("all_markets", True)),
-                odds_history=bool(params.get("odds_history", True)),
-                max_historic_pages=params.get("max_historic_pages"),
-                ticket_count=int(params.get("ticket_count", 10) or 10),
+                future_days=_int_param(params, "future_days", 7),
+                history_years=_int_param(params, "history_years", 10),
+                all_markets=_bool_param(params, "all_markets", True),
+                odds_history=_bool_param(params, "odds_history", True),
+                max_historic_pages=_optional_int_param(params, "max_historic_pages"),
+                max_historic_seasons=_optional_int_param(params, "max_historic_seasons"),
+                upcoming_timeout_seconds=_optional_int_param(params, "upcoming_timeout_seconds"),
+                historic_timeout_seconds=_optional_int_param(params, "historic_timeout_seconds"),
+                scraper_engine=str(params.get("scraper_engine") or "playwright"),
+                ticket_count=_int_param(params, "ticket_count", 10),
                 ticket_stake=float(params.get("ticket_stake", 10.0) or 10.0),
-                create_tickets=bool(params.get("create_tickets", True)),
-                allow_experimental_tickets=bool(params.get("allow_experimental_tickets", False)),
-                training_limit=int(params.get("training_limit", 240) or 240),
+                create_tickets=_bool_param(params, "create_tickets", True),
+                allow_experimental_tickets=_bool_param(params, "allow_experimental_tickets", False),
+                training_limit=_int_param(params, "training_limit", 240),
                 target_date=params.get("target_date"),
                 target_date_from=params.get("target_date_from"),
                 target_date_to=params.get("target_date_to"),

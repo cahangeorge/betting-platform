@@ -1,5 +1,14 @@
 import type { LeagueInfo } from '$lib/types';
 
+export const HISTORY_PRESET_OPTIONS = [
+	{ value: '5', label: 'Last 5 years' },
+	{ value: '10', label: 'Last 10 years' },
+	{ value: '15', label: 'Last 15 years' },
+	{ value: '20', label: 'Last 20 years' },
+	{ value: '30', label: 'Last 30 years' },
+	{ value: '40', label: 'Last 40 years' }
+];
+
 export function isLeagueScrapeSelectable(league: Pick<LeagueInfo, 'scrape_slug'>): boolean {
 	return typeof league.scrape_slug === 'string' && league.scrape_slug.length > 0;
 }
@@ -51,7 +60,7 @@ export function buildFootballSeasonsFromDateRange(from: string, to: string): str
 	return seasons;
 }
 
-export function buildWorldCupSeasonsFromDateRange(from: string, to: string): string[] {
+export function buildWorldCupSeasonsFromDateRange(from: string, to: string, today = new Date()): string[] {
 	if (!from || !to) return [];
 
 	const startYear = new Date(`${from}T00:00:00`).getFullYear();
@@ -59,7 +68,9 @@ export function buildWorldCupSeasonsFromDateRange(from: string, to: string): str
 	if (Number.isNaN(startYear) || Number.isNaN(endYear) || startYear > endYear) return [];
 
 	const seasons: string[] = [];
-	for (let year = endYear - 1; year >= startYear; year -= 1) {
+	const currentYear = today.getFullYear();
+	for (let year = endYear; year >= startYear; year -= 1) {
+		if (year >= currentYear) continue;
 		if (year % 4 === 2) seasons.push(String(year));
 	}
 	return seasons;

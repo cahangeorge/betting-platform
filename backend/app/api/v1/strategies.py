@@ -1,3 +1,6 @@
+import hashlib
+import json
+from copy import deepcopy
 from datetime import datetime, time, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -9,19 +12,19 @@ from app.api.deps import get_current_user
 from app.api.v1.catalog import CATALOG
 from app.database import get_db
 from app.models.match import Match
-from app.models.prediction import ModelPrediction, PredictionRun
+from app.models.prediction import PredictionRun
 from app.models.strategy import Strategy
 from app.models.user import User
 from app.schemas.prediction import PredictionRunDetailResponse, PredictionRunResponse
 from app.schemas.strategy import (
     StrategyCreateRequest,
+    StrategyDuplicateRequest,
     StrategyResponse,
     StrategyRunRequest,
     StrategyRunResponse,
     StrategyUpdateRequest,
 )
-from app.services.prediction_engine import execute_single_model_run
-from app.services.prediction_engine import resolve_prediction_model_key
+from app.services.prediction_engine import execute_single_model_run, resolve_prediction_model_key
 from app.services.python_bridge import BridgeError
 
 router = APIRouter()
@@ -116,6 +119,51 @@ def _build_strategy_execution_config(strategy: Strategy) -> dict:
     }
 
 
+def _strategy_run_input_hash(
+    *,
+    strategy: Strategy,
+    execution_config: dict,
+    markets: list[str],
+    match_ids: list[int],
+    filters,
+) -> str:
+    filters_payload = {}
+    if filters is not None:
+        filters_payload = {
+            "countries": sorted(filters.countries),
+            "leagues": sorted(filters.leagues),
+            "date_from": filters.date_from,
+            "date_to": filters.date_to,
+        }
+
+    payload = {
+        "strategy_id": strategy.id,
+        "strategy_model_type": strategy.model_type,
+        "execution_config": execution_config,
+        "markets": sorted(markets),
+        "match_ids": sorted(match_ids),
+        "filters": filters_payload,
+    }
+    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:24]
+
+
+def _strategy_run_name(strategy: Strategy, input_hash: str) -> str:
+    return f"Strategy: {getattr(strategy, 'name', strategy.id)} | input:{input_hash}"
+
+
+def _build_strategy_duplicate(strategy: Strategy, *, name: str | None = None) -> Strategy:
+    copy_name = (name or "").strip() or f"Copy of {strategy.name}"
+    return Strategy(
+        name=copy_name,
+        description=strategy.description,
+        model_type=strategy.model_type,
+        parameters=deepcopy(strategy.parameters or {}),
+        weights=deepcopy(strategy.weights),
+        is_active=strategy.is_active,
+    )
+
+
 @router.get("", response_model=list[StrategyResponse])
 async def list_strategies(
     db: AsyncSession = Depends(get_db),
@@ -207,6 +255,26 @@ async def delete_strategy(
     await db.flush()
 
 
+@router.post("/{strategy_id}/duplicate", response_model=StrategyResponse, status_code=201)
+async def duplicate_strategy(
+    strategy_id: int,
+    body: StrategyDuplicateRequest,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    stmt = select(Strategy).where(Strategy.id == strategy_id)
+    result = await db.execute(stmt)
+    strategy = result.scalar_one_or_none()
+    if not strategy:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+
+    duplicate = _build_strategy_duplicate(strategy, name=body.name)
+    db.add(duplicate)
+    await db.flush()
+    await db.refresh(duplicate)
+    return duplicate
+
+
 @router.post("/{strategy_id}/run", response_model=StrategyRunResponse)
 async def run_strategy(
     strategy_id: int,
@@ -255,6 +323,36 @@ async def run_strategy(
     if not match_ids:
         return StrategyRunResponse(run_id=0, status="no_matches")
 
+    input_hash = _strategy_run_input_hash(
+        strategy=strategy,
+        execution_config=execution_config,
+        markets=markets,
+        match_ids=match_ids,
+        filters=body.filters,
+    )
+    run_name = _strategy_run_name(strategy, input_hash)
+
+    if body.avoid_reprediction:
+        existing_stmt = (
+            select(PredictionRun)
+            .where(
+                PredictionRun.user_id == user.id,
+                PredictionRun.name == run_name,
+                PredictionRun.status == "completed",
+            )
+            .order_by(PredictionRun.created_at.desc())
+            .limit(1)
+        )
+        existing_result = await db.execute(existing_stmt)
+        existing_run = existing_result.scalar_one_or_none()
+        if existing_run:
+            return StrategyRunResponse(
+                run_id=existing_run.id,
+                status="deduped",
+                matches_count=existing_run.matches_count,
+                deduped=True,
+            )
+
     # Fetch matches to group by league
     match_stmt = select(Match).where(Match.id.in_(match_ids))
     match_result = await db.execute(match_stmt)
@@ -271,7 +369,7 @@ async def run_strategy(
     # Create the prediction run
     run = PredictionRun(
         user_id=user.id,
-        name=f"Strategy: {strategy.name}",
+        name=run_name,
         model_type=strategy.model_type,
         ensemble=strategy.model_type == "ensemble",
         status="running",
@@ -311,7 +409,9 @@ async def run_strategy(
             if written == 0 and target_matches > 0:
                 message = f"{league}: prediction bridge produced no results for {target_matches} target matches"
                 league_errors.append(message)
-                per_league.append({"league": league, "status": "failed", "error": message, "matches": len(league_match_ids)})
+                per_league.append(
+                    {"league": league, "status": "failed", "error": message, "matches": len(league_match_ids)}
+                )
                 continue
 
             if failed > 0:
@@ -327,7 +427,9 @@ async def run_strategy(
                     }
                 )
             else:
-                per_league.append({"league": league, "status": "ok", "matches": len(league_match_ids), "written": written})
+                per_league.append(
+                    {"league": league, "status": "ok", "matches": len(league_match_ids), "written": written}
+                )
 
             total_written += written
         except ValueError as e:

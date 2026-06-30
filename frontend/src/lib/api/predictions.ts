@@ -5,7 +5,9 @@ import type {
 	PredictionModel,
 	EnsembleResult,
 	BacktestRequest,
-	BacktestResult
+	BacktestResult,
+	PaginatedResponse,
+	PredictionVerification
 } from '$lib/types';
 
 type ValueBetItem = {
@@ -41,6 +43,14 @@ class PredictionsApi extends ApiClient {
 		return this.get<PredictionRun[]>('/api/v1/predictions/runs');
 	}
 
+	async getRunsPage(params?: { page?: number; per_page?: number }): Promise<PaginatedResponse<PredictionRun>> {
+		const sp = new URLSearchParams();
+		if (params?.page !== undefined) sp.set('page', String(params.page));
+		if (params?.per_page !== undefined) sp.set('per_page', String(params.per_page));
+		const qs = sp.toString();
+		return this.get<PaginatedResponse<PredictionRun>>(`/api/v1/predictions/runs/page${qs ? `?${qs}` : ''}`);
+	}
+
 	async getRun(id: number): Promise<PredictionRun> {
 		return this.get<PredictionRun>(`/api/v1/predictions/runs/${id}`);
 	}
@@ -63,6 +73,11 @@ class PredictionsApi extends ApiClient {
 			roi: 0,
 			results: []
 		};
+	}
+
+	async verify(runId?: number): Promise<PredictionVerification> {
+		const params = runId ? `?run_id=${runId}` : '';
+		return this.get<PredictionVerification>(`/api/v1/predictions/verification${params}`);
 	}
 
 	async getValueBets(fetchFn?: typeof fetch): Promise<ValueBetFeed> {

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
@@ -17,10 +17,24 @@ from app.schemas.dashboard import (
     DashboardSummary,
     DashboardTicket,
     DashboardTicketLeg,
+    DashboardTicketOutcomeBucket,
+    DashboardTicketOutcomeResponse,
     DashboardUpcomingMatch,
 )
 
 router = APIRouter()
+
+_DASHBOARD_RANGE_DAYS = {
+    "today": 1,
+    "7d": 7,
+    "week": 7,
+    "1m": 31,
+    "month": 31,
+    "3m": 93,
+    "6m": 186,
+    "1y": 366,
+    "year": 366,
+}
 
 
 def _parse_dashboard_datetime(value: str, *, end_of_day: bool = False) -> datetime:
@@ -38,6 +52,71 @@ def _parse_dashboard_datetime(value: str, *, end_of_day: bool = False) -> dateti
         parsed = parsed + timedelta(days=1) - timedelta(microseconds=1)
 
     return parsed
+
+
+def _dashboard_day_start(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _dashboard_range_bounds(range_key: str, *, now: datetime | None = None) -> tuple[datetime, datetime]:
+    days = _DASHBOARD_RANGE_DAYS.get(range_key)
+    if days is None:
+        valid_ranges = ", ".join(sorted(_DASHBOARD_RANGE_DAYS))
+        raise HTTPException(status_code=400, detail=f"Invalid range '{range_key}'. Valid values: {valid_ranges}")
+
+    today_start = _dashboard_day_start(now or datetime.now(timezone.utc))
+    start = today_start if days == 1 else today_start - timedelta(days=days - 1)
+    end = today_start + timedelta(days=1)
+    return start, end
+
+
+def _build_ticket_outcome_buckets(
+    tickets: list[Ticket],
+    *,
+    range_key: str,
+    start: datetime,
+    end: datetime,
+) -> DashboardTicketOutcomeResponse:
+    bucket_count = max((end.date() - start.date()).days, 1)
+    buckets: list[DashboardTicketOutcomeBucket] = []
+    bucket_by_date: dict[date, DashboardTicketOutcomeBucket] = {}
+
+    for index in range(bucket_count):
+        bucket_start = start + timedelta(days=index)
+        bucket = DashboardTicketOutcomeBucket(
+            bucket_start=bucket_start,
+            bucket_end=bucket_start + timedelta(days=1),
+            ticket_ids=[],
+        )
+        buckets.append(bucket)
+        bucket_by_date[bucket_start.date()] = bucket
+
+    for ticket in tickets:
+        created_at = ticket.created_at
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        else:
+            created_at = created_at.astimezone(timezone.utc)
+        bucket = bucket_by_date.get(created_at.date())
+        if bucket is None:
+            continue
+
+        status = (ticket.status or "").lower()
+        if status == "won":
+            bucket.won += 1
+        elif status == "lost":
+            bucket.lost += 1
+        elif status in {"void", "cancelled", "canceled"}:
+            bucket.void += 1
+        else:
+            bucket.pending += 1
+        bucket.ticket_ids.append(ticket.id)
+
+    return DashboardTicketOutcomeResponse(range=range_key, bucket="day", items=buckets)
 
 
 @router.get("/summary", response_model=DashboardSummary)
@@ -84,6 +163,48 @@ async def get_summary(
         total_pnl=round(total_pnl, 2),
         active_bankroll=round(active_bankroll, 2),
         pending_bets=pending_bets,
+    )
+
+
+@router.get("/ticket-outcomes", response_model=DashboardTicketOutcomeResponse)
+async def get_ticket_outcomes(
+    range: str = Query("7d", description="today, 7d/week, 1m/month, 3m, 6m, 1y/year"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    start, end = _dashboard_range_bounds(range)
+    stmt = (
+        select(Ticket)
+        .where(
+            Ticket.user_id == user.id,
+            Ticket.created_at >= start,
+            Ticket.created_at < end,
+        )
+        .order_by(Ticket.created_at.asc())
+    )
+    result = await db.execute(stmt)
+    return _build_ticket_outcome_buckets(
+        list(result.scalars().all()),
+        range_key=range,
+        start=start,
+        end=end,
+    )
+
+
+@router.get("/ticket-outcomes/tickets", response_model=list[DashboardTicket])
+async def get_ticket_outcome_details(
+    date_from: str,
+    date_to: str,
+    limit: int = Query(100, ge=1, le=250),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    return await get_recent_tickets(
+        limit=limit,
+        date_from=date_from,
+        date_to=date_to,
+        db=db,
+        user=user,
     )
 
 

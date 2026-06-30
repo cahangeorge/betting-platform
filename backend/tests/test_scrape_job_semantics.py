@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
@@ -9,9 +9,16 @@ from app.services.python_bridge import BridgeError
 
 
 class _FakeSession:
-    def __init__(self, job=None):
+    def __init__(self, job=None, duplicate_jobs=None):
         self.job = job
+        self.duplicate_jobs = duplicate_jobs or []
+        self.added = []
         self.flush_calls = 0
+
+    def add(self, obj):
+        if getattr(obj, "id", None) is None:
+            obj.id = len(self.added) + 1
+        self.added.append(obj)
 
     async def get(self, model, pk):
         if self.job is not None and pk == getattr(self.job, "id", None):
@@ -20,6 +27,25 @@ class _FakeSession:
 
     async def flush(self):
         self.flush_calls += 1
+
+    async def execute(self, stmt):
+        return _FakeExecuteResult(self.duplicate_jobs)
+
+
+class _FakeExecuteResult:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def scalars(self):
+        return _FakeScalarResult(self.rows)
+
+
+class _FakeScalarResult:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def all(self):
+        return self.rows
 
 
 @pytest.mark.asyncio
@@ -37,9 +63,10 @@ async def test_execute_scrape_job_completes_and_persists_ingestion_summary(monke
     )
     db = _FakeSession(job=job)
 
-    async def fake_bridge(args, label):
+    async def fake_bridge(args, label, *, timeout=None):
         assert "--sport" in args
         assert label == "scrape_job_5"
+        assert timeout is None
         return [{"home_team": "A", "away_team": "B"}]
 
     async def fake_ingest(session, bound_job, payload):
@@ -65,6 +92,8 @@ async def test_execute_scrape_job_completes_and_persists_ingestion_summary(monke
     assert isinstance(job.completed_at, datetime)
     assert job.error is None
     assert db.flush_calls >= 2
+    log_actions = [obj.action for obj in db.added if obj.__class__.__name__ == "ScrapeJobLog"]
+    assert log_actions == ["job_started", "engine_selected", "bridge_invocation", "job_completed"]
 
 
 @pytest.mark.asyncio
@@ -90,7 +119,8 @@ async def test_execute_scrape_job_marks_failed_on_bridge_error(monkeypatch):
     )
     db = _FakeSession(job=job)
 
-    async def fake_bridge(args, label):
+    async def fake_bridge(args, label, *, timeout=None):
+        assert timeout is None
         raise BridgeError("OddsHarvester bridge failed")
 
     monkeypatch.setattr(scraper, "run_oddsharvester_json", fake_bridge)
@@ -103,6 +133,57 @@ async def test_execute_scrape_job_marks_failed_on_bridge_error(monkeypatch):
     assert job.output is None
     assert job.started_at is not None
     assert job.completed_at is not None
+    log_actions = [obj.action for obj in db.added if obj.__class__.__name__ == "ScrapeJobLog"]
+    assert log_actions == ["job_started", "engine_selected", "bridge_invocation", "job_failed"]
+
+
+@pytest.mark.asyncio
+async def test_execute_scrape_job_skips_duplicate_when_avoid_rescraping_requested(monkeypatch):
+    duplicate = SimpleNamespace(
+        id=3,
+        job_type="scrape_odds",
+        status="completed",
+        league="world-cup",
+        params={"command": "historic", "season": "2022", "leagues": ["world-cup"], "sport": "football"},
+        output='{"dataset_id": 17}',
+    )
+    job = SimpleNamespace(
+        id=9,
+        job_type="scrape_odds",
+        status="pending",
+        league="world-cup",
+        params={
+            "dedup_skip_requested": True,
+            "command": "historic",
+            "season": "2022",
+            "leagues": ["world-cup"],
+            "sport": "football",
+        },
+        started_at=None,
+        completed_at=None,
+        output=None,
+        error=None,
+    )
+    db = _FakeSession(job=job, duplicate_jobs=[duplicate])
+
+    async def fail_bridge(args, label, *, timeout=None):
+        assert timeout is None
+        raise AssertionError("scraper bridge should not run for duplicate jobs")
+
+    monkeypatch.setattr(scraper, "run_oddsharvester_json", fail_bridge)
+
+    result = await scraper.execute_scrape_job(db, 9)
+
+    assert result is job
+    assert job.status == "completed"
+    assert json.loads(job.output) == {
+        "skipped": True,
+        "reason": "duplicate_completed_job",
+        "reused_job_id": 3,
+    }
+    assert job.completed_at is not None
+    log_actions = [obj.action for obj in db.added if obj.__class__.__name__ == "ScrapeJobLog"]
+    assert log_actions == ["job_started", "rescrape_skipped"]
 
 
 def test_build_oddsharvester_args_supports_historic_all_markets():
@@ -120,6 +201,7 @@ def test_build_oddsharvester_args_supports_historic_all_markets():
             "max_pages": 4,
             "concurrency": 2,
             "request_delay": 1.0,
+            "preview_submarkets_only": True,
         },
     )
 
@@ -131,6 +213,7 @@ def test_build_oddsharvester_args_supports_historic_all_markets():
     assert args[args.index("--season") + 1] == "2022"
     assert "--max-pages" in args
     assert "--odds-history" in args
+    assert "--preview-only" in args
     assert "--headless" in args
     assert "--market" in args
     markets = args[args.index("--market") + 1].split(",")
@@ -139,3 +222,61 @@ def test_build_oddsharvester_args_supports_historic_all_markets():
     assert "over_under_2_5" in markets
     assert "double_chance" in markets
     assert "asian_handicap_0" in markets
+
+
+def test_build_oddsharvester_args_forwards_scraper_engine():
+    job = SimpleNamespace(
+        league="world-cup",
+        params={
+            "command": "upcoming",
+            "sport": "football",
+            "leagues": ["world-cup"],
+            "date": "20260625",
+            "scraper_engine": "auto",
+        },
+    )
+
+    args = scraper._build_oddsharvester_args(job)
+
+    assert "--engine" in args
+    assert args[args.index("--engine") + 1] == "auto"
+
+
+@pytest.mark.asyncio
+async def test_execute_scrape_job_passes_per_job_timeout_to_oddsharvester(monkeypatch):
+    job = SimpleNamespace(
+        id=12,
+        job_type="scrape_odds",
+        status="pending",
+        league="world-cup",
+        params={
+            "command": "historic",
+            "sport": "football",
+            "leagues": ["world-cup"],
+            "season": "2018",
+            "timeout_seconds": 2400,
+        },
+        started_at=None,
+        completed_at=None,
+        output=None,
+        error=None,
+    )
+    db = _FakeSession(job=job)
+
+    async def fake_bridge(args, label, *, timeout=None):
+        assert label == "scrape_job_12"
+        assert timeout == 2400
+        assert args[:3] == ["historic", "--sport", "football"]
+        return [{"home_team": "A", "away_team": "B"}]
+
+    async def fake_ingest(_session, _job, _payload):
+        return {"dataset_id": 99, "matches_count": 1, "matches_upserted": 1, "odds_written": 0}
+
+    monkeypatch.setattr(scraper, "run_oddsharvester_json", fake_bridge)
+    monkeypatch.setattr(scraper, "_ingest_scraped_payload", fake_ingest)
+
+    result = await scraper.execute_scrape_job(db, 12)
+
+    assert result.status == "completed"
+    bridge_logs = [obj for obj in db.added if getattr(obj, "action", None) == "bridge_invocation"]
+    assert bridge_logs[0].metadata_json["timeout_seconds"] == 2400

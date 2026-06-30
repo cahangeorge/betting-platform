@@ -8,16 +8,21 @@
 	import Select from '$lib/components/ui/Select.svelte';
 	import Skeleton from '$lib/components/ui/skeleton/skeleton.svelte';
 	import Separator from '$lib/components/ui/separator/separator.svelte';
+	import { jobsApi } from '$lib/api/jobs';
+	import { ApiClientError } from '$lib/api/client';
+	import { apiBaseUrl } from '$lib/api/base';
+	import { cronFromInterval, describeScheduledJob, scheduledJobsForArea } from '$lib/scheduled-jobs.helpers';
 	import { cn } from '$lib/utils';
-	import type { Country, LeagueInfo, ScrapeJob } from '$lib/types';
+	import type { Country, LeagueInfo, ScheduledJob, ScrapeJob, ScrapeJobLogEntry, ScrapeJobLogPage } from '$lib/types';
 	import {
+		HISTORY_PRESET_OPTIONS,
 		buildHistoricSeasons,
 		buildHistoryDateRange,
 		buildScrapeLeagueSlugs,
 		isLeagueScrapeSelectable
 	} from './catalog.helpers';
 
-	const BASE_URL = '';
+	const BASE_URL = apiBaseUrl();
 
 	type WorldCupPipelineSummary = {
 		future_days: number;
@@ -122,23 +127,39 @@
 	let pastFrom = $state('');
 	let pastTo = $state('');
 	let historyPresetYears = $state('10');
-	let historicMaxPages = $state('1');
+	let historicMaxPages = $state('3');
+	let historicDays = $state('0');
+	let historicWeeks = $state('0');
+	let historicMonths = $state('0');
+	let historicYears = $state('10');
 
 	// Future Matches
 	let futureEnabled = $state(true);
-	let futureNumber = $state('7');
-	let futureUnit = $state('Days');
+	let futureDays = $state('7');
+	let futureWeeks = $state('0');
+	let futureMonths = $state('0');
+	let futureYears = $state('0');
 
 	// Options
 	let autoScrape = $state(false);
 	let autoIntervalNumber = $state('24');
 	let autoIntervalUnit = $state('Hours');
+	let scraperEngine = $state('auto');
 	let dedupSkip = $state(true);
 
 	// Jobs
 	let jobs = $state<ScrapeJob[]>([]);
 	let loadingJobs = $state(true);
+	let scheduledJobs = $state<ScheduledJob[]>([]);
+	let loadingScheduledJobs = $state(true);
+	let scheduledJobsError = $state('');
+	let savingScheduledJob = $state(false);
 	let expandedJobId = $state<number | null>(null);
+	let logsPanelOpen = $state(false);
+	let loadingJobLogs = $state(false);
+	let selectedLogJobId = $state<number | null>(null);
+	let jobLogs = $state<ScrapeJobLogEntry[]>([]);
+	let jobLogsError = $state('');
 
 	// Submit
 	let submitting = $state(false);
@@ -196,12 +217,7 @@
 		}
 	});
 
-	const unitOptions = [
-		{ value: 'Days', label: 'Days' },
-		{ value: 'Weeks', label: 'Weeks' },
-		{ value: 'Months', label: 'Months' },
-		{ value: 'Years', label: 'Years' }
-	];
+	const automaticScrapeJobs = $derived(scheduledJobsForArea(scheduledJobs, 'scrape'));
 
 	const intervalUnitOptions = [
 		{ value: 'Hours', label: 'Hours' },
@@ -209,14 +225,38 @@
 		{ value: 'Weeks', label: 'Weeks' }
 	];
 
-	const historyPresetOptions = [
-		{ value: '5', label: 'Last 5 years' },
-		{ value: '10', label: 'Last 10 years' },
-		{ value: '15', label: 'Last 15 years' },
-		{ value: '20', label: 'Last 20 years' }
+	const scraperEngineOptions = [
+		{ value: 'auto', label: 'Auto: Scrapling then Playwright fallback' },
+		{ value: 'playwright', label: 'Playwright only (safest compatibility)' },
+		{ value: 'scrapling-http', label: 'Scrapling HTTP only (fast core markets)' },
+		{ value: 'scrapling-stealth', label: 'Scrapling stealth browser only' }
 	];
 
+	const historyPresetOptions = HISTORY_PRESET_OPTIONS;
+
 	const historicSeasonPreview = $derived(buildHistoricSeasons(pastFrom, pastTo, buildScrapeLeagueSlugs(allLeagues, selectedLeagues)));
+
+	const historicIntervalDays = $derived(
+		intervalToDays(historicDays, historicWeeks, historicMonths, historicYears)
+	);
+
+	const futureIntervalDays = $derived(
+		intervalToDays(futureDays, futureWeeks, futureMonths, futureYears)
+	);
+
+	const unsupportedControlNotes = $derived.by(() => {
+		const notes: string[] = [];
+		if (dedupSkip) {
+			notes.push('Avoid re-scraping is enforced by the backend for duplicate completed jobs with the same scrape inputs.');
+		}
+		if (autoScrape) {
+			notes.push('Autoscrape can be saved as a persistent /api/v1/jobs action with the Save autoscrape button above.');
+		}
+		if (pastEnabled && (positiveInteger(historicDays) > 0 || positiveInteger(historicWeeks) > 0 || positiveInteger(historicMonths) > 0)) {
+			notes.push('Historic day/week/month inputs are converted to a date range and seasons; OddsHarvester historic execution supports seasons, not exact historic day windows.');
+		}
+		return notes;
+	});
 
 	// --- Data Fetching ---
 	async function fetchCatalog() {
@@ -238,16 +278,125 @@
 			const res = await fetch(`${BASE_URL}/api/v1/data/scrape`, { credentials: 'include' });
 			if (res.ok) {
 				jobs = await res.json();
+				if (selectedLogJobId === null && jobs.length > 0) {
+					selectedLogJobId = jobs[0].id;
+				}
 			}
 		} catch {
 			// silently handle
 		} finally {
 			loadingJobs = false;
 		}
+
+		if (logsPanelOpen) {
+			void fetchJobLogs(selectedLogJobId ?? jobs[0]?.id ?? null);
+		}
+	}
+
+	async function fetchScheduledJobs() {
+		loadingScheduledJobs = true;
+		scheduledJobsError = '';
+		try {
+			scheduledJobs = await jobsApi.getScheduledJobs();
+		} catch (err) {
+			scheduledJobsError = err instanceof ApiClientError ? err.message : 'Scheduled scraping jobs are unavailable';
+		} finally {
+			loadingScheduledJobs = false;
+		}
+	}
+
+	async function toggleScheduledJob(jobId: number) {
+		scheduledJobsError = '';
+		try {
+			const updated = await jobsApi.toggleJob(jobId);
+			scheduledJobs = scheduledJobs.map((job) => (job.id === jobId ? updated : job));
+		} catch (err) {
+			scheduledJobsError = err instanceof ApiClientError ? err.message : 'Could not toggle scheduled scraping job';
+		}
+	}
+
+	async function saveAutomaticScrapeAction() {
+		savingScheduledJob = true;
+		scheduledJobsError = '';
+		try {
+			const scrapeLeagueSlugs = buildScrapeLeagueSlugs(allLeagues, selectedLeagues);
+			const created = await jobsApi.createScheduledJob({
+				name: `Autoscrape ${selectedLeagues.length > 0 ? selectedLeagues.length : 'all'} league${selectedLeagues.length === 1 ? '' : 's'}`,
+				task_type: 'scrape_odds',
+				cron_expression: cronFromInterval(autoIntervalNumber, autoIntervalUnit),
+				config: {
+					source_page: 'scrape',
+					area: 'scrape',
+					params: {
+						...buildBaseScrapeParams(scrapeLeagueSlugs),
+						command: 'upcoming',
+						future_days: futureIntervalDays,
+						future_range: {
+							days: positiveInteger(futureDays),
+							weeks: positiveInteger(futureWeeks),
+							months: positiveInteger(futureMonths),
+							years: positiveInteger(futureYears)
+						},
+						historic_range_days: historicIntervalDays,
+						past_from: pastFrom || undefined,
+						past_to: pastTo || undefined
+					}
+				}
+			});
+			scheduledJobs = [created, ...scheduledJobs.filter((job) => job.id !== created.id)];
+		} catch (err) {
+			scheduledJobsError = err instanceof ApiClientError ? err.message : 'Could not save automatic scraping action';
+		} finally {
+			savingScheduledJob = false;
+		}
+	}
+
+	async function fetchJobLogs(jobId = selectedLogJobId) {
+		if (jobId === null) {
+			jobLogs = [];
+			jobLogsError = 'Select a scrape job to view its logs';
+			return;
+		}
+
+		selectedLogJobId = jobId;
+		loadingJobLogs = true;
+		jobLogsError = '';
+		try {
+			const res = await fetch(`${BASE_URL}/api/v1/data/scrape/${jobId}/logs?page=1&per_page=200`, { credentials: 'include' });
+			if (!res.ok) {
+				const err = await res.json().catch(() => ({ detail: 'Scrape job logs are unavailable' }));
+				throw new Error(err.detail || `HTTP ${res.status}`);
+			}
+			const payload = (await res.json()) as ScrapeJobLogPage;
+			jobLogs = payload.items;
+		} catch (err) {
+			jobLogs = [];
+			jobLogsError = err instanceof Error ? err.message : 'Scrape job logs are unavailable';
+		} finally {
+			loadingJobLogs = false;
+		}
+	}
+
+	function positiveInteger(value: string): number {
+		const parsed = Number.parseInt(value, 10);
+		return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+	}
+
+	function intervalToDays(days: string, weeks: string, months: string, years: string): number {
+		return (
+			positiveInteger(days) +
+			positiveInteger(weeks) * 7 +
+			positiveInteger(months) * 30 +
+			positiveInteger(years) * 365
+		);
 	}
 
 	function applyHistoryPreset(yearsValue = historyPresetYears) {
 		const years = Number.parseInt(yearsValue, 10) || 10;
+		historicDays = '0';
+		historicWeeks = '0';
+		historicMonths = '0';
+		historicYears = String(years);
 		const range = buildHistoryDateRange(years);
 		pastEnabled = true;
 		pastFrom = range.from;
@@ -255,15 +404,33 @@
 		historyPresetYears = String(years);
 	}
 
+	function applyHistoricInterval() {
+		const days = historicIntervalDays;
+		if (days <= 0) return;
+		const end = new Date();
+		const start = new Date();
+		start.setDate(start.getDate() - days);
+		pastEnabled = true;
+		pastFrom = localDateString(start);
+		pastTo = localDateString(end);
+		historyPresetYears = String(positiveInteger(historicYears));
+	}
+
 	function buildBaseScrapeParams(scrapeLeagueSlugs: string[]): Record<string, unknown> {
 		const params: Record<string, unknown> = {
 			countries: selectedCountries,
 			leagues: scrapeLeagueSlugs,
-			dedup_skip: dedupSkip,
-			auto_scrape: autoScrape,
 			sport: 'football',
-			headless: true
+			headless: true,
+			scraper_engine: scraperEngine
 		};
+
+		if (dedupSkip) {
+			params.dedup_skip_requested = true;
+		}
+		if (autoScrape) {
+			params.auto_scrape_requested = true;
+		}
 
 		if (autoScrape) {
 			const num = parseInt(autoIntervalNumber, 10) || 24;
@@ -288,7 +455,7 @@
 		}
 
 		const createdJob = (await createRes.json()) as { id: number };
-		const executeRes = await fetch(`${BASE_URL}/api/v1/data/scrape/${createdJob.id}/execute`, {
+		const executeRes = await fetch(`${BASE_URL}/api/v1/data/scrape/${createdJob.id}/execute-background`, {
 			method: 'POST',
 			credentials: 'include'
 		});
@@ -331,13 +498,18 @@
 			const baseParams = buildBaseScrapeParams(scrapeLeagueSlugs);
 			const createdJobIds: number[] = [];
 
+			if (pastEnabled && (!pastFrom || !pastTo)) {
+				applyHistoricInterval();
+			}
+
 			if (pastEnabled && pastFrom && pastTo) {
 				const seasons = buildHistoricSeasons(pastFrom, pastTo, scrapeLeagueSlugs);
 				if (seasons.length === 0) {
 					throw new Error('No historical seasons found for the selected range');
 				}
 
-				const maxPages = Number.parseInt(historicMaxPages, 10) || 1;
+				const maxPages = Number.parseInt(historicMaxPages, 10) || 3;
+				const isWorldCupOnly = scrapeLeagueSlugs.length > 0 && scrapeLeagueSlugs.every((slug) => slug === 'world-cup');
 				for (const season of seasons) {
 					const jobId = await createAndExecuteScrapeJob(
 						{
@@ -346,8 +518,10 @@
 							season,
 							past_from: pastFrom,
 							past_to: pastTo,
+							historic_range_days: historicIntervalDays || undefined,
 							history_years: Number.parseInt(historyPresetYears, 10) || undefined,
-							max_pages: maxPages
+							max_pages: isWorldCupOnly ? Math.max(maxPages, 3) : maxPages,
+							timeout_seconds: isWorldCupOnly ? 2400 : undefined
 						},
 						scrapeLeagueSlugs.length === 1 ? scrapeLeagueSlugs[0] : undefined
 					);
@@ -355,13 +529,17 @@
 				}
 			}
 
-			if (futureEnabled && futureNumber) {
-				const num = parseInt(futureNumber, 10);
-				const futureDays = futureUnit === 'Days' ? num : num * (futureUnit === 'Weeks' ? 7 : futureUnit === 'Months' ? 30 : 365);
+			if (futureEnabled && futureIntervalDays > 0) {
 				const jobId = await createAndExecuteScrapeJob({
 					...baseParams,
 					command: 'upcoming',
-					future_days: futureDays
+					future_days: futureIntervalDays,
+					future_range: {
+						days: positiveInteger(futureDays),
+						weeks: positiveInteger(futureWeeks),
+						months: positiveInteger(futureMonths),
+						years: positiveInteger(futureYears)
+					}
 				});
 				createdJobIds.push(jobId);
 			}
@@ -370,7 +548,7 @@
 				throw new Error('Enable past history or future matches before starting scrape');
 			}
 
-			submitSuccess = `Started ${createdJobIds.length} scrape job${createdJobIds.length === 1 ? '' : 's'} successfully`;
+			submitSuccess = `Queued ${createdJobIds.length} scrape job${createdJobIds.length === 1 ? '' : 's'} successfully`;
 			await fetchJobs();
 			setTimeout(() => (submitSuccess = ''), 4000);
 		} catch (err) {
@@ -403,6 +581,7 @@
 					all_markets: false,
 					odds_history: false,
 					max_historic_pages: 1,
+					scraper_engine: scraperEngine,
 					ticket_count: ticketCount,
 					ticket_stake: ticketStake,
 					create_tickets: true,
@@ -465,6 +644,19 @@
 		expandedJobId = expandedJobId === id ? null : id;
 	}
 
+	function toggleLogsPanel() {
+		logsPanelOpen = !logsPanelOpen;
+		if (logsPanelOpen && jobLogs.length === 0) {
+			void fetchJobLogs(selectedLogJobId ?? jobs[0]?.id ?? null);
+		}
+	}
+
+	function openLogsForJob(jobId: number) {
+		selectedLogJobId = jobId;
+		logsPanelOpen = true;
+		void fetchJobLogs(jobId);
+	}
+
 	function formatDuration(created: string, completed: string | null): string {
 		if (!completed) return '—';
 		const ms = new Date(completed).getTime() - new Date(created).getTime();
@@ -474,7 +666,7 @@
 		return `${mins}m ${secs % 60}s`;
 	}
 
-	function statusVariant(status: string): 'success' | 'warning' | 'danger' | 'info' {
+	function statusVariant(status: string): 'default' | 'success' | 'warning' | 'danger' | 'info' {
 		const map: Record<string, 'success' | 'warning' | 'danger' | 'info'> = {
 			completed: 'success',
 			running: 'warning',
@@ -483,6 +675,14 @@
 			cancelled: 'danger'
 		};
 		return map[status] ?? 'default';
+	}
+
+	function logLevelVariant(level: string): 'default' | 'success' | 'warning' | 'danger' | 'info' | 'neutral' {
+		const normalized = level.toLowerCase();
+		if (normalized === 'error') return 'danger';
+		if (normalized === 'warning' || normalized === 'warn') return 'warning';
+		if (normalized === 'debug') return 'neutral';
+		return 'info';
 	}
 
 	function jobLabel(job: ScrapeJob): string {
@@ -508,6 +708,7 @@
 		applyHistoryPreset(historyPresetYears);
 		fetchCatalog();
 		fetchJobs();
+		fetchScheduledJobs();
 		pollTimer = setInterval(fetchJobs, 10000);
 		return () => {
 			if (pollTimer) clearInterval(pollTimer);
@@ -515,14 +716,63 @@
 	});
 </script>
 
-<div class="max-w-4xl mx-auto space-y-8" transition:fade={{ duration: 200 }}>
+<div class="mx-auto max-w-4xl space-y-8 overflow-hidden" transition:fade={{ duration: 200 }}>
 		<div>
 			<h1 class="text-2xl font-extrabold font-sport text-foreground">SCRAPING</h1>
 			<p class="mt-1 text-muted-foreground">Configure and run data scraping jobs for odds and match data</p>
 		</div>
 
-		<Card title="World Cup Pipeline" variant="prediction">
+		<Card title="Automatic scraping actions" variant="prediction">
 			<div class="space-y-5">
+				<div class="space-y-3 border border-border bg-muted/20 p-3">
+					<div class="flex flex-wrap items-center justify-between gap-2">
+						<div>
+							<p class="text-sm font-semibold text-foreground">Scraping-uri automate salvate</p>
+							<p class="text-xs text-muted-foreground">
+								Butoanele de mai jos vin din endpoint-ul persistent <span class="font-mono">/api/v1/jobs</span>.
+							</p>
+						</div>
+						<div class="flex flex-wrap gap-2">
+							<Button variant="secondary" size="sm" onclick={fetchScheduledJobs} disabled={loadingScheduledJobs}>
+								Refresh
+							</Button>
+							<Button variant="glow" size="sm" onclick={saveAutomaticScrapeAction} disabled={savingScheduledJob}>
+								{savingScheduledJob ? 'Saving...' : 'Save autoscrape'}
+							</Button>
+						</div>
+					</div>
+
+					{#if scheduledJobsError}
+						<p class="text-xs text-destructive">{scheduledJobsError}</p>
+					{/if}
+
+					{#if loadingScheduledJobs}
+						<p class="text-xs text-muted-foreground">Loading saved scraping actions...</p>
+					{:else if automaticScrapeJobs.length === 0}
+						<p class="text-xs text-muted-foreground">Nu exista inca scraping-uri automate salvate.</p>
+					{:else}
+						<div class="flex flex-wrap gap-2">
+							{#each automaticScrapeJobs as scheduledJob (scheduledJob.id)}
+								<Button
+									variant={scheduledJob.enabled ? 'secondary' : 'ghost'}
+									size="sm"
+									title={describeScheduledJob(scheduledJob)}
+									onclick={() => toggleScheduledJob(scheduledJob.id)}
+								>
+									{scheduledJob.name}
+									<span class="ml-1 font-mono text-[10px]">
+										{scheduledJob.enabled ? 'running' : 'paused'}
+									</span>
+								</Button>
+							{/each}
+						</div>
+					{/if}
+				</div>
+
+				<div>
+					<p class="text-sm font-semibold text-foreground">World Cup ticket pipeline</p>
+					<p class="text-xs text-muted-foreground">Runs the existing backend pipeline. Historical league scraping below stays separate and editable.</p>
+				</div>
 				<div class="grid grid-cols-2 md:grid-cols-4 gap-3">
 					<div class="border border-border bg-muted/30 p-3">
 						<p class="text-[10px] uppercase tracking-wide text-muted-foreground">Target date</p>
@@ -822,8 +1072,8 @@
 			</div>
 		</Card>
 
-		<!-- Section 1: Country / League Selectors -->
-	<Card title="Data Selection" variant="data">
+		<!-- Section 2: Data selection -->
+	<Card title="Selectie de date" variant="data">
 		<div class="space-y-6">
 			<!-- Countries -->
 			<div>
@@ -933,8 +1183,8 @@
 		</div>
 	</Card>
 
-	<!-- Section 2: Time Period -->
-	<Card title="Time Period" variant="data">
+	<!-- Section 3: Historic and future ranges -->
+	<Card title="Historic/future ranges" variant="data">
 		<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
 			<!-- Past History -->
 			<div class="space-y-3">
@@ -952,6 +1202,18 @@
 				</div>
 				{#if pastEnabled}
 					<div class="space-y-3" transition:slide={{ duration: 200 }}>
+						<div class="grid grid-cols-2 gap-2 md:grid-cols-4">
+							<Input label="Historic days" name="scrape-historic-days" type="number" min="0" bind:value={historicDays} />
+							<Input label="Historic weeks" name="scrape-historic-weeks" type="number" min="0" bind:value={historicWeeks} />
+							<Input label="Historic months" name="scrape-historic-months" type="number" min="0" bind:value={historicMonths} />
+							<Input label="Historic years" name="scrape-historic-years" type="number" min="0" bind:value={historicYears} />
+						</div>
+						<div class="flex flex-wrap items-center gap-2">
+							<Button variant="secondary" size="sm" onclick={applyHistoricInterval} disabled={historicIntervalDays <= 0}>
+								Apply interval ({historicIntervalDays} days)
+							</Button>
+							<span class="text-xs text-muted-foreground">Backend historic scraping executes seasons derived from this range.</span>
+						</div>
 						<div class="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto]">
 							<div>
 								<label for="scrape-history-preset" class="text-xs text-muted-foreground mb-1 block">History preset</label>
@@ -1013,13 +1275,15 @@
 					</label>
 				</div>
 				{#if futureEnabled}
-					<div class="flex items-end gap-2" transition:slide={{ duration: 200 }}>
-						<div class="flex-1">
-							<label for="scrape-future-number" class="text-xs text-muted-foreground mb-1 block">Number</label>
-							<Input id="scrape-future-number" type="number" bind:value={futureNumber} placeholder="7" />
+					<div class="space-y-3" transition:slide={{ duration: 200 }}>
+						<div class="grid grid-cols-2 gap-2 md:grid-cols-4">
+							<Input label="Future days" name="scrape-future-days" type="number" min="0" bind:value={futureDays} />
+							<Input label="Future weeks" name="scrape-future-weeks" type="number" min="0" bind:value={futureWeeks} />
+							<Input label="Future months" name="scrape-future-months" type="number" min="0" bind:value={futureMonths} />
+							<Input label="Future years" name="scrape-future-years" type="number" min="0" bind:value={futureYears} />
 						</div>
-						<div class="flex-1">
-							<Select bind:value={futureUnit} options={unitOptions} />
+						<div class="border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+							The backend supports an upcoming scrape horizon as <span class="font-mono text-foreground">future_days</span>. This form will send <span class="font-mono text-foreground">{futureIntervalDays}</span> days.
 						</div>
 					</div>
 				{/if}
@@ -1027,8 +1291,8 @@
 		</div>
 	</Card>
 
-	<!-- Section 3: Options -->
-	<Card title="Options" variant="data">
+	<!-- Section 4: Controls -->
+	<Card title="Controls" variant="data">
 		<div class="space-y-4">
 			<!-- Auto-scrape -->
 			<div class="flex items-center justify-between">
@@ -1060,6 +1324,20 @@
 
 			<Separator />
 
+			<div class="space-y-2">
+				<Select
+					bind:value={scraperEngine}
+					label="Scraper engine"
+					name="scrape-engine"
+					options={scraperEngineOptions}
+				/>
+				<p class="text-xs text-muted-foreground">
+					Auto incearca Scrapling pentru flow-urile football/core-market si revine la Playwright cand cererea nu este suportata. Pentru all_markets sau odds_history foloseste Playwright.
+				</p>
+			</div>
+
+			<Separator />
+
 			<!-- Dedup -->
 			<div class="flex items-center justify-between">
 				<div>
@@ -1075,6 +1353,105 @@
 					/>
 					<div class="w-9 h-5 bg-muted border border-border peer-checked:bg-football-green peer-checked:border-football-green transition-colors after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-foreground after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full"></div>
 				</label>
+			</div>
+
+			{#if unsupportedControlNotes.length > 0}
+				<div class="space-y-1 border border-football-gold/30 bg-football-gold/10 p-3 text-xs text-football-gold">
+					{#each unsupportedControlNotes as note (note)}
+						<p>{note}</p>
+					{/each}
+				</div>
+			{/if}
+
+			<Separator />
+
+			<div class="space-y-3">
+				{#if submitSuccess}
+					<div class="p-3 text-sm bg-football-green/10 border border-football-green/30 text-football-green" transition:slide={{ duration: 200 }}>
+						{submitSuccess}
+					</div>
+				{/if}
+				{#if submitError}
+					<div class="p-3 text-sm bg-destructive/10 border border-destructive/30 text-destructive" transition:slide={{ duration: 200 }}>
+						{submitError}
+					</div>
+				{/if}
+				<Button
+					variant="glow"
+					size="lg"
+					fullWidth
+					disabled={submitting || (selectedCountries.length === 0 && selectedLeagues.length === 0)}
+					onclick={startScrape}
+				>
+					{#if submitting}
+						<span class="flex items-center justify-center gap-2">
+							<span class="h-4 w-4 border-2 border-foreground border-t-transparent animate-spin"></span>
+							Starting...
+						</span>
+					{:else}
+						Start Scraping
+					{/if}
+				</Button>
+			</div>
+
+			<Separator />
+
+			<div class="space-y-3">
+					<div class="flex flex-wrap items-center justify-between gap-3">
+						<div>
+							<p class="text-sm font-medium text-foreground">Job logs</p>
+							<p class="text-xs text-muted-foreground">Persistent action-by-action logs for the selected scrape job.</p>
+						</div>
+						<Button variant="secondary" size="sm" onclick={toggleLogsPanel}>
+							{logsPanelOpen ? 'Hide logs' : 'Show logs'}
+						</Button>
+					</div>
+					{#if logsPanelOpen}
+						<div class="space-y-3 border border-border bg-muted/30 p-3" transition:slide={{ duration: 200 }}>
+							{#if jobs.length > 0}
+								<div class="flex flex-wrap gap-2">
+									{#each jobs.slice(0, 12) as job (job.id)}
+										<button
+											type="button"
+											class={cn(
+												'border px-2.5 py-1 text-xs transition-colors',
+												selectedLogJobId === job.id
+													? 'border-football-green bg-football-green/10 text-football-green'
+													: 'border-border bg-background/70 text-muted-foreground hover:text-foreground'
+											)}
+											onclick={() => openLogsForJob(job.id)}
+										>
+											#{job.id} · {jobLabel(job)}
+										</button>
+									{/each}
+								</div>
+							{/if}
+							{#if loadingJobLogs}
+								<p class="text-sm text-muted-foreground">Loading job logs...</p>
+							{:else if jobLogsError}
+								<p class="text-sm text-destructive">{jobLogsError}</p>
+							{:else if jobLogs.length === 0}
+								<p class="text-sm text-muted-foreground">No job logs available yet.</p>
+							{:else}
+								<div class="max-h-64 space-y-2 overflow-y-auto pr-1">
+									{#each jobLogs as log (log.id)}
+										<div class="space-y-2 border border-border bg-background/70 px-3 py-2 text-xs">
+											<div class="flex flex-wrap items-center gap-2">
+												<Badge variant={logLevelVariant(log.level)}>#{log.id} · {log.level}</Badge>
+												<span class="font-mono text-foreground">{log.action}</span>
+												<span class="text-muted-foreground">Job #{log.job_id}</span>
+												<span class="ml-auto text-muted-foreground">{new Date(log.created_at).toLocaleString()}</span>
+											</div>
+											<p class="text-foreground">{log.message}</p>
+											{#if log.metadata_json && Object.keys(log.metadata_json).length > 0}
+												<pre class="max-h-32 overflow-x-auto overflow-y-auto border border-border bg-muted/50 p-2 font-mono text-[11px] text-muted-foreground">{JSON.stringify(log.metadata_json, null, 2)}</pre>
+											{/if}
+										</div>
+									{/each}
+								</div>
+							{/if}
+					</div>
+				{/if}
 			</div>
 		</div>
 	</Card>
@@ -1158,6 +1535,11 @@
 													<pre class="mt-1 p-2 bg-background border border-border font-mono text-xs overflow-x-auto">{JSON.stringify(job.params, null, 2)}</pre>
 												</div>
 											{/if}
+											<div class="col-span-2">
+												<Button variant="secondary" size="sm" onclick={() => openLogsForJob(job.id)}>
+													View complete logs
+												</Button>
+											</div>
 										</div>
 									</td>
 								</tr>
@@ -1169,33 +1551,4 @@
 		{/if}
 	</Card>
 
-	<!-- Section 5: Action -->
-	<div class="space-y-4">
-		{#if submitSuccess}
-			<div class="p-3 text-sm bg-football-green/10 border border-football-green/30 text-football-green" transition:slide={{ duration: 200 }}>
-									{submitSuccess}
-			</div>
-		{/if}
-		{#if submitError}
-			<div class="p-3 text-sm bg-destructive/10 border border-destructive/30 text-destructive" transition:slide={{ duration: 200 }}>
-				{submitError}
-			</div>
-		{/if}
-		<Button
-			variant="glow"
-			size="lg"
-			fullWidth
-			disabled={submitting || (selectedCountries.length === 0 && selectedLeagues.length === 0)}
-			onclick={startScrape}
-		>
-			{#if submitting}
-				<span class="flex items-center justify-center gap-2">
-					<span class="h-4 w-4 border-2 border-foreground border-t-transparent animate-spin"></span>
-					Starting...
-				</span>
-			{:else}
-				Start Scraping
-			{/if}
-		</Button>
-	</div>
 </div>

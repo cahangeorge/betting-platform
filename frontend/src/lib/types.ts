@@ -79,6 +79,15 @@ export interface MatchFilter {
 	status?: MatchStatus;
 	date_from?: string;
 	date_to?: string;
+	page?: number;
+	per_page?: number;
+}
+
+export interface PaginatedResponse<T> {
+	items: T[];
+	total: number;
+	page: number;
+	per_page: number;
 }
 
 // ─── Predictions ──────────────────────────────────────
@@ -209,13 +218,55 @@ export interface BacktestResult {
 	results: PredictionResult[];
 }
 
+export interface PredictionVerificationItem {
+	prediction_id: number;
+	run_id: number;
+	match_id: number;
+	model_type: string | null;
+	league: string | null;
+	kickoff: string | null;
+	market: string;
+	predicted_selection: string | null;
+	actual_selection: string | null;
+	model_probability: number | null;
+	market_odds: number | null;
+	status: 'won' | 'lost' | 'pending' | 'void' | 'unsupported';
+	home_team: string;
+	away_team: string;
+	home_score: number | null;
+	away_score: number | null;
+}
+
+export interface PredictionVerification {
+	checked_predictions: number;
+	resolved_predictions: number;
+	correct_predictions: number;
+	incorrect_predictions: number;
+	pending_predictions: number;
+	void_predictions: number;
+	unsupported_predictions: number;
+	accuracy: number | null;
+	items: PredictionVerificationItem[];
+}
+
 // ─── Tickets ──────────────────────────────────────────
 export type TicketStatus = 'open' | 'watchlist' | 'won' | 'lost' | 'cashed_out' | 'void';
 export type TicketType = 'single' | 'accumulator' | 'system';
 
+export interface TicketBatch {
+	id: number;
+	bankroll_id: number | null;
+	name: string | null;
+	strategy: string | null;
+	tickets_count: number;
+	total_stake: number;
+	created_at: string;
+}
+
 export interface Ticket {
 	id: number;
 	reference: string;
+	batch_id: number | null;
 	type?: TicketType;
 	ticket_type?: TicketType;
 	status: TicketStatus;
@@ -254,10 +305,47 @@ export interface PlaceBetRequest {
 	bankroll_id: number;
 }
 
+export interface TicketGenerateRequest {
+	bankroll_id?: number | null;
+	ticket_count: number;
+	difficulty: string;
+	market_types: string[];
+	min_odds: number;
+	max_odds: number;
+	stake: number;
+}
+
+export interface TicketGenerateResponse {
+	batch_id: number;
+	tickets: Ticket[];
+}
+
+export interface TicketSwapLegsRequest {
+	source_ticket_id: number;
+	source_leg_id: number;
+	target_ticket_id: number;
+	target_leg_id: number;
+}
+
+export interface TicketSwapLegsResponse {
+	source_ticket: Ticket;
+	target_ticket: Ticket;
+}
+
 export interface SettleRequest {
 	ticket_id: number;
 	outcome: 'won' | 'lost' | 'void';
 	return_amount?: number;
+}
+
+export interface TicketSettlementRun {
+	checked_tickets: number;
+	settled_tickets: number;
+	won_tickets: number;
+	lost_tickets: number;
+	void_tickets: number;
+	pending_tickets: number;
+	updated_legs: number;
 }
 
 // ─── Bankroll ─────────────────────────────────────────
@@ -374,6 +462,8 @@ export interface StrategyCreateRequest {
 	model_type: string;
 	description?: string;
 	parameters?: Record<string, unknown>;
+	weights?: Record<string, unknown> | null;
+	is_active?: boolean;
 }
 
 export interface StrategyRunRequest {
@@ -428,6 +518,23 @@ export interface JobLog {
 	completed_at: string | null;
 	error: string | null;
 	created_at: string;
+}
+
+export interface ScrapeJobLogEntry {
+	id: number;
+	job_id: number;
+	level: string;
+	action: string;
+	message: string;
+	metadata_json: Record<string, unknown> | null;
+	created_at: string;
+}
+
+export interface ScrapeJobLogPage {
+	items: ScrapeJobLogEntry[];
+	total: number;
+	page: number;
+	per_page: number;
 }
 
 // ─── Analytics ────────────────────────────────────────
@@ -490,6 +597,22 @@ export interface DashboardTicket {
 		away_score: number | null;
 	}[];
 	created_at: string;
+}
+
+export interface DashboardTicketOutcomeBucket {
+	bucket_start: string;
+	bucket_end: string;
+	won: number;
+	lost: number;
+	void: number;
+	pending: number;
+	ticket_ids: number[];
+}
+
+export interface DashboardTicketOutcomeResponse {
+	range: string;
+	bucket: string;
+	items: DashboardTicketOutcomeBucket[];
 }
 
 export interface UpcomingMatch {

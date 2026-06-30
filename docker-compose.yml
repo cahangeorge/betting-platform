@@ -38,6 +38,11 @@ services:
       BET_JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production}
       BET_CORS_ORIGINS: http://localhost:5173,http://frontend:3000,http://localhost:3000,http://localhost:8000
       BET_DEBUG: "false"
+      BET_ODDSHARVESTER_PYTHON: /workspace/OddsHarvester/.venv/bin/python
+      BET_PENALTYBLOG_PYTHON: /workspace/penaltyblog/.venv/bin/python
+      BET_PENALTYBLOG_BRIDGE: /workspace/betfront/scripts/penaltyblog_bridge.py
+      BET_SOCCERDATA_PYTHON: /workspace/soccerdata/.venv/bin/python
+      BET_SOCCERDATA_BRIDGE: /workspace/betfront/scripts/soccerdata_bridge.py
       PYTHONPATH: /app
     ports:
       - "8000:8000"
@@ -48,6 +53,10 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app
+      - ./OddsHarvester:/workspace/OddsHarvester:ro
+      - ./penaltyblog:/workspace/penaltyblog:ro
+      - ./soccerdata:/workspace/soccerdata:ro
+      - ./betfront:/workspace/betfront:ro
       - shared_data:/shared_data
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     restart: unless-stopped

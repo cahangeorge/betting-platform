@@ -25,7 +25,7 @@ test('dashboard can add a seeded match to the slip and place a ticket', async ({
 
 		await page.getByRole('button', { name: 'Review Ticket' }).first().click();
 		await expect(page).toHaveURL(/\/tickets$/);
-		await expect(page.getByRole('heading', { name: 'TICKETS' })).toBeVisible();
+		await expect(page.getByRole('heading', { name: 'TICKETS', exact: true })).toBeVisible();
 		await expect(page.getByRole('tab', { name: /Place Bet 1/ })).toBeVisible();
 
 		await page.getByRole('button', { name: 'Place Ticket' }).click();

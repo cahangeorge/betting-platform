@@ -10,7 +10,7 @@ from app.models.bankroll import Bankroll, BookmakerAccount, LedgerEntry
 from app.models.job import ScheduledJob
 from app.models.match import Match, MatchSource, MatchStat, OddsEntry
 from app.models.prediction import EnsemblePrediction, ModelPrediction, Prediction, PredictionRun, PredictionSession
-from app.models.scrape import ScrapedDataset, ScrapeJob
+from app.models.scrape import ScrapedDataset, ScrapeJob, ScrapeJobLog
 from app.models.strategy import Strategy
 from app.models.ticket import BetPlacement, Settlement, Ticket, TicketBatch, TicketLeg
 from app.models.todo import Todo
@@ -35,6 +35,7 @@ __all__ = [
     "BetPlacement",
     "Settlement",
     "ScrapeJob",
+    "ScrapeJobLog",
     "ScrapedDataset",
     "Bankroll",
     "BookmakerAccount",

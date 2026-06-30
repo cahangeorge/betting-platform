@@ -54,7 +54,7 @@
 	let timeStr = $derived(
 		now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 	);
-	const homeHref = $derived(user ? '/' : '/board');
+	const homeHref = $derived(user ? '/' : '/login');
 </script>
 
 <nav

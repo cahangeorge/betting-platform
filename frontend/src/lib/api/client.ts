@@ -1,4 +1,5 @@
 import type { ApiError } from '$lib/types';
+import { apiBaseUrl } from './base';
 
 // Use empty base URL (same-origin) so auth cookies set by SvelteKit are sent
 // with API requests. The Vite dev server proxies /api/* to the backend.
@@ -18,7 +19,7 @@ export class ApiClient {
 		options?: { timeout?: number },
 		fetchFn?: typeof fetch
 	): Promise<T> {
-		const url = `${this.baseUrl}${path}`;
+		const url = `${this.baseUrl || apiBaseUrl()}${path}`;
 		const controller = new AbortController();
 		const timeoutId = options?.timeout
 			? setTimeout(() => controller.abort(), options.timeout)

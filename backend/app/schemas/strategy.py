@@ -35,6 +35,10 @@ class StrategyUpdateRequest(BaseModel):
     is_active: bool | None = None
 
 
+class StrategyDuplicateRequest(BaseModel):
+    name: str | None = None
+
+
 class StrategyRunFilters(BaseModel):
     countries: list[str] = []
     leagues: list[str] = []
@@ -47,6 +51,8 @@ class StrategyRunRequest(BaseModel):
     markets: list[str] = []
     parameters: dict = {}
     filters: StrategyRunFilters | None = None
+    autopredict: bool = False
+    avoid_reprediction: bool = False
 
 
 class StrategyRunResponse(BaseModel):
@@ -54,3 +60,4 @@ class StrategyRunResponse(BaseModel):
     status: str
     matches_count: int = 0
     error: str | None = None
+    deduped: bool = False

@@ -1,5 +1,5 @@
 import { ApiClient } from './client';
-import type { Match, MatchFilter } from '$lib/types';
+import type { Match, MatchFilter, PaginatedResponse } from '$lib/types';
 
 type MatchListResponse = {
 	matches: Match[];
@@ -38,14 +38,26 @@ type LiveHeartbeatResponse = {
 
 class MatchesApi extends ApiClient {
 	async getMatches(filter?: MatchFilter): Promise<Match[]> {
+		const response = await this.getMatchesPage(filter);
+		return response.items;
+	}
+
+	async getMatchesPage(filter?: MatchFilter): Promise<PaginatedResponse<Match>> {
 		const params = new URLSearchParams();
 		if (filter?.league) params.set('league', filter.league);
 		if (filter?.status) params.set('status', filter.status);
 		if (filter?.date_from) params.set('date_from', filter.date_from);
 		if (filter?.date_to) params.set('date_to', filter.date_to);
+		if (filter?.page !== undefined) params.set('page', String(filter.page));
+		if (filter?.per_page !== undefined) params.set('per_page', String(filter.per_page));
 		const qs = params.toString();
 		const response = await this.get<MatchListResponse>(`/api/v1/matches${qs ? `?${qs}` : ''}`);
-		return response.matches ?? [];
+		return {
+			items: response.matches ?? [],
+			total: response.total ?? 0,
+			page: response.page ?? filter?.page ?? 1,
+			per_page: response.per_page ?? filter?.per_page ?? 50
+		};
 	}
 
 	async getMatch(id: number): Promise<Match> {
