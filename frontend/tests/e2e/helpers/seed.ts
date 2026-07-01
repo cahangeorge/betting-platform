@@ -40,6 +40,32 @@ async function runSql(sql: string): Promise<string> {
 	return stdout.trim();
 }
 
+export async function markMatchFinished(
+	matchId: number,
+	input: { homeScore: number; awayScore: number; status?: 'finished' | 'completed' | 'final' } = {
+		homeScore: 1,
+		awayScore: 0,
+		status: 'finished'
+	}
+): Promise<void> {
+	await runSql(`
+		UPDATE matches
+		SET
+			home_score = ${input.homeScore},
+			away_score = ${input.awayScore},
+			status = ${sqlLiteral(input.status ?? 'finished')}
+		WHERE id = ${matchId};
+	`);
+}
+
+export async function forceScheduledJobDue(jobId: number): Promise<void> {
+	await runSql(`
+		UPDATE scheduled_jobs
+		SET next_run = NOW() - INTERVAL '1 minute'
+		WHERE id = ${jobId};
+	`);
+}
+
 async function tableHasColumn(tableName: string, columnName: string): Promise<boolean> {
 	const output = await runSql(`
 		SELECT EXISTS (

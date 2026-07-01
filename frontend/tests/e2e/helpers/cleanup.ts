@@ -44,6 +44,9 @@ export async function cleanupSessionArtifacts(session: AuthSession): Promise<voi
 	await deleteSeededMatches(competition);
 
 	await runSql(`
+		DELETE FROM scheduled_jobs
+		WHERE CAST(config AS TEXT) LIKE ${sqlLiteral(`%${session.user.id}%`)}
+			OR name LIKE ${sqlLiteral(`%${session.namespace}%`)};
 		DELETE FROM scrape_jobs
 		WHERE job_type LIKE ${sqlLiteral(`e2e-%${session.namespace}%`)}
 			OR CAST(params AS TEXT) LIKE ${sqlLiteral(`%${session.namespace}%`)};

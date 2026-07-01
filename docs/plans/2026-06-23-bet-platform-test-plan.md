@@ -250,6 +250,7 @@ Scenarios:
 Acceptance:
 
 - Starting a scrape job shows a created/running/succeeded/failed state and logs.
+- Saved orchestration jobs can be surfaced from `/api/v1/jobs`.
 
 ### 4.3 Predictii
 
@@ -258,6 +259,63 @@ Scenarios:
 1. Metrics section shows seeded verification counts.
 2. Automatic prediction actions are visible.
 3. Future predictions list filters by day/week/month.
+
+### 4.4 Tickets and scheduled automation
+
+Scenarios:
+
+1. Ticket generation and placement:
+   - use a seeded prediction,
+   - add a leg to the slip,
+   - place a ticket,
+   - confirm ticket visibility in `Active`.
+2. Saved verification jobs:
+   - create or seed a `verify_results` scheduled job,
+   - open `/tickets`,
+   - verify the job is visible and toggleable.
+3. Saved ticket-generation jobs:
+   - create or seed a `generate_tickets` scheduled job,
+   - open `/tickets`,
+   - verify the job is visible and toggleable.
+4. Full scheduled orchestration:
+   - create a `scrape_predict_tickets` scheduled job,
+   - force it due,
+   - run `/api/v1/jobs/run-due`,
+   - confirm a ticket batch is created,
+   - mark seeded matches finished,
+   - run `verify_results`,
+   - confirm generated ticket settles out of `open`.
+
+Acceptance:
+
+- Generated ticket batches are visible in `Bilete`.
+- Settlement changes ticket status away from `open`.
+- UI shows saved verification/orchestration controls without fake/demo fallback.
+
+## 5. 2026-07-01 execution status
+
+Verified in this pass:
+
+- backend:
+  - `PYTHONPATH=. .venv/bin/pytest tests/test_scheduled_jobs.py`
+- frontend:
+  - `pnpm check`
+  - `pnpm test:unit`
+  - `pnpm build`
+- hybrid Playwright:
+  - `tests/e2e/hybrid/scrape-job-honesty.spec.ts`
+  - `tests/e2e/hybrid/dashboard-slip-ticket.spec.ts`
+  - `tests/e2e/hybrid/scrape-predict-tickets-settle.spec.ts`
+
+Known verification gaps:
+
+- Full backend `pytest` was not rerun in this pass.
+- The new scheduled-job E2E path creates jobs through the API and then verifies UI visibility/execution; it does not yet click every “save automatic job” UI control directly.
+- Full `pnpm test:e2e` breadth was not rerun in this pass.
+
+Known operational bug observed during verification:
+
+- Backend still warns about missing local `BET_SOCCERDATA_PYTHON`; the targeted hybrid flows passed without it, but broader bridge/runtime coverage still needs that path fixed or explicitly disabled.
 4. Prediction form can select interval/countries/leagues/markets/strategies.
 5. Avoid reprediction dedupes identical run and allows changed input.
 

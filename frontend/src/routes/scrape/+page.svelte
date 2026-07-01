@@ -144,6 +144,15 @@
 	let autoScrape = $state(false);
 	let autoIntervalNumber = $state('24');
 	let autoIntervalUnit = $state('Hours');
+	let autoRunPredictions = $state(false);
+	let autoPredictionStrategyIds = $state('');
+	let autoPredictionMarkets = $state<string[]>(['1x2']);
+	let autoCreateTickets = $state(false);
+	let autoTicketCount = $state('3');
+	let autoTicketDifficulty = $state('balanced');
+	let autoTicketMinOdds = $state('1.20');
+	let autoTicketMaxOdds = $state('5.00');
+	let autoTicketStake = $state('10');
 	let scraperEngine = $state('auto');
 	let dedupSkip = $state(true);
 
@@ -218,6 +227,7 @@
 	});
 
 	const automaticScrapeJobs = $derived(scheduledJobsForArea(scheduledJobs, 'scrape'));
+	const orchestrationJobs = $derived(scheduledJobsForArea(scheduledJobs, 'orchestration'));
 
 	const intervalUnitOptions = [
 		{ value: 'Hours', label: 'Hours' },
@@ -230,6 +240,12 @@
 		{ value: 'playwright', label: 'Playwright only (safest compatibility)' },
 		{ value: 'scrapling-http', label: 'Scrapling HTTP only (fast core markets)' },
 		{ value: 'scrapling-stealth', label: 'Scrapling stealth browser only' }
+	];
+
+	const predictionMarketOptions = [
+		{ value: '1x2', label: '1X2' },
+		{ value: 'over_under_2.5', label: 'Over/Under 2.5' },
+		{ value: 'btts', label: 'BTTS' }
 	];
 
 	const historyPresetOptions = HISTORY_PRESET_OPTIONS;
@@ -251,6 +267,12 @@
 		}
 		if (autoScrape) {
 			notes.push('Autoscrape can be saved as a persistent /api/v1/jobs action with the Save autoscrape button above.');
+		}
+		if (autoRunPredictions) {
+			notes.push('Scrape -> predict orchestration will queue predictions automatically after each scheduled scrape.');
+		}
+		if (autoCreateTickets) {
+			notes.push('Scheduled orchestration will also create tickets from the latest prediction pool after predictions finish.');
 		}
 		if (pastEnabled && (positiveInteger(historicDays) > 0 || positiveInteger(historicWeeks) > 0 || positiveInteger(historicMonths) > 0)) {
 			notes.push('Historic day/week/month inputs are converted to a date range and seasons; OddsHarvester historic execution supports seasons, not exact historic day windows.');
@@ -320,13 +342,44 @@
 		scheduledJobsError = '';
 		try {
 			const scrapeLeagueSlugs = buildScrapeLeagueSlugs(allLeagues, selectedLeagues);
+			const strategyIds = autoPredictionStrategyIds
+				.split(',')
+				.map((value) => Number.parseInt(value.trim(), 10))
+				.filter((value) => Number.isFinite(value) && value > 0);
+			if (autoRunPredictions && strategyIds.length === 0) {
+				scheduledJobsError = 'Add at least one strategy id before saving scrape → predict automation';
+				return;
+			}
+			const orchestrationTaskType = autoRunPredictions
+				? autoCreateTickets
+					? 'scrape_predict_tickets'
+					: 'scrape_then_predict'
+				: 'scrape_odds';
 			const created = await jobsApi.createScheduledJob({
-				name: `Autoscrape ${selectedLeagues.length > 0 ? selectedLeagues.length : 'all'} league${selectedLeagues.length === 1 ? '' : 's'}`,
-				task_type: 'scrape_odds',
+				name: `${autoRunPredictions ? 'Autoscrape + predict' : 'Autoscrape'} ${selectedLeagues.length > 0 ? selectedLeagues.length : 'all'} league${selectedLeagues.length === 1 ? '' : 's'}`,
+				task_type: orchestrationTaskType,
 				cron_expression: cronFromInterval(autoIntervalNumber, autoIntervalUnit),
 				config: {
 					source_page: 'scrape',
-					area: 'scrape',
+					area: autoRunPredictions ? 'orchestration' : 'scrape',
+					workflow: autoRunPredictions
+						? autoCreateTickets
+							? 'scrape_predict_tickets'
+							: 'scrape_then_predict'
+						: 'scrape_only',
+					strategy_ids: autoRunPredictions ? strategyIds : undefined,
+					markets: autoRunPredictions ? autoPredictionMarkets : undefined,
+					avoid_reprediction: autoRunPredictions ? true : undefined,
+					tickets: autoRunPredictions && autoCreateTickets
+						? {
+								ticket_count: parseInt(autoTicketCount, 10) || 1,
+								difficulty: autoTicketDifficulty,
+								market_types: autoPredictionMarkets,
+								min_odds: parseFloat(autoTicketMinOdds) || 1.01,
+								max_odds: parseFloat(autoTicketMaxOdds) || 100,
+								stake: parseFloat(autoTicketStake) || 10
+							}
+						: undefined,
 					params: {
 						...buildBaseScrapeParams(scrapeLeagueSlugs),
 						command: 'upcoming',
@@ -764,6 +817,96 @@
 										{scheduledJob.enabled ? 'running' : 'paused'}
 									</span>
 								</Button>
+							{/each}
+						</div>
+					{/if}
+				</div>
+
+				<div class="space-y-3 border border-border bg-muted/20 p-3">
+					<div>
+						<p class="text-sm font-semibold text-foreground">Optional scrape → predict orchestration</p>
+						<p class="text-xs text-muted-foreground">
+							Transforms the saved scrape job into a composite orchestration workflow.
+						</p>
+					</div>
+					<label class="flex items-center gap-2 text-sm text-foreground">
+						<input
+							type="checkbox"
+							class="h-4 w-4 accent-football-blue"
+							bind:checked={autoRunPredictions}
+						/>
+						<span>Run predictions automatically after each autoscrape cycle</span>
+					</label>
+					<div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+						<Input
+							label="Strategy IDs (comma separated)"
+							placeholder="e.g. 1,2,5"
+							bind:value={autoPredictionStrategyIds}
+							disabled={!autoRunPredictions}
+						/>
+						<div class="space-y-2">
+							<p class="text-xs text-muted-foreground">Prediction markets</p>
+							<div class="flex flex-wrap gap-2">
+								{#each predictionMarketOptions as option (option.value)}
+									<label
+										class={cn(
+											'flex items-center gap-2 rounded border px-3 py-2 text-xs',
+											autoRunPredictions
+												? 'border-border bg-background text-foreground'
+												: 'border-border/40 bg-muted/30 text-muted-foreground'
+										)}
+									>
+										<input
+											type="checkbox"
+											class="h-4 w-4 accent-football-blue"
+											checked={autoPredictionMarkets.includes(option.value)}
+											disabled={!autoRunPredictions}
+											onchange={() => {
+												if (autoPredictionMarkets.includes(option.value)) {
+													autoPredictionMarkets = autoPredictionMarkets.filter((item) => item !== option.value);
+												} else {
+													autoPredictionMarkets = [...autoPredictionMarkets, option.value];
+												}
+											}}
+										/>
+										<span>{option.label}</span>
+									</label>
+								{/each}
+							</div>
+						</div>
+					</div>
+					<label class="flex items-center gap-2 text-sm text-foreground">
+						<input
+							type="checkbox"
+							class="h-4 w-4 accent-football-green"
+							bind:checked={autoCreateTickets}
+							disabled={!autoRunPredictions}
+						/>
+						<span>Create tickets automatically after predictions finish</span>
+					</label>
+					{#if autoRunPredictions && autoCreateTickets}
+						<div class="grid grid-cols-1 gap-3 md:grid-cols-3">
+							<Input label="Ticket count" type="number" min="1" max="50" bind:value={autoTicketCount} />
+							<Select
+								label="Ticket difficulty"
+								bind:value={autoTicketDifficulty}
+								options={[
+									{ value: 'safe', label: 'Safe' },
+									{ value: 'balanced', label: 'Balanced' },
+									{ value: 'aggressive', label: 'Aggressive' }
+								]}
+							/>
+							<Input label="Stake" type="number" min="0.5" step="0.5" bind:value={autoTicketStake} />
+							<Input label="Min odds" type="number" min="1.01" step="0.01" bind:value={autoTicketMinOdds} />
+							<Input label="Max odds" type="number" min="1.01" step="0.01" bind:value={autoTicketMaxOdds} />
+						</div>
+					{/if}
+					{#if orchestrationJobs.length > 0}
+						<div class="flex flex-wrap gap-2">
+							{#each orchestrationJobs as scheduledJob (scheduledJob.id)}
+								<Badge variant={scheduledJob.enabled ? 'info' : 'default'}>
+									{scheduledJob.name} · {scheduledJob.enabled ? 'running' : 'paused'}
+								</Badge>
 							{/each}
 						</div>
 					{/if}
