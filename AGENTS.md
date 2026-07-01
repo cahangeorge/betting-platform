@@ -102,3 +102,26 @@ betfront/frontbet - legacy/archive projects, not default targets
 - **Secrets never commit:** backend `BET_*` secrets, database URLs, Betfair creds, StatsBomb/Opta keys, and scraper credentials. Cache dir: `SOCCERDATA_DIR` for soccerdata.
 - **No monorepo CI assumption.** Check each sub-project's own workflows and scripts before claiming CI coverage.
 - **OddsHarvester** has its own [CLAUDE.md](OddsHarvester/CLAUDE.md) with detailed architecture and release process; read it before modifying that project.
+
+## Codex Setup
+
+Bet uses a lightweight repo-local setup that documents workspace behavior while keeping shared runtime tooling global.
+
+- Canonical workspace guide: `AGENTS.md`
+- Codex config: `.codex/config.toml`
+- Codex model instructions: `.codex/model-instructions.md`
+- Project agent roles: `.codex/agents/*.toml`
+- Agent setup notes: `.agents/README.md`
+- Codex setup docs: `docs/codex/setup.md`
+- Svelte MCP registration for the active frontend: `.mcp.json`
+
+Global MCP servers, shared skills, hooks, and the oh-my-codex plugin stay in `$CODEX_HOME` / `~/.codex`. Respect nested project/submodule instructions before changing `OddsHarvester/`, `penaltyblog/`, or `soccerdata/`.
+
+## Model / Agent Routing
+
+Use `docs/codex/model-routing.md` for cost/performance routing.
+
+- Explorer agents use `gpt-5.3-codex-spark` with low reasoning for cheap read-only lookup.
+- Executor agents use `gpt-5.4` with medium reasoning for normal implementation.
+- Verifier/risk-review agents use `gpt-5.5` with high reasoning only for final evidence, high-risk decisions, or repeated failures.
+- Do not load every skill/agent up front; activate only what the current task needs.
