@@ -1,13 +1,19 @@
+import asyncio
 import json
+import logging
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from urllib.parse import urlparse
 
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.live import broadcast_match_update, broadcast_odds_update
 from app.models.match import Match, MatchSource, OddsEntry
 from app.models.scrape import ScrapedDataset, ScrapeJob, ScrapeJobLog
 from app.services.python_bridge import BridgeError, run_oddsharvester_json
+
+logger = logging.getLogger(__name__)
 
 ODDS_SOURCE = "OddsHarvester"
 DEFAULT_MARKETS = ["1x2"]
@@ -87,6 +93,20 @@ SCRAPE_DEDUP_CONTROL_KEYS = {
     "dedup_skip_requested",
 }
 
+LIVE_RELEVANT_MATCH_STATUSES = {
+    "live",
+    "running",
+    "active",
+    "in_play",
+    "halftime",
+    "ht",
+    "finished",
+    "ft",
+    "fulltime",
+}
+
+LIVE_RELEVANT_ODDS_MARKETS = {"1x2", "home_away", "homeaway", "match_winner", "matchwinner"}
+
 
 def _normalize_scrape_value(value):
     if isinstance(value, dict):
@@ -101,6 +121,119 @@ def _normalize_scrape_value(value):
             return sorted(normalized)
         return normalized
     return value
+
+
+def _normalize_status(value: str | None) -> str:
+    return (value or "").strip().lower()
+
+
+def _safe_iso(value: datetime | None) -> str | None:
+    return value.isoformat() if value else None
+
+
+def _match_broadcast_snapshot(match: Match | None) -> dict[str, Any] | None:
+    if match is None:
+        return None
+    return {
+        "external_id": match.external_id,
+        "sport": match.sport,
+        "home_team": match.home_team,
+        "away_team": match.away_team,
+        "home_score": match.home_score,
+        "away_score": match.away_score,
+        "status": match.status,
+        "match_date": _safe_iso(match.match_date),
+        "competition": match.competition,
+    }
+
+
+def _is_live_relevant_match(match: Match) -> bool:
+    status = _normalize_status(match.status)
+    if status in LIVE_RELEVANT_MATCH_STATUSES:
+        return True
+
+    now = datetime.now(timezone.utc)
+    if match.home_score is not None and match.away_score is not None:
+        return True
+    return bool(match.match_date and match.match_date <= now)
+
+
+def _is_live_relevant_market(market_name: str) -> bool:
+    return market_name.split(":", 1)[0].strip().lower() in LIVE_RELEVANT_ODDS_MARKETS
+
+
+def _build_match_update_payload(match: Match) -> dict[str, Any]:
+    return {
+        "id": match.id,
+        "external_id": match.external_id,
+        "sport": match.sport,
+        "competition": match.competition,
+        "home_team": match.home_team,
+        "away_team": match.away_team,
+        "home_score": match.home_score,
+        "away_score": match.away_score,
+        "status": match.status,
+        "match_date": _safe_iso(match.match_date),
+        "updated_at": _safe_iso(getattr(match, "updated_at", None)),
+    }
+
+
+def _build_odds_update_payload(
+    *,
+    match: Match,
+    bookmaker: str,
+    market: str,
+    home_odds: float | None,
+    draw_odds: float | None,
+    away_odds: float | None,
+    timestamp: datetime | None,
+) -> dict[str, Any]:
+    return {
+        "match_id": match.id,
+        "status": match.status,
+        "bookmaker": bookmaker,
+        "market": market,
+        "home_odds": home_odds,
+        "draw_odds": draw_odds,
+        "away_odds": away_odds,
+        "timestamp": _safe_iso(timestamp),
+        "home_team": match.home_team,
+        "away_team": match.away_team,
+    }
+
+
+def _schedule_post_commit_live_broadcasts(
+    db: AsyncSession,
+    *,
+    match_updates: dict[int, dict[str, Any]],
+    odds_updates: dict[int, dict[str, Any]],
+) -> None:
+    if not match_updates and not odds_updates:
+        return
+    if not hasattr(db, "sync_session"):
+        return
+
+    loop = asyncio.get_running_loop()
+    sync_session = db.sync_session
+    queued_match_updates = dict(match_updates)
+    queued_odds_updates = dict(odds_updates)
+
+    async def _dispatch() -> None:
+        for match_id, payload in queued_match_updates.items():
+            try:
+                await broadcast_match_update(match_id, "match_updated", payload)
+            except Exception:
+                logger.exception("Failed to broadcast live match update for match_id=%s", match_id)
+
+        for match_id, payload in queued_odds_updates.items():
+            try:
+                await broadcast_odds_update(match_id, payload)
+            except Exception:
+                logger.exception("Failed to broadcast live odds update for match_id=%s", match_id)
+
+    @event.listens_for(sync_session, "after_commit", once=True)
+    def _after_commit(_session) -> None:
+        loop.create_task(_dispatch())
 
 
 def _scrape_dedup_key(job: ScrapeJob) -> str:
@@ -411,7 +544,7 @@ def _job_oddsharvester_timeout(job: ScrapeJob) -> int | None:
     return _coerce_int(params.get("timeout_seconds") or params.get("oddsharvester_timeout_seconds"))
 
 
-async def _upsert_match_from_record(db: AsyncSession, record: dict, sport: str) -> Match:
+async def _upsert_match_from_record(db: AsyncSession, record: dict, sport: str) -> tuple[Match, bool]:
     match_link = record.get("match_link")
     source_id = _extract_source_id(match_link)
 
@@ -428,6 +561,8 @@ async def _upsert_match_from_record(db: AsyncSession, record: dict, sport: str) 
         match_stmt = select(Match).where(Match.external_id == source_id)
         match_result = await db.execute(match_stmt)
         match = match_result.scalar_one_or_none()
+
+    previous_snapshot = _match_broadcast_snapshot(match)
 
     if match is None:
         match = Match(
@@ -473,11 +608,14 @@ async def _upsert_match_from_record(db: AsyncSession, record: dict, sport: str) 
         existing_source.url = match_link or existing_source.url
 
     await db.flush()
-    return match
+    current_snapshot = _match_broadcast_snapshot(match)
+    return match, previous_snapshot != current_snapshot
 
 
-async def _ingest_match_odds(db: AsyncSession, match: Match, record: dict) -> int:
+async def _ingest_match_odds(db: AsyncSession, match: Match, record: dict) -> dict[str, int | dict[str, Any] | None]:
     written = 0
+    changed = 0
+    broadcast_payload: dict[str, Any] | None = None
     scrape_timestamp = _coerce_datetime(record.get("scraped_date"))
 
     for market_key, market_rows in record.items():
@@ -517,16 +655,54 @@ async def _ingest_match_odds(db: AsyncSession, match: Match, record: dict) -> in
                     )
                 )
                 written += 1
+                changed += 1
+                if _is_live_relevant_market(market_name):
+                    broadcast_payload = _build_odds_update_payload(
+                        match=match,
+                        bookmaker=bookmaker,
+                        market=market_name,
+                        home_odds=home_odds,
+                        draw_odds=draw_odds,
+                        away_odds=away_odds,
+                        timestamp=scrape_timestamp,
+                    )
             else:
+                entry_changed = any(
+                    (
+                        existing.home_odds != home_odds,
+                        existing.draw_odds != draw_odds,
+                        existing.away_odds != away_odds,
+                        existing.timestamp != scrape_timestamp,
+                    )
+                )
                 existing.home_odds = home_odds
                 existing.draw_odds = draw_odds
                 existing.away_odds = away_odds
+                existing.timestamp = scrape_timestamp
+                if entry_changed:
+                    changed += 1
+                    if _is_live_relevant_market(market_name):
+                        broadcast_payload = _build_odds_update_payload(
+                            match=match,
+                            bookmaker=bookmaker,
+                            market=market_name,
+                            home_odds=home_odds,
+                            draw_odds=draw_odds,
+                            away_odds=away_odds,
+                            timestamp=scrape_timestamp,
+                        )
 
     await db.flush()
-    return written
+    return {
+        "written": written,
+        "changed": changed,
+        "broadcast_payload": broadcast_payload,
+    }
 
 
-async def _ingest_scraped_payload(db: AsyncSession, job: ScrapeJob, payload: list[dict]) -> dict[str, int | str]:
+async def _ingest_scraped_payload(
+    db: AsyncSession, job: ScrapeJob, payload: list[dict]
+) -> tuple[dict[str, int | str], dict[int, dict[str, Any]], dict[int, dict[str, Any]]]:
     params = job.params or {}
     sport = str(params.get("sport", "football"))
 
@@ -563,13 +739,23 @@ async def _ingest_scraped_payload(db: AsyncSession, job: ScrapeJob, payload: lis
     matches_written = 0
     odds_written = 0
     skipped_records = 0
+    match_updates: dict[int, dict[str, Any]] = {}
+    odds_updates: dict[int, dict[str, Any]] = {}
     for record in payload:
         if not isinstance(record, dict):
             skipped_records += 1
             continue
-        match = await _upsert_match_from_record(db, record, sport=sport)
+        match, match_changed = await _upsert_match_from_record(db, record, sport=sport)
         matches_written += 1
-        odds_written += await _ingest_match_odds(db, match, record)
+        odds_result = await _ingest_match_odds(db, match, record)
+        odds_written += int(odds_result["written"])
+
+        if _is_live_relevant_match(match):
+            if match_changed:
+                match_updates[match.id] = _build_match_update_payload(match)
+            odds_payload = odds_result.get("broadcast_payload")
+            if odds_payload:
+                odds_updates[match.id] = odds_payload
 
     await append_scrape_job_log(
         db,
@@ -583,12 +769,16 @@ async def _ingest_scraped_payload(db: AsyncSession, job: ScrapeJob, payload: lis
         },
     )
 
-    return {
-        "dataset_id": dataset.id,
-        "matches_count": len(payload),
-        "matches_upserted": matches_written,
-        "odds_written": odds_written,
-    }
+    return (
+        {
+            "dataset_id": dataset.id,
+            "matches_count": len(payload),
+            "matches_upserted": matches_written,
+            "odds_written": odds_written,
+        },
+        match_updates,
+        odds_updates,
+    )
 
 
 async def execute_scrape_job(db: AsyncSession, job_id: int) -> ScrapeJob:
@@ -652,9 +842,20 @@ async def execute_scrape_job(db: AsyncSession, job_id: int) -> ScrapeJob:
                 label=f"scrape_job_{job.id}",
                 timeout=timeout_seconds,
             )
-            summary = await _ingest_scraped_payload(db, job, payload)
+            ingestion_result = await _ingest_scraped_payload(db, job, payload)
+            if isinstance(ingestion_result, tuple) and len(ingestion_result) == 3:
+                summary, match_updates, odds_updates = ingestion_result
+            else:
+                summary = ingestion_result
+                match_updates = {}
+                odds_updates = {}
             job.status = "completed"
             job.output = json.dumps(summary)
+            _schedule_post_commit_live_broadcasts(
+                db,
+                match_updates=match_updates,
+                odds_updates=odds_updates,
+            )
             await append_scrape_job_log(
                 db,
                 job.id,

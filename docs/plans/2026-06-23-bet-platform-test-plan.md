@@ -316,6 +316,38 @@ Known verification gaps:
 Known operational bug observed during verification:
 
 - Backend still warns about missing local `BET_SOCCERDATA_PYTHON`; the targeted hybrid flows passed without it, but broader bridge/runtime coverage still needs that path fixed or explicitly disabled.
+
+## 6. 2026-07-04 execution status
+
+Verified in this pass:
+
+- backend hardening / contract suite:
+  - `PYTHONPATH=. .venv/bin/pytest tests/test_scheduled_jobs.py -q`
+  - `PYTHONPATH=. .venv/bin/pytest -p no:cacheprovider tests/test_scheduled_jobs.py tests/test_result_settlement.py tests/test_scrape_job_semantics.py tests/test_prediction_run_semantics.py tests/test_ticket_creation_validation.py tests/test_api_contracts.py -q`
+- result:
+  - `65 passed`
+
+What this pass now proves:
+
+- scheduled orchestration reports scrape/prediction truth more honestly,
+- `generate_tickets()` can be pinned to a specific prediction run and no longer defaults to mixing older runs when a caller provides `run_id`,
+- manual single-ticket settlement now returns a payload consistent with `SettlementResponse`,
+- settlement outcome logic remains covered at backend test level.
+
+Newly exposed gap:
+
+- `frontend/tests/e2e/hybrid/scrape-predict-tickets-settle.spec.ts` is no longer a reliable closure proof under the stricter orchestration semantics.
+- With truthful scrape failure propagation enabled, that hybrid spec can now fail because it still relies on a seeded + `command: 'noop'` scrape shortcut rather than a lineage-correct scrape artifact that the orchestration chain can safely treat as completed.
+
+Current verification reading:
+
+- Backend foundation checks for the base flow are stronger than before.
+- Browser proof for the same base flow is **still in progress** and must be rebuilt so it verifies:
+  - real scrape completion,
+  - exact prediction-run lineage,
+  - ticket generation from the intended run,
+  - final result ingestion,
+  - prediction-win plus ticket-win outcomes.
 4. Prediction form can select interval/countries/leagues/markets/strategies.
 5. Avoid reprediction dedupes identical run and allows changed input.
 

@@ -187,6 +187,7 @@ async def generate_tickets(
     min_odds: float,
     max_odds: float,
     stake: float,
+    run_id: int | None = None,
 ) -> tuple[TicketBatch, list[Ticket]]:
     if ticket_count < 1:
         raise ValueError("ticket_count must be at least 1")
@@ -196,12 +197,30 @@ async def generate_tickets(
         raise ValueError("min_odds must be lower than or equal to max_odds")
 
     normalized_markets = {market.lower() for market in (market_types or ["1x2"])}
+    run_stmt = select(PredictionRun.id).where(
+        PredictionRun.user_id == user_id,
+        PredictionRun.status.in_(["completed", "partial"]),
+    )
+    if run_id is not None:
+        run_stmt = run_stmt.where(PredictionRun.id == run_id)
+    else:
+        run_stmt = run_stmt.order_by(
+            PredictionRun.completed_at.desc().nulls_last(),
+            PredictionRun.started_at.desc().nulls_last(),
+            PredictionRun.created_at.desc(),
+            PredictionRun.id.desc(),
+        )
+    run_result = await db.execute(run_stmt.limit(1))
+    selected_run_id = run_result.scalar_one_or_none()
+    if selected_run_id is None:
+        if run_id is not None:
+            raise ValueError(f"Prediction run {run_id} not found or not eligible for ticket generation")
+        raise ValueError("No completed prediction run available for ticket generation")
+
     stmt = (
         select(ModelPrediction)
-        .join(PredictionRun, ModelPrediction.run_id == PredictionRun.id)
         .where(
-            PredictionRun.user_id == user_id,
-            PredictionRun.status.in_(["completed", "partial"]),
+            ModelPrediction.run_id == selected_run_id,
             ModelPrediction.market.in_(normalized_markets),
         )
         .order_by(ModelPrediction.expected_value.desc().nulls_last(), ModelPrediction.created_at.desc())
@@ -313,7 +332,7 @@ async def settle_ticket(
     ticket_id: int,
     outcome: str,
     return_amount: float = 0.0,
-) -> dict:
+) -> Settlement:
     stmt = select(Ticket).options(selectinload(Ticket.legs)).where(Ticket.id == ticket_id)
     result = await db.execute(stmt)
     ticket = result.scalar_one_or_none()
@@ -350,7 +369,8 @@ async def settle_ticket(
             db.add(ledger)
 
     await db.flush()
-    return {"ticket_id": ticket_id, "outcome": outcome, "pnl": pnl}
+    await db.refresh(settlement)
+    return settlement
 
 
 async def place_bet(

@@ -113,6 +113,13 @@ class LiveValueCandidateResponse(BaseModel):
     spread: float | None = None
     source: str = "odds"
     prediction_age_seconds: int | None = None
+    selection_age_seconds: int | None = None
+    odds_freshness_seconds: int | None = None
+    data_age_seconds: int | None = None
+    source_ok: bool = False
+    model_drift_flag: bool = True
+    is_betslip_eligible: bool = False
+    block_reasons: list[str] = []
     confidence_band: Literal["low", "medium", "high"] = "low"
 
 
@@ -129,6 +136,10 @@ class LiveMatchResponse(MatchResponse):
     momentum_intensity: Literal["weak", "moderate", "strong", "overwhelming"] = "weak"
     source: str = "cache"
     is_live_data: bool = False
+    source_ok: bool = False
+    data_age_seconds: int | None = None
+    odds_freshness_seconds: int | None = None
+    has_live_1x2_odds: bool = False
     xg_home: float | None = None
     xg_away: float | None = None
     possession_home: float | None = None

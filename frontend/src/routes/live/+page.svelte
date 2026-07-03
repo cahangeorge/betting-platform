@@ -7,6 +7,7 @@
 	import XGTimelineChart from '$lib/components/charts/xGTimelineChart.svelte';
 	import { matchesApi } from '$lib/api/matches';
 	import { betslip, createBetslipLeg } from '$lib/stores/betslip';
+	import { matchEvents, oddsUpdates, predictionUpdates } from '$lib/stores/liveSocket';
 	import { browser } from '$app/environment';
 	import { onMount } from 'svelte';
 
@@ -40,8 +41,17 @@
 	let jobsActive = $state(0);
 
 	let refreshDebounce: ReturnType<typeof setTimeout> | undefined;
+	let socketRefreshDebounce: ReturnType<typeof setTimeout> | undefined;
 	let refreshInterval: ReturnType<typeof setInterval> | undefined;
 	let didInitialize = $state(false);
+	const LIVE_TRUST_MAX_AGE_SECONDS = 30;
+
+	type LiveHeartbeatSnapshot = {
+		jobs_active: number;
+		bridge_ready: boolean;
+		bridge_issues: string[];
+		timestamp: string;
+	};
 
 	function sanitizeLeague(value: string): string {
 		const normalized = value.trim();
@@ -109,6 +119,20 @@
 		window.history.replaceState({}, '', query ? `${pathname}?${query}` : pathname);
 	}
 
+	async function fetchLiveHeartbeat(): Promise<LiveHeartbeatSnapshot | null> {
+		try {
+			const response = await fetch('/api/v1/live/heartbeat', { credentials: 'include' });
+			if (!response.ok) {
+				return null;
+			}
+
+			const payload = (await response.json()) as LiveHeartbeatSnapshot;
+			return payload;
+		} catch {
+			return null;
+		}
+	}
+
 	async function refreshLiveMatches() {
 		if (isLoading) {
 			return;
@@ -117,14 +141,20 @@
 		isLoading = true;
 		errorMessage = null;
 		try {
-			const response = await matchesApi.getLiveOverview(undefined, buildLoadParams());
+			const [response, heartbeat] = await Promise.all([
+				matchesApi.getLiveOverview(undefined, buildLoadParams()),
+				fetchLiveHeartbeat()
+			]);
 			liveMatches = response.matches;
 			lastUpdated = response.generated_at;
 			dataAgeSeconds = response.data_age_seconds;
 			source = response.source;
 			isDataStale = response.is_data_stale;
-			isDemo = response.is_demo;
-			jobsActive = response.jobs_active;
+			jobsActive = heartbeat?.jobs_active ?? response.jobs_active;
+			bridgeReady = heartbeat?.bridge_ready ?? bridgeReady;
+			bridgeIssues = heartbeat?.bridge_issues ?? bridgeIssues;
+			heartbeatAt = heartbeat?.timestamp ?? response.generated_at;
+			isDemo = response.is_demo || !bridgeReady;
 			allLeagues = getLeagueOptions(response.matches);
 			selectedLeague = sanitizeLeague(selectedLeague);
 		} catch (error) {
@@ -132,6 +162,21 @@
 		} finally {
 			isLoading = false;
 		}
+	}
+
+	function scheduleSocketRefresh() {
+		if (!browser) {
+			return;
+		}
+
+		if (socketRefreshDebounce) {
+			clearTimeout(socketRefreshDebounce);
+		}
+
+		socketRefreshDebounce = setTimeout(() => {
+			socketRefreshDebounce = undefined;
+			void refreshLiveMatches();
+		}, 150);
 	}
 
 	const renderedMatches = $derived.by(() => (liveMatches.length > 0 ? liveMatches : (data.matches ?? [])));
@@ -178,19 +223,62 @@
 
 	const visibleMatches = $derived.by(() => (valueMatches.length > 0 ? valueMatches : filteredMatches));
 
+	const liveSlipLockReason = $derived.by(() => {
+		if (isDemo) {
+			return 'Live add-to-betslip is locked while the page is showing demo data.';
+		}
+		if (!bridgeReady) {
+			return 'Live add-to-betslip is locked because the live bridge is not ready.';
+		}
+		if (source.trim().toLowerCase() === 'demo') {
+			return 'Live add-to-betslip is locked because the feed source is demo.';
+		}
+		if (dataAgeSeconds === null) {
+			return 'Live add-to-betslip is locked because feed freshness is unavailable.';
+		}
+		if (isDataStale || dataAgeSeconds > LIVE_TRUST_MAX_AGE_SECONDS) {
+			return `Live add-to-betslip is locked because the feed is older than ${LIVE_TRUST_MAX_AGE_SECONDS}s.`;
+		}
+		return null;
+	});
+
 	// Auto-refresh timestamp as a lightweight indicator in this phase.
 	onMount(() => {
-		refreshInterval = setInterval(() => {
-			void refreshLiveMatches();
-		}, 10000);
-
 		if (!didInitialize) {
 			didInitialize = true;
 		}
 
+		void refreshLiveMatches();
+
+		refreshInterval = setInterval(() => {
+			void refreshLiveMatches();
+		}, 10000);
+
+		const unsubscribeOddsUpdates = oddsUpdates.subscribe((message) => {
+			if (message) {
+				scheduleSocketRefresh();
+			}
+		});
+
+		const unsubscribePredictionUpdates = predictionUpdates.subscribe((message) => {
+			if (message) {
+				scheduleSocketRefresh();
+			}
+		});
+
+		const unsubscribeMatchEvents = matchEvents.subscribe((message) => {
+			if (message) {
+				scheduleSocketRefresh();
+			}
+		});
+
 		return () => {
+			unsubscribeOddsUpdates();
+			unsubscribePredictionUpdates();
+			unsubscribeMatchEvents();
 			if (refreshInterval) clearInterval(refreshInterval);
 			if (refreshDebounce) clearTimeout(refreshDebounce);
+			if (socketRefreshDebounce) clearTimeout(socketRefreshDebounce);
 		};
 	});
 
@@ -297,10 +385,76 @@
 		return `${hours}h`;
 	}
 
+	function humanizeBlockReason(reason: string): string {
+		switch (reason) {
+			case 'bridge_not_ready':
+				return 'the live bridge is not ready';
+			case 'match_not_live':
+				return 'the match is not currently in play';
+			case 'odds_missing_timestamp':
+				return 'odds freshness is unavailable';
+			case 'prediction_missing_timestamp':
+				return 'prediction freshness is unavailable';
+			case 'data_age_unknown':
+				return 'combined data age is unknown';
+			case 'data_stale':
+				return `combined data age is above ${LIVE_TRUST_MAX_AGE_SECONDS}s`;
+			case 'model_drift':
+				return 'the prediction appears out of sync with current odds';
+			default:
+				return reason.replaceAll('_', ' ');
+		}
+	}
+
+	function getMatchSelectionLockReason(match: PageData['matches'][number]): string | null {
+		if (liveSlipLockReason) {
+			return liveSlipLockReason;
+		}
+		if (match.status !== 'live') {
+			return 'Only in-play matches can be added from the live page.';
+		}
+		if (match.source_ok === false) {
+			return 'This match is not currently trusted for live betslip actions.';
+		}
+		if (match.has_live_1x2_odds === false) {
+			return 'This match does not currently have trusted 1x2 live odds.';
+		}
+		const oddsAgeSeconds = match.odds_freshness_seconds ?? null;
+		if (oddsAgeSeconds === null) {
+			return 'Odds freshness is unavailable for this match.';
+		}
+		if (oddsAgeSeconds > LIVE_TRUST_MAX_AGE_SECONDS) {
+			return `Odds are ${oddsAgeSeconds}s old, above the ${LIVE_TRUST_MAX_AGE_SECONDS}s live trust limit.`;
+		}
+		return null;
+	}
+
+	function getCandidateSelectionLockReason(
+		match: PageData['matches'][number],
+		candidate: NonNullable<PageData['matches'][number]['live_value_candidates']>[number]
+	): string | null {
+		if (candidate.is_betslip_eligible === false && candidate.block_reasons?.length) {
+			return `Live value candidate is locked because ${candidate.block_reasons.map(humanizeBlockReason).join(', ')}.`;
+		}
+		const matchReason = getMatchSelectionLockReason(match);
+		if (matchReason) {
+			return matchReason;
+		}
+		if (candidate.source_ok === false) {
+			return 'This live value candidate is not from a trusted live source.';
+		}
+		const predictionAgeSeconds = candidate.selection_age_seconds ?? candidate.prediction_age_seconds;
+		if (predictionAgeSeconds !== null && predictionAgeSeconds !== undefined && predictionAgeSeconds > LIVE_TRUST_MAX_AGE_SECONDS) {
+			return `Prediction is ${formatPredictionAge(predictionAgeSeconds)} old, above the ${LIVE_TRUST_MAX_AGE_SECONDS}s live trust limit.`;
+		}
+		return null;
+	}
+
 	function addLiveValueSelection(
 		match: PageData['matches'][number],
 		candidate: NonNullable<PageData['matches'][number]['live_value_candidates']>[number]
 	) {
+		if (getCandidateSelectionLockReason(match, candidate)) return;
 		betslip.addLeg(
 			createBetslipLeg({
 				matchId: match.id,
@@ -321,6 +475,7 @@
 		odds: number | null
 	) {
 		if (odds === null) return;
+		if (getMatchSelectionLockReason(match)) return;
 		const market = '1x2';
 		const normalizedSelection = selection === '1' ? 'home' : selection === 'X' ? 'draw' : 'away';
 		betslip.addLeg(
@@ -364,6 +519,14 @@
 			</div>
 		</Card>
 	{/if}
+	{#if liveSlipLockReason}
+		<Card>
+			<div class="p-4 border-l-4 border-orange-500 bg-orange-500/10 text-sm">
+				<div class="font-medium">Monitor-only mode for live betslip actions</div>
+				<div class="mt-1 text-muted-foreground">{liveSlipLockReason}</div>
+			</div>
+		</Card>
+	{/if}
 	{#if isDemo}
 		<Card>
 			<div class="p-4 border-l-4 border-red-500 bg-red-500/10 text-sm">
@@ -396,7 +559,7 @@
 		<div class="p-4 flex flex-wrap items-center gap-4">
 			<div class="flex items-center gap-2">
 				<span class="text-xs uppercase tracking-wider text-muted-foreground">Status:</span>
-				{#each ['All', 'Live', 'Halftime', 'Finished'] as status}
+				{#each ['All', 'Live', 'Halftime', 'Finished'] as status (status)}
 					<button
 						onclick={() => (statusFilter = status as 'All' | 'Live' | 'Halftime' | 'Finished')}
 						class="px-3 py-1 text-xs font-medium border transition-all duration-200 font-mono {statusFilter === status ? 'bg-football-green/10 border-football-green text-football-green' : 'bg-transparent border-border text-muted-foreground'}"
@@ -411,14 +574,14 @@
 					bind:value={selectedLeague}
 					class="px-3 py-1 text-xs font-medium border bg-card border-border text-foreground font-mono"
 				>
-					{#each allLeagues as league}
+					{#each allLeagues as league (league)}
 						<option value={league}>{league}</option>
 					{/each}
 				</select>
 			</div>
 			<div class="flex items-center gap-2">
 				<span class="text-xs uppercase tracking-wider text-muted-foreground">Sort:</span>
-				{#each [['time', 'Time'], ['momentum', 'Momentum'], ['score', 'Score']] as [value, label]}
+				{#each [['time', 'Time'], ['momentum', 'Momentum'], ['score', 'Score']] as [value, label] (value)}
 					<button
 						onclick={() => (sortBy = value as 'time' | 'momentum' | 'score')}
 						class="px-3 py-1 text-xs font-medium border transition-all duration-200 font-mono {sortBy === value ? 'bg-football-green/10 border-football-green text-football-green' : 'bg-transparent border-border text-muted-foreground'}"
@@ -463,7 +626,7 @@
 			</div>
 		{/if}
 		<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-			{#each visibleMatches as match}
+			{#each visibleMatches as match (match.id)}
 				<Card
 					interactive
 					class={match.status === 'live' ? 'card-glow-cyan-subtle' : ''}
@@ -556,6 +719,8 @@
 						{/if}
 
 						{#if match.odds && match.odds.length > 0}
+							{@const matchSelectionLockReason = getMatchSelectionLockReason(match)}
+							{@const matchSelectionLocked = matchSelectionLockReason !== null}
 							<div class="grid grid-cols-3 gap-2 pt-2 border-t border-border">
 								<div class="text-center">
 									<div class="text-xs text-muted-foreground">1</div>
@@ -564,6 +729,8 @@
 										variant="secondary"
 										size="sm"
 										class="mt-2 w-full"
+										title={matchSelectionLockReason ?? 'Add home selection to betslip'}
+										disabled={matchSelectionLocked}
 										onclick={() => addLiveSelection(match, '1', match.odds[0].home_odds)}
 									>
 										+1
@@ -576,8 +743,9 @@
 										variant="secondary"
 										size="sm"
 										class="mt-2 w-full"
+										title={matchSelectionLockReason ?? 'Add draw selection to betslip'}
 										onclick={() => addLiveSelection(match, 'X', match.odds[0].draw_odds)}
-										disabled={match.odds[0].draw_odds === null}
+										disabled={match.odds[0].draw_odds === null || matchSelectionLocked}
 									>
 										+X
 									</Button>
@@ -589,12 +757,17 @@
 										variant="secondary"
 										size="sm"
 										class="mt-2 w-full"
+										title={matchSelectionLockReason ?? 'Add away selection to betslip'}
+										disabled={matchSelectionLocked}
 										onclick={() => addLiveSelection(match, '2', match.odds[0].away_odds)}
 									>
 										+2
 									</Button>
 								</div>
 							</div>
+							{#if matchSelectionLockReason}
+								<div class="pt-2 text-[11px] text-orange-300">{matchSelectionLockReason}</div>
+							{/if}
 						{/if}
 
 						{#if match.live_value_candidates?.length}
@@ -603,7 +776,8 @@
 									<div class="text-xs uppercase tracking-wider text-muted-foreground">Live Value Candidates</div>
 									<div class="text-xs font-mono text-muted-foreground">Top {match.live_value_candidates.length}</div>
 								</div>
-								{#each match.live_value_candidates as candidate}
+									{#each match.live_value_candidates as candidate (`${candidate.market}-${candidate.selection}-${candidate.source}`)}
+									{@const candidateSelectionLockReason = getCandidateSelectionLockReason(match, candidate)}
 									<div class="rounded-md border border-border/70 bg-muted/40 p-2 space-y-2">
 										<div class="flex items-center justify-between">
 											<div>
@@ -647,8 +821,19 @@
 										</div>
 										<div class="flex items-center justify-between pt-1 text-[11px] text-muted-foreground">
 											<span>Prediction age: {formatPredictionAge(candidate.prediction_age_seconds)}</span>
-											<Button variant="glow" size="sm" onclick={() => addLiveValueSelection(match, candidate)}>Add to betslip</Button>
+											<Button
+												variant="glow"
+												size="sm"
+												title={candidateSelectionLockReason ?? 'Add live value candidate to betslip'}
+												disabled={candidateSelectionLockReason !== null}
+												onclick={() => addLiveValueSelection(match, candidate)}
+											>
+												{candidateSelectionLockReason ? 'Locked' : 'Add to betslip'}
+											</Button>
 										</div>
+										{#if candidateSelectionLockReason}
+											<div class="text-[11px] text-orange-300">{candidateSelectionLockReason}</div>
+										{/if}
 									</div>
 								{/each}
 							</div>

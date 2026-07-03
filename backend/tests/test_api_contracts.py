@@ -14,7 +14,7 @@ from app.api.v1 import tickets as tickets_api
 from app.api.v1.catalog import CATALOG
 from app.schemas.data import ScrapeJobCreateRequest, WorldCupPipelineRequest
 from app.schemas.match import MatchResponse
-from app.schemas.ticket import TicketCreateRequest
+from app.schemas.ticket import SettlementResponse, TicketCreateRequest
 
 
 @pytest.mark.asyncio
@@ -416,3 +416,50 @@ def test_catalog_exposes_scrape_slugs_and_world_cup():
     assert leagues["premier_league"].scrape_slug == "england-premier-league"
     assert leagues["world_cup"].name == "World Cup"
     assert leagues["world_cup"].scrape_slug == "world-cup"
+
+
+class _ScalarOneResult:
+    def __init__(self, value):
+        self._value = value
+
+    def scalar_one_or_none(self):
+        return self._value
+
+
+@pytest.mark.asyncio
+async def test_manual_ticket_settlement_endpoint_returns_declared_schema(monkeypatch):
+    async def fake_settle_ticket(db, ticket_id, outcome, return_amount):
+        return SimpleNamespace(
+            id=77,
+            bet_placement_id=None,
+            ticket_id=ticket_id,
+            settled_at=datetime(2026, 7, 4, 9, 30, tzinfo=timezone.utc),
+            outcome=outcome,
+            return_amount=return_amount,
+            pnl=return_amount - 10.0,
+        )
+
+    class _FakeDb:
+        async def execute(self, stmt):
+            return _ScalarOneResult(SimpleNamespace(id=18, user_id=12))
+
+    monkeypatch.setattr(tickets_api, "settle_ticket", fake_settle_ticket)
+
+    response = await tickets_api.settle_ticket_endpoint(
+        ticket_id=18,
+        outcome="won",
+        return_amount=19.5,
+        db=_FakeDb(),
+        user=SimpleNamespace(id=12),
+    )
+
+    assert isinstance(response, SettlementResponse)
+    assert response.model_dump() == {
+        "id": 77,
+        "bet_placement_id": None,
+        "ticket_id": 18,
+        "settled_at": datetime(2026, 7, 4, 9, 30, tzinfo=timezone.utc),
+        "outcome": "won",
+        "return_amount": 19.5,
+        "pnl": 9.5,
+    }

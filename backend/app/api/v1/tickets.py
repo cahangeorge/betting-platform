@@ -451,4 +451,4 @@ async def settle_ticket_endpoint(
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
     result_data = await settle_ticket(db, ticket_id, outcome, return_amount)
-    return result_data
+    return SettlementResponse.model_validate(result_data)
