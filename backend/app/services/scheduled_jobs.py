@@ -9,9 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import async_session_factory
 from app.models.job import ScheduledJob
+from app.models.prediction import ModelPrediction, PredictionRun
 from app.models.user import User
 from app.schemas.strategy import StrategyRunFilters, StrategyRunRequest
+from app.services.result_settlement import evaluate_model_prediction, settle_due_tickets
 from app.services.scraper import create_scrape_job, execute_scrape_job
+from app.services.ticket_engine import generate_tickets
 
 SCHEDULED_JOB_OWNER_CONFIG_KEY = "_created_by_user_id"
 
@@ -29,6 +32,52 @@ class ScheduledJobRunResult:
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _int_config(config: dict[str, Any], key: str, default: int) -> int:
+    value = config.get(key, default)
+    if value in (None, ""):
+        return default
+    return int(value)
+
+
+def _optional_int_config(config: dict[str, Any], key: str) -> int | None:
+    value = config.get(key)
+    if value in (None, ""):
+        return None
+    return int(value)
+
+
+def _bool_config(config: dict[str, Any], key: str, default: bool) -> bool:
+    value = config.get(key, default)
+    if value in (None, ""):
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _dict_config(config: dict[str, Any], key: str) -> dict[str, Any] | None:
+    value = config.get(key)
+    return dict(value) if isinstance(value, dict) else None
+
+
+def _stamp_owner_if_missing(config: dict[str, Any], owner_id: int | None) -> dict[str, Any]:
+    if owner_id is None:
+        return config
+    stamped = dict(config)
+    stamped.setdefault(SCHEDULED_JOB_OWNER_CONFIG_KEY, owner_id)
+    stamped.setdefault("user_id", owner_id)
+    return stamped
+
+
+async def _load_scheduled_job_owner(db: AsyncSession, config: dict[str, Any]) -> User | None:
+    user_id = config.get(SCHEDULED_JOB_OWNER_CONFIG_KEY) or config.get("user_id")
+    if not user_id:
+        return None
+    return await db.get(User, int(user_id))
 
 
 def _parse_step(field: str, *, prefix: str = "*/") -> int | None:
@@ -112,18 +161,19 @@ async def _run_scrape_job(db: AsyncSession, job: ScheduledJob) -> ScheduledJobRu
     return ScheduledJobRunResult(job_id=job.id, task_type=job.task_type, status="completed", detail=f"scrape_job:{created.id}")
 
 
-async def _run_prediction_job(db: AsyncSession, job: ScheduledJob) -> ScheduledJobRunResult:
+async def _run_prediction_job(
+    db: AsyncSession,
+    job: ScheduledJob,
+    *,
+    config_override: dict[str, Any] | None = None,
+) -> ScheduledJobRunResult:
     # Imported lazily to avoid importing API routes during module import.
     from app.api.v1.strategies import run_strategy
 
-    config = job.config or {}
-    user_id = config.get(SCHEDULED_JOB_OWNER_CONFIG_KEY) or config.get("user_id")
-    if not user_id:
-        return ScheduledJobRunResult(job_id=job.id, task_type=job.task_type, status="skipped", detail="missing_user_id")
-
-    user = await db.get(User, int(user_id))
+    config = dict(config_override or job.config or {})
+    user = await _load_scheduled_job_owner(db, config)
     if user is None:
-        return ScheduledJobRunResult(job_id=job.id, task_type=job.task_type, status="skipped", detail="missing_user")
+        return ScheduledJobRunResult(job_id=job.id, task_type=job.task_type, status="skipped", detail="missing_user_id")
 
     strategy_ids = [int(value) for value in config.get("strategy_ids") or []]
     if not strategy_ids:
@@ -146,9 +196,296 @@ async def _run_prediction_job(db: AsyncSession, job: ScheduledJob) -> ScheduledJ
     return ScheduledJobRunResult(job_id=job.id, task_type=job.task_type, status="completed", detail=", ".join(statuses))
 
 
+async def _run_scrape_then_predict_job(db: AsyncSession, job: ScheduledJob) -> ScheduledJobRunResult:
+    config = dict(job.config or {})
+    owner_id = config.get(SCHEDULED_JOB_OWNER_CONFIG_KEY) or config.get("user_id")
+
+    scrape_config = _dict_config(config, "scrape")
+    prediction_config = _dict_config(config, "prediction")
+
+    default_scrape_config = {
+        "league": config.get("league"),
+        "params": config.get("params") if isinstance(config.get("params"), dict) else dict(config),
+    }
+    selected_scrape_config = scrape_config or default_scrape_config
+
+    scrape_job = type(
+        "EmbeddedScrapeJob",
+        (),
+        {
+            "id": job.id,
+            "task_type": "scrape_odds",
+            "config": {
+                "league": selected_scrape_config.get("league"),
+                "params": selected_scrape_config.get("params")
+                if isinstance(selected_scrape_config.get("params"), dict)
+                else selected_scrape_config,
+            },
+        },
+    )()
+
+    scrape_result = await _run_scrape_job(db, scrape_job)
+    if scrape_result.status != "completed":
+        return scrape_result
+
+    merged_prediction_config = _stamp_owner_if_missing(prediction_config or config, owner_id)
+    prediction_result = await _run_prediction_job(db, job, config_override=merged_prediction_config)
+    if prediction_result.status != "completed":
+        return ScheduledJobRunResult(
+            job_id=job.id,
+            task_type=job.task_type,
+            status=prediction_result.status,
+            detail=f"{scrape_result.detail}; {prediction_result.detail}",
+        )
+
+    return ScheduledJobRunResult(
+        job_id=job.id,
+        task_type=job.task_type,
+        status="completed",
+        detail=f"{scrape_result.detail}; predictions:{prediction_result.detail}",
+    )
+
+
+async def _run_ticket_generation_job(
+    db: AsyncSession,
+    job: ScheduledJob,
+    *,
+    config_override: dict[str, Any] | None = None,
+) -> ScheduledJobRunResult:
+    config = dict(config_override or job.config or {})
+    user = await _load_scheduled_job_owner(db, config)
+    if user is None:
+        return ScheduledJobRunResult(job_id=job.id, task_type=job.task_type, status="skipped", detail="missing_user_id")
+
+    market_types = list(config.get("market_types") or config.get("markets") or ["1x2"])
+    batch, tickets = await generate_tickets(
+        db=db,
+        user_id=user.id,
+        bankroll_id=_optional_int_config(config, "bankroll_id"),
+        ticket_count=_int_config(config, "ticket_count", 5),
+        difficulty=str(config.get("difficulty") or "balanced"),
+        market_types=market_types,
+        min_odds=float(config.get("min_odds", 1.01) or 1.01),
+        max_odds=float(config.get("max_odds", 100.0) or 100.0),
+        stake=float(config.get("stake", 10.0) or 10.0),
+    )
+    return ScheduledJobRunResult(
+        job_id=job.id,
+        task_type=job.task_type,
+        status="completed",
+        detail=f"ticket_batch:{batch.id}; tickets:{len(tickets)}",
+    )
+
+
+async def _run_prediction_then_ticket_job(db: AsyncSession, job: ScheduledJob) -> ScheduledJobRunResult:
+    config = dict(job.config or {})
+    owner_id = config.get(SCHEDULED_JOB_OWNER_CONFIG_KEY) or config.get("user_id")
+
+    prediction_config = _stamp_owner_if_missing(_dict_config(config, "prediction") or config, owner_id)
+    prediction_result = await _run_prediction_job(db, job, config_override=prediction_config)
+    if prediction_result.status != "completed":
+        return prediction_result
+
+    ticket_config = _stamp_owner_if_missing(_dict_config(config, "tickets") or config, owner_id)
+    ticket_result = await _run_ticket_generation_job(db, job, config_override=ticket_config)
+    if ticket_result.status != "completed":
+        return ScheduledJobRunResult(
+            job_id=job.id,
+            task_type=job.task_type,
+            status=ticket_result.status,
+            detail=f"predictions:{prediction_result.detail}; {ticket_result.detail}",
+        )
+
+    return ScheduledJobRunResult(
+        job_id=job.id,
+        task_type=job.task_type,
+        status="completed",
+        detail=f"predictions:{prediction_result.detail}; {ticket_result.detail}",
+    )
+
+
+async def _run_scrape_predict_tickets_job(db: AsyncSession, job: ScheduledJob) -> ScheduledJobRunResult:
+    config = dict(job.config or {})
+    owner_id = config.get(SCHEDULED_JOB_OWNER_CONFIG_KEY) or config.get("user_id")
+
+    scrape_config = _dict_config(config, "scrape")
+    prediction_config = _dict_config(config, "prediction")
+    ticket_config = _dict_config(config, "tickets")
+
+    default_scrape_config = {
+        "league": config.get("league"),
+        "params": config.get("params") if isinstance(config.get("params"), dict) else dict(config),
+    }
+    selected_scrape_config = scrape_config or default_scrape_config
+    scrape_job = type(
+        "EmbeddedScrapeJob",
+        (),
+        {
+            "id": job.id,
+            "task_type": "scrape_odds",
+            "config": {
+                "league": selected_scrape_config.get("league"),
+                "params": selected_scrape_config.get("params")
+                if isinstance(selected_scrape_config.get("params"), dict)
+                else selected_scrape_config,
+            },
+        },
+    )()
+
+    scrape_result = await _run_scrape_job(db, scrape_job)
+    if scrape_result.status != "completed":
+        return scrape_result
+
+    merged_prediction_config = _stamp_owner_if_missing(prediction_config or config, owner_id)
+    prediction_result = await _run_prediction_job(db, job, config_override=merged_prediction_config)
+    if prediction_result.status != "completed":
+        return ScheduledJobRunResult(
+            job_id=job.id,
+            task_type=job.task_type,
+            status=prediction_result.status,
+            detail=f"{scrape_result.detail}; predictions:{prediction_result.detail}",
+        )
+
+    merged_ticket_config = _stamp_owner_if_missing(ticket_config or config, owner_id)
+    ticket_result = await _run_ticket_generation_job(db, job, config_override=merged_ticket_config)
+    if ticket_result.status != "completed":
+        return ScheduledJobRunResult(
+            job_id=job.id,
+            task_type=job.task_type,
+            status=ticket_result.status,
+            detail=f"{scrape_result.detail}; predictions:{prediction_result.detail}; {ticket_result.detail}",
+        )
+
+    return ScheduledJobRunResult(
+        job_id=job.id,
+        task_type=job.task_type,
+        status="completed",
+        detail=f"{scrape_result.detail}; predictions:{prediction_result.detail}; {ticket_result.detail}",
+    )
+
+
+async def _run_world_cup_pipeline_job(db: AsyncSession, job: ScheduledJob) -> ScheduledJobRunResult:
+    from app.services.world_cup_pipeline import run_world_cup_pipeline
+
+    config = dict(job.config or {})
+    user = await _load_scheduled_job_owner(db, config)
+    if user is None:
+        return ScheduledJobRunResult(job_id=job.id, task_type=job.task_type, status="skipped", detail="missing_user_id")
+
+    result = await run_world_cup_pipeline(
+        db,
+        user_id=user.id,
+        parent_job_id=None,
+        future_days=_int_config(config, "future_days", 7),
+        history_years=_int_config(config, "history_years", 10),
+        all_markets=_bool_config(config, "all_markets", True),
+        odds_history=_bool_config(config, "odds_history", True),
+        max_historic_pages=_optional_int_config(config, "max_historic_pages"),
+        max_historic_seasons=_optional_int_config(config, "max_historic_seasons"),
+        upcoming_timeout_seconds=_optional_int_config(config, "upcoming_timeout_seconds"),
+        historic_timeout_seconds=_optional_int_config(config, "historic_timeout_seconds"),
+        scraper_engine=str(config.get("scraper_engine") or "playwright"),
+        ticket_count=_int_config(config, "ticket_count", 10),
+        ticket_stake=float(config.get("ticket_stake", 10.0) or 10.0),
+        create_tickets=_bool_config(config, "create_tickets", True),
+        allow_experimental_tickets=_bool_config(config, "allow_experimental_tickets", False),
+        training_limit=_int_config(config, "training_limit", 240),
+        target_date=config.get("target_date"),
+        target_date_from=config.get("target_date_from"),
+        target_date_to=config.get("target_date_to"),
+    )
+    summary = result.get("summary", {}) if isinstance(result, dict) else {}
+    detail = (
+        f"scrape_jobs:{summary.get('completed_scrape_jobs', 0)}/{summary.get('scrape_jobs', 0)}, "
+        f"prediction_runs:{summary.get('completed_prediction_runs', 0) + summary.get('partial_prediction_runs', 0)}/"
+        f"{summary.get('prediction_runs', 0)}, "
+        f"tickets:{summary.get('created_tickets', 0)}"
+    )
+    return ScheduledJobRunResult(job_id=job.id, task_type=job.task_type, status="completed", detail=detail)
+
+
+async def _run_verification_and_settlement_job(db: AsyncSession, job: ScheduledJob) -> ScheduledJobRunResult:
+    config = dict(job.config or {})
+    user = await _load_scheduled_job_owner(db, config)
+    if user is None:
+        return ScheduledJobRunResult(job_id=job.id, task_type=job.task_type, status="skipped", detail="missing_user_id")
+
+    detail_parts: list[str] = []
+
+    if _bool_config(config, "verify_predictions", True):
+        run_id = _optional_int_config(config, "run_id")
+        stmt = (
+            select(ModelPrediction)
+            .join(PredictionRun, ModelPrediction.run_id == PredictionRun.id)
+            .where(PredictionRun.user_id == user.id)
+            .order_by(ModelPrediction.created_at.desc())
+            .limit(_int_config(config, "max_results", 250))
+        )
+        if run_id is not None:
+            stmt = stmt.where(ModelPrediction.run_id == run_id)
+
+        result = await db.execute(stmt)
+        predictions = result.scalars().all()
+        counts = {"won": 0, "lost": 0, "pending": 0, "void": 0, "unsupported": 0}
+        for prediction in predictions:
+            evaluation = evaluate_model_prediction(prediction)
+            counts[evaluation.status] = counts.get(evaluation.status, 0) + 1
+
+        detail_parts.append(
+            "predictions="
+            f"{len(predictions)} checked, "
+            f"{counts['won']} won, "
+            f"{counts['lost']} lost, "
+            f"{counts['pending']} pending, "
+            f"{counts['void']} void, "
+            f"{counts['unsupported']} unsupported"
+        )
+
+    if _bool_config(config, "settle_tickets", True):
+        summary = await settle_due_tickets(
+            db,
+            user_id=user.id,
+            unsupported_policy=str(config.get("unsupported_policy") or "pending"),
+            limit=_int_config(config, "ticket_limit", _int_config(config, "limit", 100)),
+        )
+        detail_parts.append(
+            "tickets="
+            f"{summary.checked_tickets} checked, "
+            f"{summary.settled_tickets} settled, "
+            f"{summary.pending_tickets} pending, "
+            f"{summary.updated_legs} legs_updated"
+        )
+
+    if not detail_parts:
+        return ScheduledJobRunResult(job_id=job.id, task_type=job.task_type, status="skipped", detail="nothing_enabled")
+
+    return ScheduledJobRunResult(
+        job_id=job.id,
+        task_type=job.task_type,
+        status="completed",
+        detail="; ".join(detail_parts),
+    )
+
+
 async def dispatch_scheduled_job(db: AsyncSession, job: ScheduledJob) -> ScheduledJobRunResult:
     task_type = (job.task_type or "").lower()
-    if any(token in task_type for token in ("scrape", "odds", "world_cup_pipeline")):
+    if "world_cup_pipeline" in task_type:
+        return await _run_world_cup_pipeline_job(db, job)
+    if "scrape" in task_type and any(token in task_type for token in ("predict", "prediction", "strategy")) and any(
+        token in task_type for token in ("ticket", "slip", "batch")
+    ):
+        return await _run_scrape_predict_tickets_job(db, job)
+    if "scrape" in task_type and any(token in task_type for token in ("predict", "prediction", "strategy", "chain", "pipeline")):
+        return await _run_scrape_then_predict_job(db, job)
+    if any(token in task_type for token in ("predict", "prediction", "strategy")) and any(
+        token in task_type for token in ("ticket", "slip", "batch")
+    ):
+        return await _run_prediction_then_ticket_job(db, job)
+    if any(token in task_type for token in ("settle", "settlement", "verify", "verification")):
+        return await _run_verification_and_settlement_job(db, job)
+    if any(token in task_type for token in ("ticket", "slip", "batch")):
+        return await _run_ticket_generation_job(db, job)
+    if any(token in task_type for token in ("scrape", "odds")):
         return await _run_scrape_job(db, job)
     if any(token in task_type for token in ("predict", "prediction", "strategy")):
         return await _run_prediction_job(db, job)

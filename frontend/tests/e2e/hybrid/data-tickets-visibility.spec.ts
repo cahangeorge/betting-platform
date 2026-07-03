@@ -26,7 +26,7 @@ test('Data Hub tickets tab shows seeded tickets with ticket type and leg match d
 
 		await page.getByText(`TKT-${fixtures.seededTicketId}`).first().click();
 
-		await expect(page.getByRole('heading', { name: 'Tickets Detail' })).toBeVisible();
+		await expect(page.getByRole('dialog', { name: /Detail$/ })).toBeVisible();
 		await expect(page.getByText(fixtures.scheduledMatchLabel)).toBeVisible();
 		await expect(page.getByText('1x2 · home · Betfair')).toBeVisible();
 	} finally {

@@ -1,25 +1,54 @@
 import type { ScheduledJob } from '$lib/types';
 
-export type ScheduledJobArea = 'scrape' | 'prediction';
+export type ScheduledJobArea = 'scrape' | 'prediction' | 'verification' | 'orchestration' | 'tickets';
+
+function jobHaystack(job: ScheduledJob): string {
+	const config = job.config ?? {};
+	return [
+		job.name,
+		job.task_type,
+		String(config.source_page ?? ''),
+		String(config.area ?? ''),
+		String(config.mode ?? ''),
+		String(config.workflow ?? '')
+	]
+		.join(' ')
+		.toLowerCase();
+}
+
+function matchesAreaTokens(haystack: string, tokens: string[]): boolean {
+	return tokens.some((token) => haystack.includes(token));
+}
 
 export function scheduledJobsForArea(jobs: ScheduledJob[], area: ScheduledJobArea): ScheduledJob[] {
-	const tokens =
-		area === 'scrape'
-			? ['scrape', 'scraping', 'odds', 'world_cup_pipeline']
-			: ['predict', 'prediction', 'strategy'];
+	const tokensByArea: Record<ScheduledJobArea, string[]> = {
+		scrape: ['scrape', 'scraping', 'odds'],
+		prediction: ['predict', 'prediction', 'strategy'],
+		verification: ['verify', 'verification', 'settlement', 'settle', 'reconcile', 'results'],
+		orchestration: [
+			'orchestration',
+			'pipeline',
+			'workflow',
+			'scrape_predict',
+			'scrape_then_predict',
+			'composite'
+		],
+		tickets: ['ticket', 'tickets', 'slip', 'batch']
+	};
 
 	return jobs.filter((job) => {
-		const config = job.config ?? {};
-		const haystack = [
-			job.name,
-			job.task_type,
-			String(config.source_page ?? ''),
-			String(config.area ?? '')
-		]
-			.join(' ')
-			.toLowerCase();
+		const haystack = jobHaystack(job);
+		const isVerification = matchesAreaTokens(haystack, tokensByArea.verification);
+		const isOrchestration = matchesAreaTokens(haystack, tokensByArea.orchestration);
+		const isTickets = matchesAreaTokens(haystack, tokensByArea.tickets);
 
-		return tokens.some((token) => haystack.includes(token));
+		if (area === 'verification') return isVerification;
+		if (area === 'orchestration') return isOrchestration;
+		if (area === 'tickets') return !isOrchestration && isTickets;
+		if (area === 'scrape') {
+			return !isVerification && !isOrchestration && !isTickets && matchesAreaTokens(haystack, tokensByArea.scrape);
+		}
+		return !isVerification && !isOrchestration && !isTickets && matchesAreaTokens(haystack, tokensByArea.prediction);
 	});
 }
 

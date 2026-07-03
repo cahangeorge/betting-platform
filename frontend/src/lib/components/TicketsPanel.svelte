@@ -1,10 +1,20 @@
 <script lang="ts">
 	import { ApiClientError } from '$lib/api/client';
 	import { bankrollApi } from '$lib/api/bankroll';
+	import { jobsApi } from '$lib/api/jobs';
 	import { matchesApi } from '$lib/api/matches';
+	import { cronFromInterval, describeScheduledJob, scheduledJobsForArea } from '$lib/scheduled-jobs.helpers';
 	import { ticketsApi } from '$lib/api/tickets';
 	import { betslip, betslipCombinedOdds, betslipPotentialReturn } from '$lib/stores/betslip';
-	import type { Bankroll, Match, PlaceBetRequest, Ticket, TicketBatch, TicketType } from '$lib/types';
+	import type {
+		Bankroll,
+		Match,
+		PlaceBetRequest,
+		ScheduledJob,
+		Ticket,
+		TicketBatch,
+		TicketType
+	} from '$lib/types';
 	import { onMount } from 'svelte';
 	import { shouldAutoLoadTicketsData } from './tickets-panel.helpers';
 	import Badge from './ui/Badge.svelte';
@@ -40,6 +50,14 @@
 	let hasRequestedInitialLoad = $state(false);
 	let settlementChecking = $state(false);
 	let settlementMessage = $state('');
+	let autoVerificationEnabled = $state(true);
+	let autoVerificationIntervalNumber = $state('1');
+	let autoVerificationIntervalUnit = $state('Hours');
+	let scheduledJobs = $state<ScheduledJob[]>([]);
+	let loadingScheduledJobs = $state(false);
+	let scheduledJobsError = $state('');
+	let savingScheduledJob = $state(false);
+	let interactive = $state(false);
 
 	let betMatchId = $state('');
 	let betMarket = $state('1x2');
@@ -54,6 +72,9 @@
 	let generateMarkets = $state<string[]>(['1x2']);
 	let generateMinOdds = $state('1.20');
 	let generateMaxOdds = $state('5.00');
+	let autoTicketGenerationEnabled = $state(true);
+	let autoTicketIntervalNumber = $state('1');
+	let autoTicketIntervalUnit = $state('Hours');
 	let generatedBatchId = $state<number | null>(null);
 	let generatedTickets = $state<Ticket[]>([]);
 	let generatingTickets = $state(false);
@@ -115,6 +136,18 @@
 		}
 	}
 
+	async function fetchScheduledJobs() {
+		loadingScheduledJobs = true;
+		scheduledJobsError = '';
+		try {
+			scheduledJobs = await jobsApi.getScheduledJobs();
+		} catch (err) {
+			scheduledJobsError = err instanceof ApiClientError ? err.message : 'Failed to load scheduled verification jobs';
+		} finally {
+			loadingScheduledJobs = false;
+		}
+	}
+
 	async function loadBatchTickets(batchId: number) {
 		batchTicketsLoading = true;
 		batchLoadError = '';
@@ -152,6 +185,44 @@
 			settlementMessage = err instanceof ApiClientError ? err.message : 'Failed to verify ticket results';
 		} finally {
 			settlementChecking = false;
+		}
+	}
+
+	async function toggleScheduledJob(jobId: number) {
+		scheduledJobsError = '';
+		try {
+			const updated = await jobsApi.toggleJob(jobId);
+			scheduledJobs = scheduledJobs.map((job) => (job.id === jobId ? updated : job));
+		} catch (err) {
+			scheduledJobsError =
+				err instanceof ApiClientError ? err.message : 'Failed to toggle scheduled verification job';
+		}
+	}
+
+	async function saveAutomaticVerificationAction() {
+		savingScheduledJob = true;
+		scheduledJobsError = '';
+		try {
+			const created = await jobsApi.createScheduledJob({
+				name: `Auto verify results every ${autoVerificationIntervalNumber} ${autoVerificationIntervalUnit.toLowerCase()}`,
+				task_type: 'verify_results',
+				cron_expression: cronFromInterval(
+					autoVerificationIntervalNumber,
+					autoVerificationIntervalUnit
+				),
+				config: {
+					source_page: 'tickets',
+					area: 'verification',
+					limit: 100,
+					unsupported_policy: 'pending'
+				}
+			});
+			scheduledJobs = [created, ...scheduledJobs.filter((job) => job.id !== created.id)];
+		} catch (err) {
+			scheduledJobsError =
+				err instanceof ApiClientError ? err.message : 'Failed to save automatic verification job';
+		} finally {
+			savingScheduledJob = false;
 		}
 	}
 
@@ -266,6 +337,36 @@
 			generateError = err instanceof ApiClientError ? err.message : 'Failed to generate tickets';
 		} finally {
 			generatingTickets = false;
+		}
+	}
+
+	async function saveAutomaticTicketGenerationAction() {
+		savingScheduledJob = true;
+		scheduledJobsError = '';
+		try {
+			const bankrollId = selectedBankrollId ? parseInt(selectedBankrollId, 10) : NaN;
+			const created = await jobsApi.createScheduledJob({
+				name: `Auto generate ${generateDifficulty} tickets`,
+				task_type: 'generate_tickets',
+				cron_expression: cronFromInterval(autoTicketIntervalNumber, autoTicketIntervalUnit),
+				config: {
+					source_page: 'tickets',
+					area: 'tickets',
+					bankroll_id: Number.isFinite(bankrollId) && bankrollId > 0 ? bankrollId : undefined,
+					ticket_count: parseInt(generateTicketCount, 10) || 1,
+					difficulty: generateDifficulty,
+					market_types: generateMarkets,
+					min_odds: parseFloat(generateMinOdds) || 1.01,
+					max_odds: parseFloat(generateMaxOdds) || 100,
+					stake: parseFloat(betStake || '10') || 10
+				}
+			});
+			scheduledJobs = [created, ...scheduledJobs.filter((job) => job.id !== created.id)];
+		} catch (err) {
+			scheduledJobsError =
+				err instanceof ApiClientError ? err.message : 'Failed to save automatic ticket generation job';
+		} finally {
+			savingScheduledJob = false;
 		}
 	}
 
@@ -394,6 +495,7 @@
 	}
 
 	onMount(() => {
+		interactive = true;
 		tickets = serverTickets ?? [];
 		matches = serverMatches ?? [];
 		stats = serverStats ?? { total: 0, won: 0, lost: 0, profit_loss: 0 };
@@ -419,6 +521,7 @@
 			hasRequestedInitialLoad = true;
 			void loadTickets();
 		}
+		void fetchScheduledJobs();
 			const pollInterval = setInterval(loadTickets, 30000);
 			return () => {
 				clearInterval(pollInterval);
@@ -456,6 +559,8 @@
 	);
 
 	const activeTickets = $derived(tickets.filter((t) => t.status === 'open'));
+	const automaticVerificationJobs = $derived(scheduledJobsForArea(scheduledJobs, 'verification'));
+	const automaticTicketJobs = $derived(scheduledJobsForArea(scheduledJobs, 'tickets'));
 	const tabs = $derived([
 		{ id: 'active', label: 'Active', count: activeTickets.length },
 		{ id: 'history', label: 'Istorice', count: batches.length },
@@ -483,10 +588,88 @@
 			{#if settlementMessage}
 				<p class="mt-2 text-xs text-muted-foreground">{settlementMessage}</p>
 			{/if}
+			{#if scheduledJobsError}
+				<p class="mt-2 text-xs text-destructive">{scheduledJobsError}</p>
+			{/if}
 		</div>
-		<Button variant="secondary" onclick={verifyResults} disabled={settlementChecking}>
-			{settlementChecking ? 'Verifying...' : 'Verify results'}
-		</Button>
+		<div class="flex flex-wrap gap-2">
+			<Button variant="ghost" onclick={fetchScheduledJobs} disabled={loadingScheduledJobs}>
+				{loadingScheduledJobs ? 'Refreshing jobs...' : 'Refresh jobs'}
+			</Button>
+			<Button variant="secondary" onclick={verifyResults} disabled={settlementChecking}>
+				{settlementChecking ? 'Verifying...' : 'Verify results'}
+			</Button>
+		</div>
+	</div>
+
+	<div class="space-y-3 border border-border bg-muted/20 p-4">
+		<div class="flex flex-wrap items-center justify-between gap-3">
+			<div>
+				<h3 class="text-sm font-semibold text-foreground">Automatic verification job</h3>
+				<p class="mt-1 text-xs text-muted-foreground">
+					Create an hourly or daily settlement job in <span class="font-mono">/api/v1/jobs</span>.
+				</p>
+			</div>
+			<Button
+				variant="glow"
+				onclick={saveAutomaticVerificationAction}
+				disabled={!interactive || savingScheduledJob || !autoVerificationEnabled}
+			>
+				{savingScheduledJob ? 'Saving...' : 'Save auto verification'}
+			</Button>
+		</div>
+
+		<label class="flex items-center gap-2 text-sm text-foreground">
+			<input
+				type="checkbox"
+				class="h-4 w-4 accent-football-blue"
+				bind:checked={autoVerificationEnabled}
+			/>
+			<span>Enable saved scheduled result verification</span>
+		</label>
+
+		<div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+			<Input
+				label="Interval number"
+				name="tickets-auto-verification-interval"
+				type="number"
+				min="1"
+				bind:value={autoVerificationIntervalNumber}
+				disabled={!autoVerificationEnabled}
+			/>
+			<Select
+				label="Interval unit"
+				bind:value={autoVerificationIntervalUnit}
+				options={[
+					{ value: 'Hours', label: 'Hours' },
+					{ value: 'Days', label: 'Days' },
+					{ value: 'Weeks', label: 'Weeks' }
+				]}
+				disabled={!autoVerificationEnabled}
+			/>
+		</div>
+
+		{#if loadingScheduledJobs}
+			<p class="text-xs text-muted-foreground">Loading verification jobs...</p>
+		{:else if automaticVerificationJobs.length === 0}
+			<p class="text-xs text-muted-foreground">No automatic verification job saved yet.</p>
+		{:else}
+			<div class="flex flex-wrap gap-2">
+				{#each automaticVerificationJobs as scheduledJob (scheduledJob.id)}
+					<Button
+						variant={scheduledJob.enabled ? 'secondary' : 'ghost'}
+						size="sm"
+						title={describeScheduledJob(scheduledJob)}
+						onclick={() => toggleScheduledJob(scheduledJob.id)}
+					>
+						{scheduledJob.name}
+						<span class="ml-1 font-mono text-[10px]">
+							{scheduledJob.enabled ? 'running' : 'paused'}
+						</span>
+					</Button>
+				{/each}
+			</div>
+		{/if}
 	</div>
 
 	<div class="grid grid-cols-2 gap-4 md:grid-cols-4">
@@ -676,6 +859,72 @@
 								</label>
 							{/each}
 						</div>
+					</div>
+
+					<div class="space-y-3 border border-border bg-muted/10 p-3">
+						<div class="flex flex-wrap items-center justify-between gap-3">
+							<div>
+								<p class="text-sm font-semibold text-foreground">Automatic ticket jobs</p>
+								<p class="mt-1 text-xs text-muted-foreground">
+									Save recurring generation jobs from the current prediction pool.
+								</p>
+							</div>
+							<Button
+								type="button"
+								variant="secondary"
+								onclick={saveAutomaticTicketGenerationAction}
+								disabled={!interactive || savingScheduledJob || !autoTicketGenerationEnabled}
+							>
+								{savingScheduledJob ? 'Saving...' : 'Save auto ticket job'}
+							</Button>
+						</div>
+						<label class="flex items-center gap-2 text-sm text-foreground">
+							<input
+								type="checkbox"
+								class="h-4 w-4 accent-football-green"
+								bind:checked={autoTicketGenerationEnabled}
+							/>
+							<span>Enable saved automatic ticket generation</span>
+						</label>
+						<div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+							<Input
+								label="Repeat every"
+								type="number"
+								min="1"
+								bind:value={autoTicketIntervalNumber}
+								disabled={!autoTicketGenerationEnabled}
+							/>
+							<Select
+								label="Interval unit"
+								bind:value={autoTicketIntervalUnit}
+								options={[
+									{ value: 'Hours', label: 'Hours' },
+									{ value: 'Days', label: 'Days' },
+									{ value: 'Weeks', label: 'Weeks' }
+								]}
+								disabled={!autoTicketGenerationEnabled}
+							/>
+						</div>
+						{#if automaticTicketJobs.length > 0}
+							<div class="flex flex-wrap gap-2">
+								{#each automaticTicketJobs as scheduledJob (scheduledJob.id)}
+									<Button
+										type="button"
+										variant={scheduledJob.enabled ? 'secondary' : 'ghost'}
+										size="sm"
+										title={describeScheduledJob(scheduledJob)}
+										onclick={() => toggleScheduledJob(scheduledJob.id)}
+									>
+										{scheduledJob.name}
+										<span class="ml-1 font-mono text-[10px]">
+											{scheduledJob.enabled ? 'running' : 'paused'}
+										</span>
+									</Button>
+								{/each}
+							</div>
+						{:else}
+							<p class="text-xs text-muted-foreground">No recurring automatic ticket job saved yet.</p>
+						{/if}
 					</div>
 
 					<Button type="button" variant="glow" onclick={generateAutomaticTickets} disabled={generatingTickets || bankrolls.length === 0}>

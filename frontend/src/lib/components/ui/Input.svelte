@@ -6,6 +6,7 @@
 	let {
 		value = $bindable(),
 		label,
+		id,
 		type = 'text',
 		placeholder = '',
 		error,
@@ -16,6 +17,7 @@
 	}: {
 		value: string;
 		label?: string;
+		id?: string;
 		type?: string;
 		placeholder?: string;
 		error?: string;
@@ -27,15 +29,18 @@
 	let inputClasses = $derived(
 		cn(error ? 'border-destructive focus-visible:ring-destructive' : '', className)
 	);
+
+	let inputId = $derived(id ?? name);
 </script>
 
 <div class="space-y-1.5">
 	{#if label}
-		<label for={name} class="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+		<label for={inputId} class="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
 			{label}
 		</label>
 	{/if}
 	<ShadcnInput
+		id={inputId}
 		{type}
 		{name}
 		{placeholder}

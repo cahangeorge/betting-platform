@@ -9,8 +9,9 @@
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "test:unit": "node --test --experimental-strip-types tests/unit/**/*.test.ts",
-    "test:e2e": "E2E_MODE=hybrid npx playwright test --project=chromium-hybrid",
-    "test:e2e:live": "E2E_MODE=live npx playwright test --project=chromium-live"
+    "test:e2e": "npx playwright test --project=chromium-hybrid",
+    "test:e2e:live": "E2E_MODE=live npx playwright test --project=chromium-live",
+    "check:e2e": "tsc --noEmit --pretty false --moduleResolution bundler --module ESNext --target ESNext --strict --esModuleInterop --allowImportingTsExtensions --resolveJsonModule --skipLibCheck --lib ESNext,DOM --types node,@playwright/test ./tests/e2e/helpers/*.ts ./tests/e2e/hybrid/*.ts ./tests/e2e/live/*.ts"
   },
   "dependencies": {
     "bits-ui": "^2.18.1",

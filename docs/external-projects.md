@@ -58,6 +58,7 @@ pip install -e .
 
 cd ../soccerdata
 uv sync
+test -x .venv/bin/python
 ```
 
 Backend bridge defaults expect repo-local paths such as:
@@ -68,7 +69,7 @@ penaltyblog/.venv/bin/python
 soccerdata/.venv/bin/python
 ```
 
-You can override them in `backend/.env` with the `BET_*` variables documented in `backend/.env.example`.
+The soccerdata bridge uses an existing Python interpreter. After `cd soccerdata && uv sync`, verify `soccerdata/.venv/bin/python` exists, then set `BET_SOCCERDATA_PYTHON` to that executable or another existing interpreter with soccerdata installed. You can override the other bridge paths in `backend/.env` with the `BET_*` variables documented in `backend/.env.example`.
 
 ## Important constraints
 

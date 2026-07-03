@@ -611,13 +611,59 @@ Verify:
 
 Use this section during implementation and publication.
 
+### 2026-07-01 implementation status update
+
+Implemented in this pass:
+
+- Backend scheduled-job orchestration now supports:
+  - `verify_results` / settlement-style hourly checks,
+  - `generate_tickets`,
+  - `scrape_then_predict`,
+  - `predict -> tickets`,
+  - `scrape -> predict -> tickets`,
+  - scheduled `world_cup_pipeline` routing to the real pipeline service.
+- Frontend Scrape/Tickets surfaces now expose:
+  - saved automatic verification jobs,
+  - saved automatic ticket-generation jobs,
+  - saved scrape -> predict orchestration,
+  - saved scrape -> predict -> tickets orchestration.
+- Test coverage added:
+  - backend scheduler tests for ticket-generation and full orchestration dispatch,
+  - frontend unit coverage for scheduled-job bucket classification,
+  - hybrid Playwright spec `frontend/tests/e2e/hybrid/scrape-predict-tickets-settle.spec.ts`.
+
+Known bugs / operational gaps still present:
+
+- Backend startup still warns that `BET_SOCCERDATA_PYTHON` points to a missing local path; this did not block the verified hybrid flows, but it is still an environment bug for broader bridge coverage.
+- The new hybrid E2E orchestration spec creates scheduled jobs through the API and verifies their UI visibility; it does not yet click every new “save job” button in the browser.
+- This branch validated targeted backend tests and targeted browser tests, but did not rerun the full backend `pytest` suite or the entire Playwright suite.
+
+What was verified in this pass:
+
+- `git diff --check`
+- `cd backend && PYTHONPATH=. .venv/bin/pytest tests/test_scheduled_jobs.py`
+- `cd frontend && pnpm check`
+- `cd frontend && pnpm test:unit`
+- `cd frontend && pnpm build`
+- hybrid Playwright:
+  - `scrape-job-honesty.spec.ts`
+  - `dashboard-slip-ticket.spec.ts`
+  - `scrape-predict-tickets-settle.spec.ts`
+
+Still recommended before calling the whole platform fully closed:
+
+- run full `cd backend && pytest`,
+- run the broader `pnpm test:e2e` suite,
+- add one browser spec that saves the new scheduled jobs via UI controls instead of only creating them through the API,
+- fix/verify the local `soccerdata` bridge runtime path.
+
 | Phase | Status | Implementation notes | Verification status |
 |---|---|---|---|
 | Phase 0: documentation and contract checkpoint | Done | Product spec, API contracts, roadmap, and test plan are present under `docs/plans/`. | `git diff --check docs/plans` before publish. |
 | Phase 1: API and type foundations | Done | Backend response contracts were expanded for dashboard, predictions, tickets, jobs, strategies, and scrape semantics; frontend shared types and API clients were aligned around typed/paginated data. | Covered by backend contract tests and frontend unit/check commands. |
 | Phase 2: Dashboard tabs and charts | Done | Dashboard now separates historical/future views, ticket outcome metrics, future matches, and generated-ticket visibility. | Covered by dashboard/auth hybrid smoke coverage and frontend checks. |
-| Phase 3: Scrape page | Done | Scrape controls support explicit historical job inputs, saved/inspectable jobs, duplicate-scrape skipping, persisted job logs, and bridge timeout plumbing. | Covered by scrape semantics tests, scrape catalog unit tests, and targeted hybrid scrape-job coverage. |
+| Phase 3: Scrape page | Done | Scrape controls support explicit historical job inputs, saved/inspectable jobs, duplicate-scrape skipping, persisted job logs, bridge timeout plumbing, and saved scrape -> predict / scrape -> predict -> tickets orchestration. | Covered by scrape semantics tests, scrape catalog unit tests, targeted hybrid scrape-job coverage, and the new hybrid orchestration spec. |
 | Phase 4: Predictii page | Done | Prediction catalog/run APIs and UI now expose richer controls, metrics, run history, verification/value-bet surfaces, and dedupe-oriented request semantics. | Covered by API contract tests, prediction visibility hybrid smoke coverage, and frontend checks. |
-| Phase 5: Bilete page | Done | Tickets now expose generation/history/place-bet panels, ticket-leg status details, swap/recalculation helpers, and backend validation/settlement paths. | Covered by ticket creation validation, result settlement tests, ticket helper unit tests, and dashboard slip/ticket hybrid smoke coverage. |
+| Phase 5: Bilete page | Done | Tickets now expose generation/history/place-bet panels, ticket-leg status details, swap/recalculation helpers, backend validation/settlement paths, plus saved automatic verification and automatic ticket-generation job controls. | Covered by ticket creation validation, result settlement tests, ticket helper unit tests, dashboard slip/ticket hybrid smoke coverage, and the new hybrid orchestration/settlement spec. |
 | Phase 6: Account, Data, Configuratii, Board deletion | Done | Account/Data routes were updated, `/configuratii` was added for strategy management/duplication, Board route/tests were removed, and navigation/search now point to current surfaces. | Covered by strategy semantics tests, data page load tests, layout auth gating, and frontend checks. |
-| Phase 7: integrated verification and cleanup | In progress | Backend and frontend verification commands are part of the publish gate; live/browser integration still depends on local service/database availability. | Publish requires backend tests plus `pnpm check`, `pnpm test:unit`, `pnpm build`, and any reachable targeted hybrid Playwright smoke. |
+| Phase 7: integrated verification and cleanup | In progress | The dedicated hybrid `scrape -> predict -> tickets -> settle` flow now exists and passes locally; full-suite backend and browser verification is still pending for full platform closure. | Completed this pass: `git diff --check`, targeted scheduler pytest, `pnpm check`, `pnpm test:unit`, `pnpm build`, and three targeted hybrid Playwright specs. Remaining recommended gate: full backend `pytest` and broader Playwright suite. |
