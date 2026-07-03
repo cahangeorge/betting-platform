@@ -38,7 +38,7 @@ test('dashboard can add a seeded match to the slip and place a ticket', async ({
 		await expect(activeTab).toBeVisible();
 		await expect(activeTab).toHaveAttribute('data-state', 'active');
 		await expect(activeTab).toContainText('2');
-		await expect(page.getByText(fixtures.scheduledMatchLabel)).toHaveCount(2);
+		await expect(page.getByRole('tabpanel', { name: 'Active' }).getByText(fixtures.scheduledMatchLabel)).toHaveCount(2);
 	} finally {
 		await cleanupSessionArtifacts(session);
 	}
