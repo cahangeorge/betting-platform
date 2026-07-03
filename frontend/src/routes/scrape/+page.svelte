@@ -163,6 +163,7 @@
 	let loadingScheduledJobs = $state(true);
 	let scheduledJobsError = $state('');
 	let savingScheduledJob = $state(false);
+	let interactive = $state(false);
 	let expandedJobId = $state<number | null>(null);
 	let logsPanelOpen = $state(false);
 	let loadingJobLogs = $state(false);
@@ -758,6 +759,7 @@
 	}
 
 	onMount(() => {
+		interactive = true;
 		applyHistoryPreset(historyPresetYears);
 		fetchCatalog();
 		fetchJobs();
@@ -786,10 +788,20 @@
 							</p>
 						</div>
 						<div class="flex flex-wrap gap-2">
-							<Button variant="secondary" size="sm" onclick={fetchScheduledJobs} disabled={loadingScheduledJobs}>
+							<Button
+								variant="secondary"
+								size="sm"
+								onclick={fetchScheduledJobs}
+								disabled={!interactive || loadingScheduledJobs}
+							>
 								Refresh
 							</Button>
-							<Button variant="glow" size="sm" onclick={saveAutomaticScrapeAction} disabled={savingScheduledJob}>
+							<Button
+								variant="glow"
+								size="sm"
+								onclick={saveAutomaticScrapeAction}
+								disabled={!interactive || savingScheduledJob}
+							>
 								{savingScheduledJob ? 'Saving...' : 'Save autoscrape'}
 							</Button>
 						</div>

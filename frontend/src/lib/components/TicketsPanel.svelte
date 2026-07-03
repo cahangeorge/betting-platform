@@ -57,6 +57,7 @@
 	let loadingScheduledJobs = $state(false);
 	let scheduledJobsError = $state('');
 	let savingScheduledJob = $state(false);
+	let interactive = $state(false);
 
 	let betMatchId = $state('');
 	let betMarket = $state('1x2');
@@ -494,6 +495,7 @@
 	}
 
 	onMount(() => {
+		interactive = true;
 		tickets = serverTickets ?? [];
 		matches = serverMatches ?? [];
 		stats = serverStats ?? { total: 0, won: 0, lost: 0, profit_loss: 0 };
@@ -611,7 +613,7 @@
 			<Button
 				variant="glow"
 				onclick={saveAutomaticVerificationAction}
-				disabled={savingScheduledJob || !autoVerificationEnabled}
+				disabled={!interactive || savingScheduledJob || !autoVerificationEnabled}
 			>
 				{savingScheduledJob ? 'Saving...' : 'Save auto verification'}
 			</Button>
@@ -629,6 +631,7 @@
 		<div class="grid grid-cols-1 gap-3 md:grid-cols-2">
 			<Input
 				label="Interval number"
+				name="tickets-auto-verification-interval"
 				type="number"
 				min="1"
 				bind:value={autoVerificationIntervalNumber}
@@ -870,7 +873,7 @@
 								type="button"
 								variant="secondary"
 								onclick={saveAutomaticTicketGenerationAction}
-								disabled={savingScheduledJob || !autoTicketGenerationEnabled}
+								disabled={!interactive || savingScheduledJob || !autoTicketGenerationEnabled}
 							>
 								{savingScheduledJob ? 'Saving...' : 'Save auto ticket job'}
 							</Button>
