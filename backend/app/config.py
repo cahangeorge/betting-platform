@@ -9,6 +9,11 @@ class Settings(BaseSettings):
     debug: bool = False
 
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/bet"
+    auto_create_schema: bool = False
+    seed_dev_admin: bool = False
+    dev_admin_email: str = "admin@betfront.com"
+    dev_admin_password: str = "admin123"
+    dev_admin_name: str = "Admin"
 
     jwt_secret: str = "dev-secret-change-in-production"
     jwt_algorithm: str = "HS256"

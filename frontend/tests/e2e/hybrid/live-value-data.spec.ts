@@ -6,6 +6,11 @@ import { seedHybridFixtures } from '../helpers/seed';
 
 test('live and value bet pages surface seeded backend data', async ({ page, context }) => {
 	const session = await createAuthenticatedSession(context);
+	const pageErrors: string[] = [];
+
+	page.on('pageerror', (error) => {
+		pageErrors.push(error.message);
+	});
 
 	try {
 		const fixtures = await seedHybridFixtures(session);
@@ -15,9 +20,19 @@ test('live and value bet pages surface seeded backend data', async ({ page, cont
 		await page.goto('/live');
 		console.log('live-value-data: goto live');
 		await expect(page.getByRole('heading', { name: 'LIVE MATCHES' })).toBeVisible();
+		await page.waitForTimeout(250);
+		expect(pageErrors, `unexpected browser errors on /live: ${pageErrors.join('\n')}`).toEqual([]);
 		await expect(page.getByText(liveHome).first()).toBeVisible();
 		await expect(page.getByText(liveAway).first()).toBeVisible();
-		await expect(page.getByRole('button', { name: 'Add to betslip' })).toBeVisible();
+		const liveValueAddButton = page.getByRole('button', { name: 'Add to betslip' });
+			const monitorOnlyBanner = page.getByText('Monitor-only mode for live betslip actions').first();
+		const lockedButton = page.getByRole('button', { name: 'Locked' }).first();
+		if (await liveValueAddButton.count()) {
+			await expect(liveValueAddButton.first()).toBeVisible();
+		} else {
+			await expect(monitorOnlyBanner).toBeVisible();
+			await expect(lockedButton).toBeVisible();
+		}
 		console.log('live-value-data: live ok');
 
 		await page.goto('/value-bets');

@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_current_user
+from app.api.v1.live import broadcast_prediction_update
 from app.database import get_db
 from app.models.match import Match, OddsEntry
 from app.models.prediction import ModelPrediction, PredictionRun
@@ -28,6 +29,11 @@ from app.services.prediction_engine import PREDICT_MODELS, run_single_prediction
 from app.services.result_settlement import evaluate_model_prediction
 
 router = APIRouter()
+LIVE_PREDICTION_BROADCAST_STATUSES = {"running", "completed", "partial", "failed"}
+VALUE_BET_BETSLIP_MAX_DATA_AGE_SECONDS = 15 * 60
+VALUE_BET_MODEL_ODDS_SKEW_SECONDS = 15 * 60
+VALUE_BET_ACTIVE_STATUSES = {"live", "running", "active", "in_play", "halftime", "ht"}
+VALUE_BET_FINISHED_STATUSES = {"finished", "ft", "fulltime"}
 
 
 def _prediction_value_for_selection(prediction: ModelPrediction, selection: str | None, suffix: str) -> float | None:
@@ -123,13 +129,13 @@ def _is_eligible_market(prediction_market: str, candidate_market: str) -> bool:
 
 def _resolve_market_odds(
     prediction: ModelPrediction, outcome: str, odds_entries: list[OddsEntry]
-) -> tuple[float, str] | tuple[None, str]:
+) -> tuple[float, str, datetime | None] | tuple[None, str, None]:
     if not odds_entries:
-        return None, ""
+        return None, "", None
 
     candidates = [e for e in odds_entries if _is_eligible_market(prediction.market, e.market)]
     if not candidates:
-        return None, ""
+        return None, "", None
 
     outcome_field = {
         "home": "home_odds",
@@ -150,8 +156,8 @@ def _resolve_market_odds(
             best = odds
 
     if best is None:
-        return None, outcome_field
-    return getattr(best, outcome_field), best.bookmaker
+        return None, outcome_field, None
+    return getattr(best, outcome_field), best.bookmaker, best.timestamp or getattr(best, "created_at", None)
 
 
 def _prediction_quality_details(prediction: ModelPrediction) -> tuple[bool, str | None, list[str]]:
@@ -164,12 +170,33 @@ def _prediction_quality_details(prediction: ModelPrediction) -> tuple[bool, str 
     return bool(reliability.get("is_ticket_eligible", False)), label, [str(reason) for reason in reasons]
 
 
+def _normalize_match_status(value: str | None) -> str:
+    return (value or "").strip().lower()
+
+
+def _age_seconds(timestamp: datetime | None, now: datetime) -> int | None:
+    if timestamp is None:
+        return None
+    return max(0, int((now - timestamp).total_seconds()))
+
+
+async def _broadcast_live_prediction_update_if_relevant(result: dict) -> None:
+    run_id = result.get("run_id")
+    status = result.get("status")
+    if not isinstance(run_id, int) or not isinstance(status, str):
+        return
+    if status not in LIVE_PREDICTION_BROADCAST_STATUSES:
+        return
+    await broadcast_prediction_update(run_id=run_id, status=status)
+
+
 def _build_value_candidates(
     run: PredictionRun,
     min_edge: float,
     max_results: int,
     *,
     include_unreliable: bool = False,
+    now: datetime,
 ) -> list[ValueBetItem]:
     items: list[ValueBetItem] = []
 
@@ -183,6 +210,9 @@ def _build_value_candidates(
             continue
 
         odds_entries = match.odds
+        match_status = _normalize_match_status(getattr(match, "status", None))
+        kickoff = getattr(match, "match_date", None)
+        match_started = bool(kickoff and kickoff <= now)
 
         outcomes = []
         market = _normalize_market_market(prediction.market)
@@ -200,7 +230,7 @@ def _build_value_candidates(
         for selection, model_prob in outcomes:
             if model_prob is None or model_prob <= 0:
                 continue
-            odds_value, bookmaker = _resolve_market_odds(prediction, selection, odds_entries)
+            odds_value, bookmaker, odds_timestamp = _resolve_market_odds(prediction, selection, odds_entries)
             if odds_value is None:
                 continue
 
@@ -208,6 +238,46 @@ def _build_value_candidates(
             edge_pct = (model_prob - implied) * 100
             if edge_pct < min_edge:
                 continue
+
+            prediction_age_seconds = _age_seconds(getattr(prediction, "created_at", None), now)
+            odds_freshness_seconds = _age_seconds(odds_timestamp, now)
+            known_ages = [age for age in (prediction_age_seconds, odds_freshness_seconds) if age is not None]
+            data_age_seconds = max(known_ages) if known_ages else None
+            source_ok = bool(bookmaker) and odds_timestamp is not None
+            model_drift_flag = prediction_age_seconds is None or (
+                odds_freshness_seconds is not None
+                and prediction_age_seconds > odds_freshness_seconds + VALUE_BET_MODEL_ODDS_SKEW_SECONDS
+            )
+
+            block_reasons: list[str] = []
+            if not is_ticket_eligible:
+                block_reasons.append("prediction_untrusted")
+            if not source_ok:
+                block_reasons.append("odds_untrusted")
+            if odds_timestamp is None:
+                block_reasons.append("odds_missing_timestamp")
+            if prediction_age_seconds is None:
+                block_reasons.append("prediction_missing_timestamp")
+            if data_age_seconds is None:
+                block_reasons.append("data_age_unknown")
+            elif data_age_seconds >= VALUE_BET_BETSLIP_MAX_DATA_AGE_SECONDS:
+                block_reasons.append("data_stale")
+            if model_drift_flag:
+                block_reasons.append("model_drift")
+            if match_status in VALUE_BET_FINISHED_STATUSES:
+                block_reasons.append("match_finished")
+            elif match_status in VALUE_BET_ACTIVE_STATUSES or match_started:
+                block_reasons.append("match_started")
+
+            is_betslip_eligible = (
+                is_ticket_eligible
+                and source_ok
+                and data_age_seconds is not None
+                and data_age_seconds < VALUE_BET_BETSLIP_MAX_DATA_AGE_SECONDS
+                and not model_drift_flag
+                and "match_started" not in block_reasons
+                and "match_finished" not in block_reasons
+            )
 
             items.append(
                 ValueBetItem(
@@ -227,6 +297,14 @@ def _build_value_candidates(
                     reliability=reliability,
                     quality_reasons=quality_reasons,
                     source=f"odds:{bookmaker}" if bookmaker else "odds",
+                    prediction_age_seconds=prediction_age_seconds,
+                    selection_age_seconds=prediction_age_seconds,
+                    odds_freshness_seconds=odds_freshness_seconds,
+                    data_age_seconds=data_age_seconds,
+                    source_ok=source_ok,
+                    model_drift_flag=model_drift_flag,
+                    is_betslip_eligible=is_betslip_eligible,
+                    block_reasons=block_reasons,
                 )
             )
 
@@ -250,7 +328,7 @@ async def create_prediction_run(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    return await run_single_prediction(
+    result = await run_single_prediction(
         db=db,
         league=body.league,
         user_id=user.id,
@@ -265,6 +343,8 @@ async def create_prediction_run(
         date_to=body.date_to,
         max_goals=body.max_goals,
     )
+    await _broadcast_live_prediction_update_if_relevant(result)
+    return result
 
 
 @router.post("/ensemble", response_model=dict)
@@ -273,7 +353,7 @@ async def create_ensemble_run(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    return await run_ensemble_prediction(
+    result = await run_ensemble_prediction(
         db=db,
         league=body.league,
         user_id=user.id,
@@ -286,6 +366,8 @@ async def create_ensemble_run(
         target_mode=body.target_mode,
         max_goals=body.max_goals,
     )
+    await _broadcast_live_prediction_update_if_relevant(result)
+    return result
 
 
 @router.get("/runs", response_model=list[PredictionRunResponse])
@@ -435,6 +517,7 @@ async def list_value_bets(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    now = datetime.now(timezone.utc)
     run_stmt = (
         select(PredictionRun)
         .where(PredictionRun.user_id == user.id, PredictionRun.status == "completed")
@@ -452,7 +535,7 @@ async def list_value_bets(
             items=[],
             source="prediction",
             is_demo=False,
-            generated_at=datetime.now(timezone.utc).isoformat(),
+            generated_at=now.isoformat(),
         )
 
     items = _build_value_candidates(
@@ -460,12 +543,13 @@ async def list_value_bets(
         min_edge=min_edge,
         max_results=max_results,
         include_unreliable=include_unreliable,
+        now=now,
     )
     return ValueBetResponse(
         items=items,
         source="prediction",
         is_demo=False,
-        generated_at=datetime.now(timezone.utc).isoformat(),
+        generated_at=now.isoformat(),
     )
 
 

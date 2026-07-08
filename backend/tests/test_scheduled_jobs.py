@@ -67,6 +67,26 @@ async def test_dispatch_scrape_job_creates_and_executes_scrape(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_dispatch_scrape_job_propagates_failed_execution(monkeypatch):
+    async def fake_create_scrape_job(db, job_type, league, params):
+        return SimpleNamespace(id=45)
+
+    async def fake_execute_scrape_job(db, job_id):
+        return SimpleNamespace(id=job_id, status="failed", error="bridge timeout")
+
+    monkeypatch.setattr(scheduled_jobs, "create_scrape_job", fake_create_scrape_job)
+    monkeypatch.setattr(scheduled_jobs, "execute_scrape_job", fake_execute_scrape_job)
+
+    result = await dispatch_scheduled_job(
+        object(),
+        SimpleNamespace(id=70, task_type="scrape_odds", config={"league": "world-cup", "params": {"command": "noop"}}),
+    )
+
+    assert result.status == "failed"
+    assert result.detail == "scrape_job:45; status:failed; error:bridge timeout"
+
+
+@pytest.mark.asyncio
 async def test_dispatch_prediction_job_skips_without_owner():
     result = await dispatch_scheduled_job(
         object(),
@@ -88,7 +108,13 @@ async def test_dispatch_scrape_then_predict_job_runs_in_order(monkeypatch):
     async def fake_predict(db, job, *, config_override=None):
         calls.append(("predict", job.id))
         assert config_override == {"strategy_ids": [5], SCHEDULED_JOB_OWNER_CONFIG_KEY: 42, "user_id": 42}
-        return SimpleNamespace(job_id=job.id, task_type=job.task_type, status="completed", detail="5:completed:77")
+        return SimpleNamespace(
+            job_id=job.id,
+            task_type=job.task_type,
+            status="completed",
+            detail="summary[completed:1]; 5:completed:77",
+            artifacts={"prediction_run_ids": [77]},
+        )
 
     monkeypatch.setattr(scheduled_jobs, "_run_scrape_job", fake_scrape)
     monkeypatch.setattr(scheduled_jobs, "_run_prediction_job", fake_predict)
@@ -103,8 +129,77 @@ async def test_dispatch_scrape_then_predict_job_runs_in_order(monkeypatch):
     )
 
     assert result.status == "completed"
-    assert result.detail == "scrape_job:19; predictions:5:completed:77"
+    assert result.detail == "scrape_job:19; predictions:summary[completed:1]; 5:completed:77"
     assert calls == [("scrape", 9, "scrape_odds"), ("predict", 9)]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_prediction_job_reports_no_matches_truthfully(monkeypatch):
+    class FakeDb:
+        async def get(self, model, user_id):
+            assert user_id == 12
+            return SimpleNamespace(id=12)
+
+    async def fake_run_strategy(*, strategy_id, body, db, user):
+        assert strategy_id == 5
+        return SimpleNamespace(status="no_matches", run_id=0)
+
+    monkeypatch.setattr("app.api.v1.strategies.run_strategy", fake_run_strategy)
+
+    result = await dispatch_scheduled_job(
+        FakeDb(),
+        SimpleNamespace(id=15, task_type="run_predictions", config={SCHEDULED_JOB_OWNER_CONFIG_KEY: 12, "strategy_ids": [5]}),
+    )
+
+    assert result.status == "skipped"
+    assert result.detail == "summary[no_matches:1]; 5:no_matches:0"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_scrape_predict_tickets_job_stops_before_tickets_when_predictions_are_partial(monkeypatch):
+    calls = []
+
+    async def fake_scrape(db, job):
+        calls.append(("scrape", job.id))
+        return SimpleNamespace(job_id=job.id, task_type=job.task_type, status="completed", detail="scrape_job:90")
+
+    async def fake_predict(db, job, *, config_override=None):
+        calls.append(("predict", job.id, config_override))
+        return SimpleNamespace(
+            job_id=job.id,
+            task_type=job.task_type,
+            status="partial",
+            detail="summary[completed:1, no_matches:1]; 4:completed:91, 5:no_matches:0",
+            artifacts={"prediction_run_ids": [91]},
+        )
+
+    async def fake_tickets(db, job, *, config_override=None):
+        calls.append(("tickets", job.id, config_override))
+        return SimpleNamespace(job_id=job.id, task_type=job.task_type, status="completed", detail="ticket_batch:12; tickets:2")
+
+    monkeypatch.setattr(scheduled_jobs, "_run_scrape_job", fake_scrape)
+    monkeypatch.setattr(scheduled_jobs, "_run_prediction_job", fake_predict)
+    monkeypatch.setattr(scheduled_jobs, "_run_ticket_generation_job", fake_tickets)
+
+    result = await dispatch_scheduled_job(
+        object(),
+        SimpleNamespace(
+            id=16,
+            task_type="scrape_predict_tickets",
+            config={
+                SCHEDULED_JOB_OWNER_CONFIG_KEY: 42,
+                "prediction": {"strategy_ids": [4, 5]},
+                "tickets": {"ticket_count": 2, "difficulty": "safe"},
+            },
+        ),
+    )
+
+    assert result.status == "partial"
+    assert result.detail == "scrape_job:90; predictions:summary[completed:1, no_matches:1]; 4:completed:91, 5:no_matches:0"
+    assert calls == [
+        ("scrape", 16),
+        ("predict", 16, {"strategy_ids": [4, 5], SCHEDULED_JOB_OWNER_CONFIG_KEY: 42, "user_id": 42}),
+    ]
 
 
 @pytest.mark.asyncio
@@ -257,6 +352,7 @@ async def test_dispatch_ticket_generation_job_uses_ticket_engine(monkeypatch):
         min_odds,
         max_odds,
         stake,
+        run_id,
     ):
         assert user_id == 21
         assert bankroll_id == 9
@@ -266,6 +362,7 @@ async def test_dispatch_ticket_generation_job_uses_ticket_engine(monkeypatch):
         assert min_odds == 1.2
         assert max_odds == 4.5
         assert stake == 12.0
+        assert run_id is None
         return SimpleNamespace(id=55), [SimpleNamespace(id=1), SimpleNamespace(id=2), SimpleNamespace(id=3)]
 
     monkeypatch.setattr(scheduled_jobs, "generate_tickets", fake_generate_tickets)
@@ -302,7 +399,13 @@ async def test_dispatch_scrape_predict_tickets_job_runs_full_chain(monkeypatch):
 
     async def fake_predict(db, job, *, config_override=None):
         calls.append(("predict", job.id, config_override))
-        return SimpleNamespace(job_id=job.id, task_type=job.task_type, status="completed", detail="4:completed:91")
+        return SimpleNamespace(
+            job_id=job.id,
+            task_type=job.task_type,
+            status="completed",
+            detail="summary[completed:1]; 4:completed:91",
+            artifacts={"prediction_run_ids": [91]},
+        )
 
     async def fake_tickets(db, job, *, config_override=None):
         calls.append(("tickets", job.id, config_override))
@@ -326,9 +429,60 @@ async def test_dispatch_scrape_predict_tickets_job_runs_full_chain(monkeypatch):
     )
 
     assert result.status == "completed"
-    assert result.detail == "scrape_job:88; predictions:4:completed:91; ticket_batch:12; tickets:2"
+    assert result.detail == "scrape_job:88; predictions:summary[completed:1]; 4:completed:91; ticket_batch:12; tickets:2"
     assert calls == [
         ("scrape", 14),
         ("predict", 14, {"strategy_ids": [4], SCHEDULED_JOB_OWNER_CONFIG_KEY: 42, "user_id": 42}),
-        ("tickets", 14, {"ticket_count": 2, "difficulty": "safe", SCHEDULED_JOB_OWNER_CONFIG_KEY: 42, "user_id": 42}),
+        ("tickets", 14, {"ticket_count": 2, "difficulty": "safe", SCHEDULED_JOB_OWNER_CONFIG_KEY: 42, "user_id": 42, "run_id": 91}),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_scrape_predict_tickets_job_stops_when_prediction_run_is_ambiguous(monkeypatch):
+    calls = []
+
+    async def fake_scrape(db, job):
+        calls.append(("scrape", job.id))
+        return SimpleNamespace(job_id=job.id, task_type=job.task_type, status="completed", detail="scrape_job:88")
+
+    async def fake_predict(db, job, *, config_override=None):
+        calls.append(("predict", job.id, config_override))
+        return SimpleNamespace(
+            job_id=job.id,
+            task_type=job.task_type,
+            status="completed",
+            detail="summary[completed:2]; 4:completed:91, 5:completed:92",
+            artifacts={"prediction_run_ids": [91, 92]},
+        )
+
+    async def fake_tickets(db, job, *, config_override=None):
+        calls.append(("tickets", job.id, config_override))
+        return SimpleNamespace(job_id=job.id, task_type=job.task_type, status="completed", detail="ticket_batch:12; tickets:2")
+
+    monkeypatch.setattr(scheduled_jobs, "_run_scrape_job", fake_scrape)
+    monkeypatch.setattr(scheduled_jobs, "_run_prediction_job", fake_predict)
+    monkeypatch.setattr(scheduled_jobs, "_run_ticket_generation_job", fake_tickets)
+
+    result = await dispatch_scheduled_job(
+        object(),
+        SimpleNamespace(
+            id=71,
+            task_type="scrape_predict_tickets",
+            config={
+                SCHEDULED_JOB_OWNER_CONFIG_KEY: 42,
+                "prediction": {"strategy_ids": [4, 5]},
+                "tickets": {"ticket_count": 2, "difficulty": "safe"},
+            },
+        ),
+    )
+
+    assert result.status == "partial"
+    assert (
+        result.detail
+        == "scrape_job:88; predictions:summary[completed:2]; 4:completed:91, 5:completed:92; "
+        "tickets:missing_or_ambiguous_prediction_run_id"
+    )
+    assert calls == [
+        ("scrape", 71),
+        ("predict", 71, {"strategy_ids": [4, 5], SCHEDULED_JOB_OWNER_CONFIG_KEY: 42, "user_id": 42}),
     ]

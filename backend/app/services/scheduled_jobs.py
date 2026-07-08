@@ -28,6 +28,28 @@ class ScheduledJobRunResult:
     task_type: str
     status: str
     detail: str | None = None
+    artifacts: dict[str, Any] | None = None
+
+
+def _summarize_prediction_statuses(statuses: list[str]) -> str:
+    counts: dict[str, int] = {}
+    for status in statuses:
+        counts[status] = counts.get(status, 0) + 1
+    return ", ".join(f"{status}:{count}" for status, count in sorted(counts.items()))
+
+
+def _prediction_job_status(statuses: list[str]) -> str:
+    if not statuses:
+        return "skipped"
+
+    truthy_success_statuses = {"completed", "deduped"}
+    if all(status in truthy_success_statuses for status in statuses):
+        return "completed"
+    if all(status == "no_matches" for status in statuses):
+        return "skipped"
+    if any(status == "failed" for status in statuses):
+        return "failed"
+    return "partial"
 
 
 def utcnow() -> datetime:
@@ -157,7 +179,17 @@ async def _run_scrape_job(db: AsyncSession, job: ScheduledJob) -> ScheduledJobRu
     task_type = job.task_type or "scrape_odds"
 
     created = await create_scrape_job(db, task_type, league, params)
-    await execute_scrape_job(db, created.id)
+    executed = await execute_scrape_job(db, created.id)
+    if executed.status != "completed":
+        detail_parts = [f"scrape_job:{created.id}", f"status:{executed.status}"]
+        if getattr(executed, "error", None):
+            detail_parts.append(f"error:{executed.error}")
+        return ScheduledJobRunResult(
+            job_id=job.id,
+            task_type=job.task_type,
+            status=executed.status or "failed",
+            detail="; ".join(detail_parts),
+        )
     return ScheduledJobRunResult(job_id=job.id, task_type=job.task_type, status="completed", detail=f"scrape_job:{created.id}")
 
 
@@ -188,12 +220,29 @@ async def _run_prediction_job(
         avoid_reprediction=bool(config.get("avoid_reprediction", True)),
     )
 
-    statuses: list[str] = []
+    strategy_statuses: list[str] = []
+    strategy_details: list[str] = []
+    prediction_run_ids: list[int] = []
     for strategy_id in strategy_ids:
         response = await run_strategy(strategy_id=strategy_id, body=request, db=db, user=user)
-        statuses.append(f"{strategy_id}:{response.status}:{response.run_id}")
+        strategy_statuses.append(response.status)
+        strategy_details.append(f"{strategy_id}:{response.status}:{response.run_id}")
+        if response.status in {"completed", "deduped"} and int(response.run_id or 0) > 0:
+            prediction_run_ids.append(int(response.run_id))
 
-    return ScheduledJobRunResult(job_id=job.id, task_type=job.task_type, status="completed", detail=", ".join(statuses))
+    overall_status = _prediction_job_status(strategy_statuses)
+    detail = f"summary[{_summarize_prediction_statuses(strategy_statuses)}]; " + ", ".join(strategy_details)
+    artifacts = {"prediction_run_ids": prediction_run_ids}
+    return ScheduledJobRunResult(job_id=job.id, task_type=job.task_type, status=overall_status, detail=detail, artifacts=artifacts)
+
+
+def _prediction_run_id_for_ticket_generation(prediction_result: ScheduledJobRunResult) -> int | None:
+    raw_run_ids = (prediction_result.artifacts or {}).get("prediction_run_ids") or []
+    run_ids = [int(run_id) for run_id in raw_run_ids if int(run_id) > 0]
+    unique_run_ids = sorted(set(run_ids))
+    if len(unique_run_ids) == 1:
+        return unique_run_ids[0]
+    return None
 
 
 async def _run_scrape_then_predict_job(db: AsyncSession, job: ScheduledJob) -> ScheduledJobRunResult:
@@ -268,6 +317,7 @@ async def _run_ticket_generation_job(
         min_odds=float(config.get("min_odds", 1.01) or 1.01),
         max_odds=float(config.get("max_odds", 100.0) or 100.0),
         stake=float(config.get("stake", 10.0) or 10.0),
+        run_id=_optional_int_config(config, "run_id"),
     )
     return ScheduledJobRunResult(
         job_id=job.id,
@@ -286,7 +336,17 @@ async def _run_prediction_then_ticket_job(db: AsyncSession, job: ScheduledJob) -
     if prediction_result.status != "completed":
         return prediction_result
 
+    prediction_run_id = _prediction_run_id_for_ticket_generation(prediction_result)
+    if prediction_run_id is None:
+        return ScheduledJobRunResult(
+            job_id=job.id,
+            task_type=job.task_type,
+            status="partial",
+            detail=f"predictions:{prediction_result.detail}; tickets:missing_or_ambiguous_prediction_run_id",
+        )
+
     ticket_config = _stamp_owner_if_missing(_dict_config(config, "tickets") or config, owner_id)
+    ticket_config["run_id"] = prediction_run_id
     ticket_result = await _run_ticket_generation_job(db, job, config_override=ticket_config)
     if ticket_result.status != "completed":
         return ScheduledJobRunResult(
@@ -346,7 +406,17 @@ async def _run_scrape_predict_tickets_job(db: AsyncSession, job: ScheduledJob) -
             detail=f"{scrape_result.detail}; predictions:{prediction_result.detail}",
         )
 
+    prediction_run_id = _prediction_run_id_for_ticket_generation(prediction_result)
+    if prediction_run_id is None:
+        return ScheduledJobRunResult(
+            job_id=job.id,
+            task_type=job.task_type,
+            status="partial",
+            detail=f"{scrape_result.detail}; predictions:{prediction_result.detail}; tickets:missing_or_ambiguous_prediction_run_id",
+        )
+
     merged_ticket_config = _stamp_owner_if_missing(ticket_config or config, owner_id)
+    merged_ticket_config["run_id"] = prediction_run_id
     ticket_result = await _run_ticket_generation_job(db, job, config_override=merged_ticket_config)
     if ticket_result.status != "completed":
         return ScheduledJobRunResult(

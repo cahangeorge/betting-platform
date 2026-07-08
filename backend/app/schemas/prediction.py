@@ -118,6 +118,14 @@ class ValueBetItem(BaseModel):
     reliability: str | None = None
     quality_reasons: list[str] = []
     source: str = "prediction"
+    prediction_age_seconds: int | None = None
+    selection_age_seconds: int | None = None
+    odds_freshness_seconds: int | None = None
+    data_age_seconds: int | None = None
+    source_ok: bool = False
+    model_drift_flag: bool = True
+    is_betslip_eligible: bool = False
+    block_reasons: list[str] = []
 
 
 class ValueBetResponse(BaseModel):

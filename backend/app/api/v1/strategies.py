@@ -10,6 +10,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_current_user
 from app.api.v1.catalog import CATALOG
+from app.api.v1.live import broadcast_prediction_update
 from app.database import get_db
 from app.models.match import Match
 from app.models.prediction import PredictionRun
@@ -30,6 +31,7 @@ from app.services.python_bridge import BridgeError
 router = APIRouter()
 
 SUPPORTED_MARKETS = {"1x2", "btts", "ou_2_5"}
+LIVE_PREDICTION_BROADCAST_STATUSES = {"running", "completed", "partial", "failed"}
 MARKET_ALIASES = {
     "1x2": "1x2",
     "btts": "btts",
@@ -162,6 +164,14 @@ def _build_strategy_duplicate(strategy: Strategy, *, name: str | None = None) ->
         weights=deepcopy(strategy.weights),
         is_active=strategy.is_active,
     )
+
+
+async def _broadcast_live_prediction_update_if_relevant(run: PredictionRun) -> None:
+    if not isinstance(run.id, int) or not isinstance(run.status, str):
+        return
+    if run.status not in LIVE_PREDICTION_BROADCAST_STATUSES:
+        return
+    await broadcast_prediction_update(run_id=run.id, status=run.status)
 
 
 @router.get("", response_model=list[StrategyResponse])
@@ -378,6 +388,7 @@ async def run_strategy(
     )
     db.add(run)
     await db.flush()
+    await _broadcast_live_prediction_update_if_relevant(run)
 
     total_written = 0
     per_league = []
@@ -456,6 +467,7 @@ async def run_strategy(
     run.matches_count = total_written
     run.error = " | ".join(league_errors) if league_errors else None
     await db.flush()
+    await _broadcast_live_prediction_update_if_relevant(run)
 
     return StrategyRunResponse(
         run_id=run.id,

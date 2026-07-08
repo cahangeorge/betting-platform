@@ -61,7 +61,9 @@ export default defineConfig({
 							...process.env,
 							E2E_MODE: mode,
 							E2E_FRONTEND_URL: frontendURL,
-							E2E_BACKEND_URL: backendURL
+							E2E_BACKEND_URL: backendURL,
+							BET_API_URL: backendURL,
+							PUBLIC_API_URL: backendURL
 						}
 					}
 				]

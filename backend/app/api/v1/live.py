@@ -26,7 +26,13 @@ from app.schemas.match import (
 router = APIRouter(tags=["live"])
 
 LIVE_STALE_SECONDS = 90
+LIVE_BETSLIP_MAX_DATA_AGE_SECONDS = 30
+LIVE_MODEL_DRIFT_MAX_SECONDS = 300
+LIVE_MODEL_ODDS_SKEW_SECONDS = 45
 LIVE_VALUE_MAX_CANDIDATES = 3
+LIVE_ACTIVE_STATUSES = {"live", "running", "active", "in_play", "halftime", "ht"}
+LIVE_FINISHED_STATUSES = {"finished", "ft", "fulltime"}
+LIVE_1X2_MARKET_ALIASES = {"1x2", "matchwinner", "match_winner", "home_away", "homeaway"}
 
 
 def _safe_now() -> datetime:
@@ -40,9 +46,19 @@ def _safe_max_datetime(values: list[datetime | None]) -> datetime | None:
     return max(cleaned)
 
 
+def _normalize_match_status(value: str | None) -> str:
+    return (value or "").strip().lower()
+
+
+def _age_seconds(timestamp: datetime | None, now: datetime) -> int | None:
+    if timestamp is None:
+        return None
+    return max(0, int((now - timestamp).total_seconds()))
+
+
 def _resolve_match_minute(match: Match, now: datetime) -> int | None:
-    status = (match.status or "").lower()
-    if status in {"finished", "ft", "fulltime"}:
+    status = _normalize_match_status(match.status)
+    if status in LIVE_FINISHED_STATUSES:
         return 90
     if status in {"halftime", "ht", "half_time"}:
         return 45
@@ -50,7 +66,7 @@ def _resolve_match_minute(match: Match, now: datetime) -> int | None:
     if not match.match_date:
         return None
 
-    if status in {"live", "in_play", "running", "active"}:
+    if status in LIVE_ACTIVE_STATUSES:
         elapsed = int((now - match.match_date).total_seconds() // 60)
         if elapsed < 0:
             return 0
@@ -91,7 +107,7 @@ def _select_bookmaker_odds(odds: list[OddsEntry]) -> list[OddsEntry]:
     if not odds:
         return []
 
-    primary_market = [entry for entry in odds if entry.market == "1x2"]
+    primary_market = [entry for entry in odds if _normalize_live_market(entry.market) in LIVE_1X2_MARKET_ALIASES]
     selected = primary_market or odds
     return sorted(selected, key=lambda entry: entry.created_at or datetime.fromtimestamp(0, tz=timezone.utc), reverse=True)
 
@@ -102,12 +118,12 @@ def _normalize_live_market(value: str) -> str:
 
 def _resolve_live_bookmaker_odds(
     odds_entries: list[OddsEntry], outcome: str
-) -> tuple[float | None, str]:
+) -> tuple[float | None, str, datetime | None]:
     candidates = [
-        entry for entry in odds_entries if _normalize_live_market(entry.market) in {"1x2", "matchwinner", "match_winner", "home_away"}
+        entry for entry in odds_entries if _normalize_live_market(entry.market) in LIVE_1X2_MARKET_ALIASES
     ]
     if not candidates:
-        return None, ""
+        return None, "", None
 
     outcome_field = {
         "home": "home_odds",
@@ -124,9 +140,9 @@ def _resolve_live_bookmaker_odds(
             best_entry = entry
 
     if best_entry is None:
-        return None, outcome_field
+        return None, outcome_field, None
 
-    return getattr(best_entry, outcome_field), best_entry.bookmaker
+    return getattr(best_entry, outcome_field), best_entry.bookmaker, best_entry.timestamp or best_entry.created_at
 
 
 def _normalize_live_confidence_band(
@@ -147,9 +163,11 @@ def _normalize_live_confidence_band(
 
 
 def _build_live_value_candidates(
-    match: Match, predictions: list[ModelPrediction], now: datetime, min_edge: float
+    match: Match, predictions: list[ModelPrediction], now: datetime, min_edge: float, bridge_ready: bool
 ) -> list[LiveValueCandidateResponse]:
     candidates: list[LiveValueCandidateResponse] = []
+    match_status = _normalize_match_status(match.status)
+    is_live_match = match_status in LIVE_ACTIVE_STATUSES
 
     for prediction in predictions:
         market = _normalize_live_market(prediction.market)
@@ -166,7 +184,7 @@ def _build_live_value_candidates(
             if model_prob is None or model_prob <= 0:
                 continue
 
-            odds, bookmaker = _resolve_live_bookmaker_odds(list(match.odds), selection)
+            odds, bookmaker, odds_timestamp = _resolve_live_bookmaker_odds(list(match.odds), selection)
             if odds is None:
                 continue
 
@@ -175,9 +193,43 @@ def _build_live_value_candidates(
             if edge_pct < min_edge:
                 continue
 
-            age_seconds = None
-            if prediction.created_at:
-                age_seconds = int((now - prediction.created_at).total_seconds())
+            selection_age_seconds = _age_seconds(prediction.created_at, now)
+            odds_freshness_seconds = _age_seconds(odds_timestamp, now)
+            ages = [age for age in (selection_age_seconds, odds_freshness_seconds) if age is not None]
+            data_age_seconds = max(ages) if ages else None
+            source_ok = bridge_ready and is_live_match and bool(bookmaker) and odds_timestamp is not None
+            model_drift_flag = (
+                selection_age_seconds is None
+                or selection_age_seconds > LIVE_MODEL_DRIFT_MAX_SECONDS
+                or (
+                    selection_age_seconds is not None
+                    and odds_freshness_seconds is not None
+                    and selection_age_seconds > odds_freshness_seconds + LIVE_MODEL_ODDS_SKEW_SECONDS
+                )
+            )
+
+            block_reasons: list[str] = []
+            if not bridge_ready:
+                block_reasons.append("bridge_not_ready")
+            if not is_live_match:
+                block_reasons.append("match_not_live")
+            if odds_timestamp is None:
+                block_reasons.append("odds_missing_timestamp")
+            if selection_age_seconds is None:
+                block_reasons.append("prediction_missing_timestamp")
+            if data_age_seconds is None:
+                block_reasons.append("data_age_unknown")
+            elif data_age_seconds >= LIVE_BETSLIP_MAX_DATA_AGE_SECONDS:
+                block_reasons.append("data_stale")
+            if model_drift_flag:
+                block_reasons.append("model_drift")
+
+            is_betslip_eligible = (
+                source_ok
+                and data_age_seconds is not None
+                and data_age_seconds < LIVE_BETSLIP_MAX_DATA_AGE_SECONDS
+                and not model_drift_flag
+            )
 
             score_gap = None
             if match.home_score is not None and match.away_score is not None:
@@ -194,8 +246,15 @@ def _build_live_value_candidates(
                     expected_value=(model_prob * odds) - 1,
                     spread=score_gap,
                     source=f"odds:{bookmaker}" if bookmaker else "odds",
-                    prediction_age_seconds=age_seconds,
-                    confidence_band=_normalize_live_confidence_band(edge_pct, age_seconds),
+                    prediction_age_seconds=selection_age_seconds,
+                    selection_age_seconds=selection_age_seconds,
+                    odds_freshness_seconds=odds_freshness_seconds,
+                    data_age_seconds=data_age_seconds,
+                    source_ok=source_ok,
+                    model_drift_flag=model_drift_flag,
+                    is_betslip_eligible=is_betslip_eligible,
+                    block_reasons=block_reasons,
+                    confidence_band=_normalize_live_confidence_band(edge_pct, selection_age_seconds),
                 )
             )
 
@@ -238,6 +297,7 @@ async def _load_live_prediction_map(
 def _build_match_payload(
     match: Match,
     now: datetime,
+    bridge_ready: bool,
     prediction_candidates: list[ModelPrediction] | None = None,
     min_edge: float = 0,
 ) -> tuple[LiveMatchResponse, datetime | None]:
@@ -249,16 +309,26 @@ def _build_match_payload(
     latest_stat = _latest_record(match.stats)
     momentum, momentum_intensity = _build_momentum(latest_stat)
     selected_odds = _select_bookmaker_odds(list(match.odds))
+    live_1x2_odds = [
+        entry for entry in list(match.odds) if _normalize_live_market(entry.market) in LIVE_1X2_MARKET_ALIASES
+    ]
+    match_status = _normalize_match_status(match.status)
+    is_live_match = match_status in LIVE_ACTIVE_STATUSES
+    freshest_live_odds_timestamp = _safe_max_datetime(
+        [odds.timestamp or odds.created_at for odds in live_1x2_odds]
+    )
 
     match_last_update = _safe_max_datetime(
         [
             match.updated_at,
             match.created_at,
-            match.match_date,
-            *(odds.timestamp or odds.created_at for odds in selected_odds),
+            freshest_live_odds_timestamp,
             latest_stat.created_at if latest_stat else None,
         ]
     )
+    odds_freshness_seconds = _age_seconds(freshest_live_odds_timestamp, now)
+    match_data_age_seconds = _age_seconds(match_last_update, now)
+    source_ok = bridge_ready and is_live_match and freshest_live_odds_timestamp is not None
 
     live_value_candidates = []
     if prediction_candidates:
@@ -267,6 +337,7 @@ def _build_match_payload(
             predictions=prediction_candidates,
             now=now,
             min_edge=min_edge,
+            bridge_ready=bridge_ready,
         )
 
     payload = LiveMatchResponse.model_validate(
@@ -276,7 +347,11 @@ def _build_match_payload(
             "momentum": momentum,
             "momentum_intensity": momentum_intensity,
             "source": source,
-            "is_live_data": (match.status or "").lower() in {"live", "in_play", "running", "active"},
+            "is_live_data": is_live_match,
+            "source_ok": source_ok,
+            "data_age_seconds": match_data_age_seconds,
+            "odds_freshness_seconds": odds_freshness_seconds,
+            "has_live_1x2_odds": bool(live_1x2_odds),
             "xg_home": latest_stat.home_xg if latest_stat else None,
             "xg_away": latest_stat.away_xg if latest_stat else None,
             "possession_home": latest_stat.possession_home if latest_stat else None,
@@ -379,16 +454,10 @@ async def live_overview(
         if normalized == "live":
             is_live_filter = True
             stmt = stmt.where(
-                Match.status.in_(
-                    ["live", "running", "active", "in_play", "halftime", "ht"]
-                )
+                Match.status.in_(list(LIVE_ACTIVE_STATUSES))
             )
         elif normalized in {"finished", "ft"}:
-            stmt = stmt.where(
-                Match.status.in_(
-                    ["finished", "ft", "fulltime"]
-                )
-            )
+            stmt = stmt.where(Match.status.in_(list(LIVE_FINISHED_STATUSES)))
         else:
             stmt = stmt.where(Match.status == normalized)
 
@@ -422,11 +491,16 @@ async def live_overview(
             live_match, match_last_update = _build_match_payload(
                 match,
                 now,
+                bridge_ready=bridge_ready,
                 prediction_candidates=match_predictions,
                 min_edge=min_live_value_edge,
             )
         else:
-            live_match, match_last_update = _build_match_payload(match, now)
+            live_match, match_last_update = _build_match_payload(
+                match,
+                now,
+                bridge_ready=bridge_ready,
+            )
         prepared.append(live_match)
         if match_last_update:
             all_timestamps.append(match_last_update)
@@ -452,22 +526,69 @@ async def live_overview(
 class ConnectionManager:
     def __init__(self):
         self.active_connections: list[WebSocket] = []
+        self._subscriptions: dict[WebSocket, set[str]] = {}
         self._lock = asyncio.Lock()
+
+    @staticmethod
+    def _normalize_channels(raw_channels: Any) -> set[str]:
+        if raw_channels is None:
+            return {"all"}
+
+        if isinstance(raw_channels, str):
+            candidates = [raw_channels]
+        elif isinstance(raw_channels, list):
+            candidates = raw_channels
+        else:
+            raise ValueError("Channels must be a string or list of strings")
+
+        normalized: set[str] = set()
+        for candidate in candidates:
+            if not isinstance(candidate, str):
+                raise ValueError("Channels must only contain strings")
+            value = candidate.strip().lower()
+            if not value:
+                raise ValueError("Channel names cannot be empty")
+            normalized.add(value)
+
+        return normalized or {"all"}
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
         async with self._lock:
             self.active_connections.append(websocket)
+            self._subscriptions[websocket] = {"all"}
 
     async def disconnect(self, websocket: WebSocket):
         async with self._lock:
             if websocket in self.active_connections:
                 self.active_connections.remove(websocket)
+            self._subscriptions.pop(websocket, None)
 
-    async def broadcast(self, message: dict[str, Any]):
-        disconnected = []
+    async def set_subscriptions(self, websocket: WebSocket, raw_channels: Any) -> list[str]:
+        channels = self._normalize_channels(raw_channels)
         async with self._lock:
-            connections = list(self.active_connections)
+            if websocket not in self.active_connections:
+                raise ValueError("WebSocket is not connected")
+            self._subscriptions[websocket] = channels
+            return sorted(channels)
+
+    async def get_subscriptions(self, websocket: WebSocket) -> list[str]:
+        async with self._lock:
+            return sorted(self._subscriptions.get(websocket, {"all"}))
+
+    async def broadcast(self, message: dict[str, Any], *, channel: str = "all", match_id: int | None = None):
+        disconnected = []
+        normalized_channel = channel.strip().lower()
+        async with self._lock:
+            connections = [
+                conn
+                for conn in self.active_connections
+                if self._should_receive(
+                    self._subscriptions.get(conn, {"all"}),
+                    channel=normalized_channel,
+                    match_id=match_id,
+                )
+            ]
         for conn in connections:
             try:
                 await conn.send_text(json.dumps(message))
@@ -477,6 +598,15 @@ class ConnectionManager:
             for d in disconnected:
                 if d in self.active_connections:
                     self.active_connections.remove(d)
+                self._subscriptions.pop(d, None)
+
+    @staticmethod
+    def _should_receive(subscriptions: set[str], *, channel: str, match_id: int | None) -> bool:
+        if "all" in subscriptions or channel in subscriptions:
+            return True
+        if match_id is not None and f"match:{match_id}" in subscriptions:
+            return True
+        return False
 
 
 manager = ConnectionManager()
@@ -493,14 +623,17 @@ async def live_websocket(websocket: WebSocket):
                 msg = json.loads(data)
                 action = msg.get("action")
                 if action == "subscribe":
-                    channel = msg.get("channel", "all")
-                    await websocket.send_text(json.dumps({"type": "subscribed", "channel": channel}))
+                    raw_channels = msg.get("channels", msg.get("channel", "all"))
+                    subscriptions = await manager.set_subscriptions(websocket, raw_channels)
+                    await websocket.send_text(json.dumps({"type": "subscribed", "channels": subscriptions}))
                 elif action == "ping":
                     await websocket.send_text(json.dumps({"type": "pong"}))
                 else:
                     await websocket.send_text(json.dumps({"type": "error", "message": f"Unknown action: {action}"}))
             except json.JSONDecodeError:
                 await websocket.send_text(json.dumps({"type": "error", "message": "Invalid JSON"}))
+            except ValueError as exc:
+                await websocket.send_text(json.dumps({"type": "error", "message": str(exc)}))
     except WebSocketDisconnect:
         await manager.disconnect(websocket)
 
@@ -513,7 +646,9 @@ async def broadcast_odds_update(match_id: int, odds: dict[str, Any]):
             "match_id": match_id,
             "data": odds,
             "timestamp": asyncio.get_event_loop().time(),
-        }
+        },
+        channel="odds",
+        match_id=match_id,
     )
 
 
@@ -526,7 +661,8 @@ async def broadcast_prediction_update(run_id: int, status: str, progress: float 
             "status": status,
             "progress": progress,
             "timestamp": asyncio.get_event_loop().time(),
-        }
+        },
+        channel="predictions",
     )
 
 
@@ -539,5 +675,7 @@ async def broadcast_match_update(match_id: int, event: str, data: dict[str, Any]
             "event": event,
             "data": data,
             "timestamp": asyncio.get_event_loop().time(),
-        }
+        },
+        channel="matches",
+        match_id=match_id,
     )

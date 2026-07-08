@@ -39,6 +39,10 @@ export interface Match {
 	minute?: number;
 	momentum?: string;
 	momentum_intensity?: 'overwhelming' | 'strong' | 'moderate' | 'weak';
+	source_ok?: boolean;
+	data_age_seconds?: number | null;
+	odds_freshness_seconds?: number | null;
+	has_live_1x2_odds?: boolean;
 	xg_home?: number;
 	xg_away?: number;
 	possession_home?: number;
@@ -71,6 +75,13 @@ export interface LiveValueCandidate {
 	spread: number | null;
 	source: string;
 	prediction_age_seconds: number | null;
+	selection_age_seconds?: number | null;
+	odds_freshness_seconds?: number | null;
+	data_age_seconds?: number | null;
+	source_ok?: boolean;
+	model_drift_flag?: boolean;
+	is_betslip_eligible?: boolean;
+	block_reasons?: string[];
 	confidence_band: 'low' | 'medium' | 'high';
 }
 
@@ -216,6 +227,53 @@ export interface BacktestResult {
 	profit_loss: number;
 	roi: number;
 	results: PredictionResult[];
+}
+
+export interface ValueBetTrustMetadata {
+	is_ticket_eligible?: boolean | null;
+	block_reasons?: string[];
+	reliability_label?: string | null;
+	reliability_score?: number | null;
+	source_ok?: boolean | null;
+	data_age_seconds?: number | null;
+	odds_freshness_seconds?: number | null;
+	selection_age_seconds?: number | null;
+	model_drift_flag?: boolean | null;
+}
+
+export interface ValueBetItem {
+	id: number;
+	match_id: number;
+	league: string | null;
+	home_team: string;
+	away_team: string;
+	kickoff: string | null;
+	market: string;
+	selection: string;
+	model_prob: number;
+	odds: number;
+	edge: number;
+	model_type: string;
+	confidence: number;
+	reliability?: string | null;
+	reliability_score?: number | null;
+	quality_reasons?: string[];
+	is_ticket_eligible?: boolean | null;
+	block_reasons?: string[];
+	source_ok?: boolean | null;
+	data_age_seconds?: number | null;
+	odds_freshness_seconds?: number | null;
+	selection_age_seconds?: number | null;
+	model_drift_flag?: boolean | null;
+	trust?: ValueBetTrustMetadata | null;
+	source: string;
+}
+
+export interface ValueBetFeed {
+	items: ValueBetItem[];
+	source: string;
+	is_demo: boolean;
+	generated_at: string;
 }
 
 export interface PredictionVerificationItem {

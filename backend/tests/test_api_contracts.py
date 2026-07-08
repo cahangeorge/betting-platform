@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 from starlette.requests import Request
 
 from app.api.deps import get_current_user
@@ -12,9 +13,91 @@ from app.api.v1 import matches as matches_api
 from app.api.v1 import predictions as predictions_api
 from app.api.v1 import tickets as tickets_api
 from app.api.v1.catalog import CATALOG
+from app.database import get_db
+from app.main import app
 from app.schemas.data import ScrapeJobCreateRequest, WorldCupPipelineRequest
 from app.schemas.match import MatchResponse
-from app.schemas.ticket import TicketCreateRequest
+from app.schemas.ticket import SettlementResponse, TicketCreateRequest
+from app.services.auth import hash_password, verify_password
+
+
+class _FakeScalarResult:
+    def __init__(self, value):
+        self._value = value
+
+    def scalar_one_or_none(self):
+        return self._value
+
+
+class _FakeAuthDb:
+    def __init__(self, existing_user=None):
+        self.user = existing_user
+
+    async def execute(self, *_args, **_kwargs):
+        return _FakeScalarResult(self.user)
+
+    def add(self, user):
+        user.id = getattr(user, "id", None) or 1
+        self.user = user
+
+    async def flush(self):
+        return None
+
+
+def _auth_test_client(fake_db: _FakeAuthDb) -> TestClient:
+    async def override_get_db():
+        yield fake_db
+
+    app.dependency_overrides[get_db] = override_get_db
+    client = TestClient(app)
+    return client
+
+
+def test_signup_returns_tokens_and_sets_auth_cookies():
+    client = _auth_test_client(_FakeAuthDb())
+
+    try:
+        response = client.post(
+            "/api/v1/auth/signup",
+            json={"email": "  NewUser@Example.com  ", "password": "password123", "name": "New User"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+        client.close()
+
+    assert response.status_code == 201
+    assert response.json()["access_token"]
+    set_cookie = response.headers.get("set-cookie", "")
+    assert "access_token=" in set_cookie
+    assert "refresh_token=" in set_cookie
+
+
+def test_login_normalizes_email_and_sets_auth_cookies():
+    fake_user = SimpleNamespace(
+        id=42,
+        email="test@example.com",
+        password_hash=hash_password("password123"),
+    )
+    client = _auth_test_client(_FakeAuthDb(existing_user=fake_user))
+
+    try:
+        response = client.post(
+            "/api/v1/auth/login",
+            json={"email": "  TEST@EXAMPLE.COM  ", "password": "password123"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+        client.close()
+
+    assert response.status_code == 200
+    assert response.json()["access_token"]
+    set_cookie = response.headers.get("set-cookie", "")
+    assert "access_token=" in set_cookie
+    assert "refresh_token=" in set_cookie
+
+
+def test_verify_password_returns_false_for_malformed_hash():
+    assert verify_password("password123", "not-a-bcrypt-hash") is False
 
 
 @pytest.mark.asyncio
@@ -416,3 +499,50 @@ def test_catalog_exposes_scrape_slugs_and_world_cup():
     assert leagues["premier_league"].scrape_slug == "england-premier-league"
     assert leagues["world_cup"].name == "World Cup"
     assert leagues["world_cup"].scrape_slug == "world-cup"
+
+
+class _ScalarOneResult:
+    def __init__(self, value):
+        self._value = value
+
+    def scalar_one_or_none(self):
+        return self._value
+
+
+@pytest.mark.asyncio
+async def test_manual_ticket_settlement_endpoint_returns_declared_schema(monkeypatch):
+    async def fake_settle_ticket(db, ticket_id, outcome, return_amount):
+        return SimpleNamespace(
+            id=77,
+            bet_placement_id=None,
+            ticket_id=ticket_id,
+            settled_at=datetime(2026, 7, 4, 9, 30, tzinfo=timezone.utc),
+            outcome=outcome,
+            return_amount=return_amount,
+            pnl=return_amount - 10.0,
+        )
+
+    class _FakeDb:
+        async def execute(self, stmt):
+            return _ScalarOneResult(SimpleNamespace(id=18, user_id=12))
+
+    monkeypatch.setattr(tickets_api, "settle_ticket", fake_settle_ticket)
+
+    response = await tickets_api.settle_ticket_endpoint(
+        ticket_id=18,
+        outcome="won",
+        return_amount=19.5,
+        db=_FakeDb(),
+        user=SimpleNamespace(id=12),
+    )
+
+    assert isinstance(response, SettlementResponse)
+    assert response.model_dump() == {
+        "id": 77,
+        "bet_placement_id": None,
+        "ticket_id": 18,
+        "settled_at": datetime(2026, 7, 4, 9, 30, tzinfo=timezone.utc),
+        "outcome": "won",
+        "return_amount": 19.5,
+        "pnl": 9.5,
+    }

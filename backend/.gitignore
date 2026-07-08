@@ -43,6 +43,8 @@ alembic/versions/__pycache__/
 .pytest_cache/
 .coverage
 htmlcov/
+bet-dev.db
+pytest-dev.db
 
 # OS
 .DS_Store

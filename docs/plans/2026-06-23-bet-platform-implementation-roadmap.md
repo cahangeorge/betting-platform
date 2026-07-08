@@ -667,3 +667,51 @@ Still recommended before calling the whole platform fully closed:
 | Phase 5: Bilete page | Done | Tickets now expose generation/history/place-bet panels, ticket-leg status details, swap/recalculation helpers, backend validation/settlement paths, plus saved automatic verification and automatic ticket-generation job controls. | Covered by ticket creation validation, result settlement tests, ticket helper unit tests, dashboard slip/ticket hybrid smoke coverage, and the new hybrid orchestration/settlement spec. |
 | Phase 6: Account, Data, Configuratii, Board deletion | Done | Account/Data routes were updated, `/configuratii` was added for strategy management/duplication, Board route/tests were removed, and navigation/search now point to current surfaces. | Covered by strategy semantics tests, data page load tests, layout auth gating, and frontend checks. |
 | Phase 7: integrated verification and cleanup | In progress | The dedicated hybrid `scrape -> predict -> tickets -> settle` flow now exists and passes locally; full-suite backend and browser verification is still pending for full platform closure. | Completed this pass: `git diff --check`, targeted scheduler pytest, `pnpm check`, `pnpm test:unit`, `pnpm build`, and three targeted hybrid Playwright specs. Remaining recommended gate: full backend `pytest` and broader Playwright suite. |
+
+### 2026-07-04 implementation status update
+
+Implemented in this pass:
+
+- Backend scheduled orchestration is now more truthful:
+  - scrape-step failures propagate back into scheduled job status/detail instead of being reported as `completed`,
+  - prediction orchestration no longer reports empty / `no_matches` / mixed outcomes as blanket success,
+  - chained predict -> tickets flows now carry a concrete `run_id` into ticket generation when exactly one eligible prediction run was produced.
+- Ticket generation is now safer:
+  - `generate_tickets()` resolves one eligible prediction run first,
+  - the latest eligible run is used by default,
+  - callers can pin an explicit `run_id`,
+  - invalid or ineligible `run_id` inputs fail explicitly.
+- Manual single-ticket settlement is now contract-safe:
+  - `settle_ticket()` returns a persisted settlement object,
+  - `POST /api/v1/tickets/{ticket_id}/settle` validates the returned payload against `SettlementResponse` before responding.
+
+Verified in this pass:
+
+- backend:
+  - `PYTHONPATH=. .venv/bin/pytest tests/test_scheduled_jobs.py -q`
+  - `PYTHONPATH=. .venv/bin/pytest -p no:cacheprovider tests/test_scheduled_jobs.py tests/test_result_settlement.py tests/test_scrape_job_semantics.py tests/test_prediction_run_semantics.py tests/test_ticket_creation_validation.py tests/test_api_contracts.py -q`
+- result:
+  - backend targeted flow / contract suite passed locally (`65 passed`).
+
+Known regression / truthfulness signal now exposed:
+
+- The hybrid orchestration browser proof `frontend/tests/e2e/hybrid/scrape-predict-tickets-settle.spec.ts` no longer passes under the stricter orchestration truthfulness checks.
+- The failure is not a false negative in the new status reporting. It shows that the hybrid proof still depends on a `command: 'noop'` scrape path plus seeded data, so the orchestration chain can now fail honestly instead of masking scrape/prediction lineage problems as success.
+
+Current foundation assessment:
+
+- Backend foundations for:
+  - truthful orchestration status,
+  - safer ticket generation scoping,
+  - settlement API contract integrity
+  are materially stronger than the 2026-07-01 state.
+- The platform should still be treated as **not yet fully closed as a future-requirements foundation** until one end-to-end proof verifies:
+  1. scrape completion with real persisted artifacts,
+  2. prediction run creation for those exact artifacts,
+  3. ticket legs tied to those exact prediction rows,
+  4. result sync / final score ingestion,
+  5. persisted prediction-win and ticket-win outcomes.
+
+| Phase | Status | Implementation notes | Verification status |
+|---|---|---|---|
+| Phase 7: integrated verification and cleanup | In progress | Backend hardening now prevents false-success orchestration and stale prediction-run ticket generation, but the browser hybrid proof still needs to be rebuilt around truthful scrape/prediction lineage instead of the old `noop` seeded shortcut. | Backend targeted hardening/contract suite passed locally (`65 passed`). Current hybrid `scrape-predict-tickets-settle.spec.ts` now fails honestly and must be updated or replaced with a lineage-correct proof before platform closure. |

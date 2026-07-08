@@ -3,6 +3,13 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, field_validator
 
 
+def _normalize_email(v: str) -> str:
+    v = v.strip().lower()
+    if "@" not in v or "." not in v.split("@")[-1]:
+        raise ValueError("Invalid email address")
+    return v
+
+
 class SignupRequest(BaseModel):
     email: str
     password: str
@@ -11,10 +18,7 @@ class SignupRequest(BaseModel):
     @field_validator("email")
     @classmethod
     def validate_email(cls, v: str) -> str:
-        v = v.strip().lower()
-        if "@" not in v or "." not in v.split("@")[-1]:
-            raise ValueError("Invalid email address")
-        return v
+        return _normalize_email(v)
 
     @field_validator("password")
     @classmethod
@@ -27,6 +31,11 @@ class SignupRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: str
     password: str
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        return _normalize_email(v)
 
 
 class TokenResponse(BaseModel):
