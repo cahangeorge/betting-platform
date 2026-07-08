@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "FastAPI backend for the bet platform — prediction engine, ticket builder, bankroll manager"
 requires-python = ">=3.12"
 dependencies = [
+    "aiosqlite>=0.22.0",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",
     "sqlalchemy[asyncio]>=2.0.30",

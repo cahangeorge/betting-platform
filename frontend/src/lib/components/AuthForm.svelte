@@ -20,21 +20,12 @@
 	let loading = $state(false);
 	let errors = $state<Record<string, string>>({});
 
-	$effect(() => {
-		email = '';
-		password = '';
-		name = '';
-		confirmPassword = '';
-		error = '';
-		errors = {};
-	});
-
 	function validate(): boolean {
 		const newErrors: Record<string, string> = {};
 		if (!email.trim()) newErrors.email = 'Email is required';
 		else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) newErrors.email = 'Invalid email format';
 		if (!password) newErrors.password = 'Password is required';
-		else if (password.length < 6) newErrors.password = 'At least 6 characters';
+		else if (password.length < 8) newErrors.password = 'At least 8 characters';
 		if (mode === 'signup') {
 			if (!name.trim()) newErrors.name = 'Name is required';
 			if (password !== confirmPassword) newErrors.confirmPassword = 'Passwords do not match';

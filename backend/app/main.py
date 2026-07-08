@@ -8,6 +8,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.v1.router import v1_router
 from app.config import get_settings
+from app.database import ensure_dev_admin, ensure_schema
 from app.services.python_bridge import bridge_runtime_summary, validate_bridge_runtime
 from app.services.scheduled_jobs import start_scheduler, stop_scheduler
 
@@ -60,6 +61,9 @@ class FlexibleCORSMiddleware(BaseHTTPMiddleware):
 async def lifespan(app: FastAPI):
     if settings.jwt_secret in ("dev-secret-change-in-production", "dev-jwt-secret-change-in-production"):
         warnings.warn("BET_JWT_SECRET is not set — using insecure dev fallback. Set BET_JWT_SECRET in production.")
+
+    await ensure_schema()
+    await ensure_dev_admin()
 
     for issue in validate_bridge_runtime():
         warnings.warn(f"Bridge runtime prerequisite issue: {issue}")
