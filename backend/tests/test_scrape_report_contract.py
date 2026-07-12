@@ -110,6 +110,10 @@ def test_geo_params_are_validated_forwarded_and_sensitive_args_redacted():
         "--sport",
         "football",
     ]
+    assert scraper._redact_sensitive_args(["upcoming", "--proxy-pass=secret"]) == [
+        "upcoming",
+        "--proxy-pass=[REDACTED]",
+    ]
 
     job.params["base_url"] = "https://user:secret@example.test/path"
     with pytest.raises(ValueError, match="host-only"):

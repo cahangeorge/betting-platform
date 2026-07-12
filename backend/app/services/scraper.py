@@ -610,6 +610,10 @@ def _redact_sensitive_args(args: list[str]) -> list[str]:
             redacted.append("[REDACTED]")
             redact_next = False
             continue
+        flag, separator, _value = arg.partition("=")
+        if separator and flag.lower() in SENSITIVE_ARG_FLAGS:
+            redacted.append(f"{flag}=[REDACTED]")
+            continue
         redacted.append(arg)
         redact_next = arg.lower() in SENSITIVE_ARG_FLAGS
     return redacted
