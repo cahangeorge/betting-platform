@@ -1,17 +1,20 @@
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.live import broadcast_match_update, broadcast_odds_update
+from app.models.job import ScheduledJobRun
 from app.models.match import Match, MatchSource, OddsEntry
 from app.models.scrape import ScrapedDataset, ScrapeJob, ScrapeJobLog
-from app.services.python_bridge import BridgeError, run_oddsharvester_json
+from app.services.python_bridge import BridgeError, OddsHarvesterJsonResult, run_oddsharvester_json
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +110,15 @@ LIVE_RELEVANT_MATCH_STATUSES = {
 
 LIVE_RELEVANT_ODDS_MARKETS = {"1x2", "home_away", "homeaway", "match_winner", "matchwinner"}
 FINAL_MATCH_STATUSES = {"finished", "ft", "fulltime", "completed", "final"}
+LOCALE_PATTERN = re.compile(r"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$")
+ANTI_BOT_MARKERS = ("anti-bot", "antibot", "captcha", "cloudflare", "challenge", "rate limit", "blocked")
+SENSITIVE_ARG_FLAGS = {
+    "--password",
+    "--proxy-pass",
+    "--proxy-user",
+    "--proxy-url",
+    "--token",
+}
 
 
 def _normalize_scrape_value(value):
@@ -549,6 +561,60 @@ def _job_label(job: ScrapeJob) -> str:
     return job.job_type
 
 
+def _validated_base_url(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    if not isinstance(value, str):
+        raise ValueError("base_url must be a string")
+    normalized = value.strip().rstrip("/")
+    parsed = urlsplit(normalized)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("base_url must be a host-only http(s) URL without credentials, path, query, or fragment")
+    return normalized
+
+
+def _validated_locale(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    if not isinstance(value, str) or not LOCALE_PATTERN.fullmatch(value.strip()):
+        raise ValueError("locale must be a valid language tag such as en-GB")
+    return value.strip()
+
+
+def _validated_timezone(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    if not isinstance(value, str):
+        raise ValueError("timezone must be an IANA timezone name")
+    normalized = value.strip()
+    try:
+        ZoneInfo(normalized)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError("timezone must be a valid IANA timezone name") from exc
+    return normalized
+
+
+def _redact_sensitive_args(args: list[str]) -> list[str]:
+    redacted: list[str] = []
+    redact_next = False
+    for arg in args:
+        if redact_next:
+            redacted.append("[REDACTED]")
+            redact_next = False
+            continue
+        redacted.append(arg)
+        redact_next = arg.lower() in SENSITIVE_ARG_FLAGS
+    return redacted
+
+
 def _build_oddsharvester_args(job: ScrapeJob) -> list[str]:
     params = job.params or {}
     command = params.get("command", "upcoming")
@@ -632,12 +698,124 @@ def _build_oddsharvester_args(job: ScrapeJob) -> list[str]:
     if params.get("scraper_engine"):
         args.extend(["--engine", str(params["scraper_engine"])])
 
+    base_url = _validated_base_url(params.get("base_url"))
+    locale = _validated_locale(params.get("locale"))
+    browser_timezone = _validated_timezone(params.get("timezone"))
+    if base_url:
+        args.extend(["--base-url", base_url])
+    if locale:
+        args.extend(["--locale", locale])
+    if browser_timezone:
+        args.extend(["--timezone", browser_timezone])
+
     return args
 
 
 def _job_oddsharvester_timeout(job: ScrapeJob) -> int | None:
     params = job.params or {}
     return _coerce_int(params.get("timeout_seconds") or params.get("oddsharvester_timeout_seconds"))
+
+
+def _scrape_report_summary(report: dict, records: list[dict], *, cli_error: str | None = None) -> dict[str, Any]:
+    if report.get("schema_version") != "1.0":
+        raise BridgeError("Unsupported OddsHarvester scrape report schema_version")
+
+    scraper_status = report.get("status")
+    if scraper_status not in {"success", "partial", "failed"}:
+        raise BridgeError("OddsHarvester scrape report has an invalid status")
+
+    stats = report.get("stats")
+    failures = report.get("failures")
+    warnings = report.get("warnings")
+    engines = report.get("engines")
+    source = report.get("source")
+    timing = report.get("timing")
+    if not isinstance(stats, dict) or not isinstance(failures, list) or not isinstance(warnings, list):
+        raise BridgeError("OddsHarvester scrape report is missing stats, failures, or warnings")
+    if not isinstance(engines, dict) or not isinstance(source, dict) or not isinstance(timing, dict):
+        raise BridgeError("OddsHarvester scrape report is missing engines, source, or timing")
+
+    failure_types = sorted(
+        {
+            str(item.get("error_type"))
+            for item in failures
+            if isinstance(item, dict) and item.get("error_type")
+        }
+    )
+    diagnostic_text = json.dumps({"failures": failures, "warnings": warnings}, default=str).lower()
+    anti_bot_detected = any(marker in diagnostic_text for marker in ANTI_BOT_MARKERS)
+    failure_count = max(_coerce_int(stats.get("failed")) or 0, len(failures))
+    partial_count = _coerce_int(stats.get("partial")) or 0
+
+    if scraper_status == "failed" or (not records and (failure_count or anti_bot_detected or cli_error)):
+        health = "failed"
+    elif scraper_status == "partial" or failure_count or partial_count:
+        health = "degraded"
+    else:
+        health = "healthy"
+
+    safe_source = {
+        key: value
+        for key, value in source.items()
+        if key in {"sport", "date", "leagues", "markets", "season", "max_pages", "include_started", "base_url"}
+    }
+    match_links = source.get("match_links")
+    if isinstance(match_links, list):
+        safe_source["match_link_count"] = len(match_links)
+
+    return {
+        "schema_version": "1.0",
+        "health": health,
+        "scraper_status": scraper_status,
+        "records": len(records),
+        "stats": {
+            "total_urls": _coerce_int(stats.get("total_urls")) or 0,
+            "successful": _coerce_int(stats.get("successful")) or 0,
+            "failed": failure_count,
+            "partial": partial_count,
+            "success_rate_pct": _coerce_float(stats.get("success_rate_pct")) or 0.0,
+        },
+        "failure_count": failure_count,
+        "failure_types": failure_types,
+        "warning_count": len(warnings),
+        "anti_bot_detected": anti_bot_detected,
+        "engines": {
+            "requested": engines.get("requested"),
+            "used": engines.get("used") if isinstance(engines.get("used"), list) else [],
+        },
+        "source": safe_source,
+        "locale": report.get("locale"),
+        "timezone": report.get("timezone"),
+        "timing": {
+            "started_at": timing.get("started_at"),
+            "finished_at": timing.get("finished_at"),
+            "duration_seconds": _coerce_float(timing.get("duration_seconds")) or 0.0,
+        },
+        "cli_error": bool(cli_error),
+    }
+
+
+async def _persist_scrape_report_artifact(
+    db: AsyncSession, scrape_job_id: int, report_summary: dict[str, Any]
+) -> None:
+    result = await db.execute(select(ScheduledJobRun).where(ScheduledJobRun.scrape_job_id == scrape_job_id))
+    for run in result.scalars().all():
+        artifacts = dict(run.artifacts or {})
+        artifacts["scrape_report"] = report_summary
+        run.artifacts = artifacts
+
+
+async def _run_oddsharvester_with_report(
+    args: list[str], *, label: str, timeout: int | None
+) -> list[dict] | OddsHarvesterJsonResult:
+    try:
+        return await run_oddsharvester_json(args, label=label, timeout=timeout, include_report=True)
+    except TypeError as exc:
+        # Test doubles and older in-process callers may still expose the original
+        # list-only bridge signature. The external CLI fallback lives in python_bridge.
+        if "include_report" not in str(exc):
+            raise
+        return await run_oddsharvester_json(args, label=label, timeout=timeout)
 
 
 async def _upsert_match_from_record(db: AsyncSession, record: dict, sport: str) -> tuple[Match, bool, bool]:
@@ -948,13 +1126,42 @@ async def execute_scrape_job(db: AsyncSession, job_id: int) -> ScrapeJob:
                 job.id,
                 action="bridge_invocation",
                 message="Invoking OddsHarvester bridge",
-                metadata={"args": args, "timeout_seconds": timeout_seconds, "scraper_engine": scraper_engine},
+                metadata={
+                    "args": _redact_sensitive_args(args),
+                    "timeout_seconds": timeout_seconds,
+                    "scraper_engine": scraper_engine,
+                    "report_requested": True,
+                },
             )
-            payload = await run_oddsharvester_json(
+            bridge_result = await _run_oddsharvester_with_report(
                 args,
                 label=f"scrape_job_{job.id}",
                 timeout=timeout_seconds,
             )
+            if isinstance(bridge_result, OddsHarvesterJsonResult):
+                payload = bridge_result.records
+                report = bridge_result.report
+                cli_error = bridge_result.cli_error
+            else:
+                payload = bridge_result
+                report = None
+                cli_error = None
+
+            report_summary = None
+            if report is not None:
+                report_summary = _scrape_report_summary(report, payload, cli_error=cli_error)
+                await _persist_scrape_report_artifact(db, job.id, report_summary)
+                await append_scrape_job_log(
+                    db,
+                    job.id,
+                    action="scrape_report",
+                    message=f"OddsHarvester report classified the scrape as {report_summary['health']}",
+                    level="warning" if report_summary["health"] == "degraded" else "info",
+                    metadata=report_summary,
+                )
+                if report_summary["health"] == "failed":
+                    raise BridgeError("OddsHarvester scrape report classified the run as failed")
+
             ingestion_result = await _ingest_scraped_payload(db, job, payload)
             if isinstance(ingestion_result, tuple) and len(ingestion_result) == 3:
                 summary, match_updates, odds_updates = ingestion_result
@@ -962,6 +1169,8 @@ async def execute_scrape_job(db: AsyncSession, job_id: int) -> ScrapeJob:
                 summary = ingestion_result
                 match_updates = {}
                 odds_updates = {}
+            if report_summary is not None:
+                summary = {**summary, "scrape_report": report_summary}
             job.status = "completed"
             job.output = json.dumps(summary)
             _schedule_post_commit_live_broadcasts(

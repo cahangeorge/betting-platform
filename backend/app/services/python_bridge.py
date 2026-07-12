@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 from app.config import get_settings
@@ -17,6 +18,13 @@ ODDSHARVESTER_TIMEOUT = settings.oddsharvester_timeout_seconds
 
 class BridgeError(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class OddsHarvesterJsonResult:
+    records: list[dict]
+    report: dict | None = None
+    cli_error: str | None = None
 
 
 def bridge_runtime_summary() -> dict[str, str]:
@@ -158,11 +166,43 @@ async def run_oddsharvester_json(
     label: str = "oddsharvester",
     *,
     timeout: int | None = None,
-) -> list[dict]:
+    include_report: bool = False,
+) -> list[dict] | OddsHarvesterJsonResult:
     output_path = TEMP_DIR / f"{label}_{os.getpid()}_{abs(hash(tuple(args)))}.json"
-    raw_output = await run_oddsharvester([*args, "--output", str(output_path), "--format", "json"], timeout=timeout)
+    report_path = output_path.with_suffix(".report.json")
+    command_args = [*args, "--output", str(output_path), "--format", "json"]
+    if include_report:
+        command_args.extend(["--report-output", str(report_path)])
+
+    cli_error: str | None = None
+    try:
+        raw_output = await run_oddsharvester(command_args, timeout=timeout)
+    except BridgeError as exc:
+        cli_error = str(exc)
+        if include_report and _report_option_is_unsupported(cli_error):
+            output_path.unlink(missing_ok=True)
+            report_path.unlink(missing_ok=True)
+            raw_output = await run_oddsharvester(
+                [*args, "--output", str(output_path), "--format", "json"],
+                timeout=timeout,
+            )
+            cli_error = None
+        elif not (include_report and report_path.exists()):
+            output_path.unlink(missing_ok=True)
+            report_path.unlink(missing_ok=True)
+            raise
+
+    try:
+        report = _read_oddsharvester_report(report_path) if report_path.exists() else None
+    except BridgeError:
+        output_path.unlink(missing_ok=True)
+        report_path.unlink(missing_ok=True)
+        raise
 
     if not output_path.exists():
+        report_path.unlink(missing_ok=True)
+        if include_report and report is not None:
+            return OddsHarvesterJsonResult(records=[], report=report, cli_error=cli_error)
         raise BridgeError(
             "OddsHarvester completed without producing a JSON output file. "
             f"CLI output was: {raw_output or '(empty)'}"
@@ -174,8 +214,26 @@ async def run_oddsharvester_json(
         raise BridgeError(f"OddsHarvester returned invalid JSON output: {exc}") from exc
     finally:
         output_path.unlink(missing_ok=True)
+        report_path.unlink(missing_ok=True)
 
     if not isinstance(payload, list):
         raise BridgeError("OddsHarvester JSON output must be a list of scraped match records")
 
+    if include_report:
+        return OddsHarvesterJsonResult(records=payload, report=report, cli_error=cli_error)
     return payload
+
+
+def _report_option_is_unsupported(error: str) -> bool:
+    normalized = error.lower()
+    return "report-output" in normalized and ("no such option" in normalized or "unknown option" in normalized)
+
+
+def _read_oddsharvester_report(report_path: Path) -> dict:
+    try:
+        report = json.loads(report_path.read_text())
+    except json.JSONDecodeError as exc:
+        raise BridgeError(f"OddsHarvester returned an invalid JSON report: {exc}") from exc
+    if not isinstance(report, dict):
+        raise BridgeError("OddsHarvester JSON report must be an object")
+    return report
