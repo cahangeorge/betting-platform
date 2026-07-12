@@ -17,7 +17,7 @@ test('live and value bet pages surface seeded backend data', async ({ page, cont
 		const [liveHome, liveAway] = fixtures.liveMatchLabel.split(' vs ');
 		console.log('live-value-data: seeded');
 
-		await page.goto('/live');
+		await page.goto('/opportunities?view=live');
 		console.log('live-value-data: goto live');
 		await expect(page.getByRole('heading', { name: 'LIVE MATCHES' })).toBeVisible();
 		await page.waitForTimeout(250);
@@ -35,7 +35,7 @@ test('live and value bet pages surface seeded backend data', async ({ page, cont
 		}
 		console.log('live-value-data: live ok');
 
-		await page.goto('/value-bets');
+		await page.goto('/opportunities?view=value');
 		console.log('live-value-data: goto value-bets');
 		await expect(page.getByRole('heading', { name: 'VALUE BET FEED' })).toBeVisible();
 		await expect(page.getByText(fixtures.scheduledMatchLabel).first()).toBeVisible();

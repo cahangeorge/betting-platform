@@ -10,7 +10,7 @@ test('generated predictions are visible on Predict and Data Hub pages', async ({
 	try {
 		const fixtures = await seedHybridFixtures(session);
 
-		await page.goto('/predict');
+		await page.goto('/analyze');
 		await expect(page.getByRole('heading', { name: 'PREDICTIONS' })).toBeVisible();
 		await expect(page.getByRole('heading', { name: 'Recent Prediction Runs' }).first()).toBeVisible();
 		await expect(page.getByText(`Run #${fixtures.predictionRunId}`).first()).toBeVisible();

@@ -62,7 +62,7 @@ test('scheduled jobs can be saved from UI controls and toggled in hybrid mode', 
 	const createdJobIds: number[] = [];
 
 	try {
-		await page.goto('/scrape');
+		await page.goto('/prepare');
 		const scrapeMain = page.locator('#main-content');
 		await expect(scrapeMain.getByRole('heading', { name: 'SCRAPING', exact: true })).toBeVisible();
 

@@ -5,7 +5,7 @@
 	import { cn } from '$lib/utils';
 
 	let { onOpenNavigation }: { onOpenNavigation: () => void } = $props();
-	const primaryTabs = workspaceNavigation.filter((item) => ['Home', 'Prepare', 'Analyze', 'Tickets'].includes(item.label));
+	const primaryTabs = workspaceNavigation.filter((item) => ['Prepare', 'Analyze', 'Opportunities', 'Tickets'].includes(item.label));
 
 	function isActive(href: string): boolean {
 		return isNavigationActive($page.url.pathname, href);

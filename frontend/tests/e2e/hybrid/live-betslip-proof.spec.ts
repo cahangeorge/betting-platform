@@ -94,7 +94,7 @@ test('seeded live value candidate stays locked on /live when feed freshness is u
 			`seeded match should expose at least one actionable live value candidate: ${JSON.stringify(seededMatch?.live_value_candidates)}`
 		).toBe(true);
 
-		await page.goto('/live');
+		await page.goto('/opportunities?view=live');
 		await expectLockedLiveCandidateState(page, { liveHome, liveAway });
 		expect(pageErrors, `unexpected browser errors on /live: ${pageErrors.join('\n')}`).toEqual([]);
 	} finally {

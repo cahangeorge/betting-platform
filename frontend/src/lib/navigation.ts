@@ -3,7 +3,6 @@ import {
 	BarChart3,
 	Database,
 	Home,
-	Radio,
 	Settings,
 	Ticket,
 	Workflow
@@ -20,8 +19,7 @@ export const workspaceNavigation = [
 
 export const utilityNavigation = [
 	{ href: '/prepare/data', label: 'Data explorer', icon: Database },
-	{ href: '/settings/strategies', label: 'Strategies', icon: Settings },
-	{ href: '/opportunities?view=live', label: 'Live monitor', icon: Radio }
+	{ href: '/settings/strategies', label: 'Strategies', icon: Settings }
 ] as const;
 
 export function isNavigationActive(pathname: string, href: string): boolean {

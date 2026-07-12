@@ -17,7 +17,7 @@ test('@live full scrape flow surfaces a real job terminal state', async ({ page,
 		await executeScrapeJob(session, job.id);
 		const finalJob = await waitForScrapeTerminalState(session, job.id, 240_000);
 
-		await page.goto('/scrape');
+		await page.goto('/prepare');
 		await expect(page.getByText(`scrape_odds`)).toBeVisible();
 		await expect(page.getByText(new RegExp(finalJob.status, 'i')).first()).toBeVisible();
 	} finally {

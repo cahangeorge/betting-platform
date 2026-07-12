@@ -112,7 +112,7 @@ test('scheduled scrape -> predict -> tickets flow can be created and later settl
 			})
 		});
 
-		await page.goto('/scrape');
+		await page.goto('/prepare');
 		await expect(page.getByText(orchestrationJob.name).first()).toBeVisible();
 
 		await page.goto('/tickets');

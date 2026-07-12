@@ -16,7 +16,7 @@ test('value bets frontend client normalizes trust metadata from the backend feed
 });
 
 test('value bets route uses trust metadata to make add-to-betslip locking honest', async () => {
-	const source = await readFile('src/routes/value-bets/+page.svelte', 'utf8');
+	const source = await readFile('src/lib/features/opportunities/ValueOpportunities.svelte', 'utf8');
 
 	assert.match(source, /bet\.is_ticket_eligible === false \|\| bet\.trust\?\.is_ticket_eligible === false/);
 	assert.match(source, /bet\.source_ok === false \|\| bet\.trust\?\.source_ok === false/);

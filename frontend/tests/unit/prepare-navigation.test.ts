@@ -1,18 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import path from 'node:path';
 
-const preparePagePath = path.resolve('src/routes/prepare/+page.svelte');
+test('Prepare is the canonical data-preparation workspace', async () => {
+	const source = await readFile('src/routes/prepare/+page.svelte', 'utf8');
+	assert.match(source, /id="selection"/);
+	assert.match(source, /id="coverage"/);
+	assert.match(source, /id="controls"/);
+	assert.doesNotMatch(source, /href="\/scrape/);
+});
 
-test('Prepare workflow cards use valid, keyboard-accessible scrape workspace links', async () => {
-	const source = await readFile(preparePagePath, 'utf8');
-
-	assert.match(source, /href: '\/scrape#selection'/);
-	assert.match(source, /href: '\/scrape#coverage'/);
-	assert.match(source, /href: '\/scrape#controls'/);
-	assert.match(source, /href=\{step\.href\}/);
-	assert.match(source, /class="group block min-h-56/);
-	assert.match(source, /href="\/scrape"/);
-	assert.doesNotMatch(source, /<a href="\/scrape"><Button>/);
+test('legacy scrape route preserves search and hash while redirecting', async () => {
+	const source = await readFile('src/routes/scrape/+page.svelte', 'utf8');
+	const redirect = await readFile('src/lib/components/LegacyRouteRedirect.svelte', 'utf8');
+	assert.match(source, /target="\/prepare"/);
+	assert.match(redirect, /window\.location\.search/);
+	assert.match(redirect, /window\.location\.hash/);
 });

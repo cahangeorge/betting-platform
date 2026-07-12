@@ -7,8 +7,8 @@ const viewportWidths = [1440, 1024, 390, 320] as const;
 
 const routes = [
 	{ name: 'Dashboard', path: '/', heading: 'Rezultate si oportunitati' },
-	{ name: 'Scrape', path: '/scrape', heading: 'SCRAPING' },
-	{ name: 'Predictii', path: '/predict', heading: 'PREDICTIONS' },
+	{ name: 'Scrape', path: '/prepare', heading: 'SCRAPING' },
+	{ name: 'Predictii', path: '/analyze', heading: 'PREDICTIONS' },
 	{ name: 'Bilete', path: '/tickets', heading: 'TICKETS' },
 	{ name: 'Account', path: '/account', heading: 'ACCOUNT' },
 	{ name: 'Date', path: '/data', heading: 'Data Hub' },

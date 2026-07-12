@@ -15,7 +15,7 @@ import {
 	normaliseCatalogAvailability,
 	parseCatalogMetadata,
 	parseScrapeCatalog
-} from '../../src/routes/scrape/catalog.helpers.ts';
+} from '../../src/routes/prepare/catalog.helpers.ts';
 
 test('history presets expose long World Cup backfill ranges', () => {
 	assert.deepEqual(

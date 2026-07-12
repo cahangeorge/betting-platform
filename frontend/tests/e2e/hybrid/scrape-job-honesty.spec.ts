@@ -18,7 +18,7 @@ test('scrape page shows the real backend job status', async ({ page, context }) 
 		await executeScrapeJob(session, job.id);
 		await waitForScrapeTerminalState(session, job.id, 30_000);
 
-		await page.goto('/scrape');
+		await page.goto('/prepare');
 		await expect(page.getByRole('cell', { name: new RegExp(jobType) }).first()).toBeVisible();
 		await expect(page.getByText(/completed|failed/i).first()).toBeVisible();
 	} finally {

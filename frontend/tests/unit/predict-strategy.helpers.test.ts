@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { hasStrategyAvgEdge, normalizeStrategies } from '../../src/routes/predict/strategy.helpers.ts';
+import { hasStrategyAvgEdge, normalizeStrategies } from '../../src/routes/analyze/strategy.helpers.ts';
 
 test('normalizeStrategies backfills missing analytics fields with null', () => {
 	const strategies = normalizeStrategies([
