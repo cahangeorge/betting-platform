@@ -131,6 +131,7 @@ function tomorrowLocalDate(): string {
 	let selectedLeagues = $state<string[]>([]);
 	let countryQuery = $state('');
 	let leagueQuery = $state('');
+	let showAllCountries = $state(false);
 	let acknowledgedLargeScopeKey = $state<string | null>(null);
 	let loadingCatalog = $state(true);
 	let catalogSource = $state<string | null>(null);
@@ -211,6 +212,13 @@ function tomorrowLocalDate(): string {
 			country.country.toLocaleLowerCase().includes(countryQuery.trim().toLocaleLowerCase())
 		)
 	);
+	const displayedCountries = $derived(
+		countryQuery.trim() || showAllCountries ? filteredCountries : filteredCountries.slice(0, 12)
+	);
+	const hiddenCountryCount = $derived(Math.max(0, filteredCountries.length - displayedCountries.length));
+	const displayedLeagueGroups = $derived(
+		selectedCountries.length > 0 || leagueQuery.trim() ? filteredLeagueGroups : []
+	);
 	const catalogStatusLabel = $derived(catalogAvailabilityLabel(catalogStatus));
 	const catalogRefreshLabel = $derived(formatCatalogRefreshTime(catalogLastRefreshedAt));
 
@@ -289,6 +297,26 @@ function tomorrowLocalDate(): string {
 	const futureIntervalDays = $derived(
 		intervalToDays(futureDays, futureWeeks, futureMonths, futureYears)
 	);
+	const scopeReady = $derived(selectedLeagues.length > 0 || (!pastEnabled && selectedCountries.length > 0));
+	const coverageReady = $derived((pastEnabled && Boolean(pastFrom && pastTo)) || (futureEnabled && futureIntervalDays > 0));
+	const canStartScrape = $derived(
+		!submitting &&
+		isLargeScopeAcknowledged &&
+		(selectedCountries.length > 0 || selectedLeagues.length > 0) &&
+		(!pastEnabled || selectedScrapeLeagueSlugs.length > 0) &&
+		coverageReady
+	);
+	const setupSummary = $derived.by(() => {
+		const scope = selectedLeagues.length > 0
+			? `${selectedLeagues.length} league${selectedLeagues.length === 1 ? '' : 's'}`
+			: selectedCountries.length > 0
+				? `${selectedCountries.length} countr${selectedCountries.length === 1 ? 'y' : 'ies'}`
+				: 'No competition selected';
+		const ranges: string[] = [];
+		if (pastEnabled) ranges.push(`${historyPresetYears || 'custom'}y history`);
+		if (futureEnabled && futureIntervalDays > 0) ranges.push(`${futureIntervalDays} upcoming days`);
+		return `${scope} · ${ranges.length > 0 ? ranges.join(' + ') : 'No coverage selected'}`;
+	});
 
 	const unsupportedControlNotes = $derived.by(() => {
 		const notes: string[] = [];
@@ -711,6 +739,60 @@ function tomorrowLocalDate(): string {
 		}
 	}
 
+	function preferredLeague(countryName: string, patterns: RegExp[]): LeagueInfo | null {
+		const country = countries.find((entry) => entry.country.toLocaleLowerCase() === countryName.toLocaleLowerCase());
+		if (!country) return null;
+		return (
+			country.leagues.find(
+				(league) =>
+					isLeagueScrapeSelectable(league) &&
+					patterns.some((pattern) => pattern.test(league.name) || pattern.test(league.scrape_slug ?? ''))
+			) ?? country.leagues.find(isLeagueScrapeSelectable) ?? null
+		);
+	}
+
+	function applyScopePreset(preset: 'romania' | 'top-five' | 'world-cup') {
+		const definitions: Record<typeof preset, { country: string; patterns: RegExp[] }[]> = {
+			romania: [{ country: 'Romania', patterns: [/superliga/i, /liga[- ]?1/i] }],
+			'top-five': [
+				{ country: 'England', patterns: [/^premier league$/i] },
+				{ country: 'Spain', patterns: [/^la ?liga$/i] },
+				{ country: 'Italy', patterns: [/^serie a$/i] },
+				{ country: 'Germany', patterns: [/^bundesliga$/i] },
+				{ country: 'France', patterns: [/^ligue 1$/i] }
+			],
+			'world-cup': [{ country: 'World', patterns: [/world cup/i, /^world-cup$/i] }]
+		};
+
+		const selected = definitions[preset]
+			.map((definition) => ({ ...definition, league: preferredLeague(definition.country, definition.patterns) }))
+			.filter((entry): entry is { country: string; patterns: RegExp[]; league: LeagueInfo } => entry.league !== null);
+
+		selectedCountries = selected.map((entry) => entry.country);
+		selectedLeagues = selected.map((entry) => entry.league.id);
+		countryQuery = '';
+		leagueQuery = '';
+		showAllCountries = false;
+		acknowledgedLargeScopeKey = null;
+	}
+
+	function clearScope() {
+		selectedCountries = [];
+		selectedLeagues = [];
+		countryQuery = '';
+		leagueQuery = '';
+		showAllCountries = false;
+		acknowledgedLargeScopeKey = null;
+	}
+
+	function setFuturePreset(days: number) {
+		futureEnabled = true;
+		futureDays = String(days);
+		futureWeeks = '0';
+		futureMonths = '0';
+		futureYears = '0';
+	}
+
 	function toggleLeague(id: string) {
 		const league = allLeagues.find((entry) => entry.id === id);
 		if (!league || !isLeagueScrapeSelectable(league)) {
@@ -815,22 +897,39 @@ function tomorrowLocalDate(): string {
 	<title>Prepare match data · Betfront</title>
 </svelte:head>
 
-<div class="mx-auto min-w-0 max-w-4xl space-y-6 overflow-hidden pb-8" transition:fade={{ duration: 200 }}>
-	<header class="space-y-4">
-		<div>
+<div class="mx-auto flex min-w-0 max-w-6xl flex-col gap-6 overflow-hidden pb-8" transition:fade={{ duration: 200 }}>
+	<header class="order-1 space-y-5">
+		<div class="max-w-3xl">
 			<p class="text-xs font-semibold uppercase tracking-[0.16em] text-football-blue">Data preparation</p>
 			<h1 class="mt-1 text-2xl font-extrabold font-sport text-foreground sm:text-3xl">Prepare match data</h1>
-			<p class="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">Choose the competitions, set data coverage, then queue a traceable scrape. Automation, specialist pipelines, and logs stay out of the primary path.</p>
+			<p class="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">A short guided setup for collecting match data. Pick a scope, choose coverage, then review one clear action.</p>
 		</div>
 
-		<nav aria-label="Scrape preparation steps" class="grid grid-cols-3 overflow-hidden rounded-md border border-border bg-muted/30 text-xs sm:flex sm:w-fit">
-			<a href="#selection" class="min-w-0 border-r border-border px-3 py-2 text-center font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-football-blue">1. Scope</a>
-			<a href="#coverage" class="min-w-0 border-r border-border px-3 py-2 text-center font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-football-blue">2. Coverage</a>
-			<a href="#controls" class="min-w-0 px-3 py-2 text-center font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-football-blue">3. Review &amp; run</a>
+		<nav aria-label="Scrape preparation steps" class="grid grid-cols-1 gap-2 sm:grid-cols-3">
+			<a href="#selection" class={cn('flex min-w-0 items-center gap-3 border px-4 py-3 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-football-blue', scopeReady ? 'border-football-green/40 bg-football-green/5' : 'border-football-blue/40 bg-football-blue/5')}>
+				<span class={cn('grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-bold', scopeReady ? 'bg-football-green text-background' : 'bg-football-blue text-background')}>{scopeReady ? '✓' : '1'}</span>
+				<span><span class="block text-sm font-semibold text-foreground">Choose scope</span><span class="block text-xs text-muted-foreground">{selectedLeagues.length || 0} leagues selected</span></span>
+			</a>
+			<a href="#coverage" class={cn('flex min-w-0 items-center gap-3 border px-4 py-3 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-football-blue', coverageReady ? 'border-football-green/40 bg-football-green/5' : 'border-border bg-muted/20')}>
+				<span class={cn('grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-bold', coverageReady ? 'bg-football-green text-background' : 'bg-muted text-foreground')}>{coverageReady ? '✓' : '2'}</span>
+				<span><span class="block text-sm font-semibold text-foreground">Set coverage</span><span class="block text-xs text-muted-foreground">History and upcoming data</span></span>
+			</a>
+			<a href="#controls" class={cn('flex min-w-0 items-center gap-3 border px-4 py-3 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-football-blue', canStartScrape ? 'border-football-green/40 bg-football-green/5' : 'border-border bg-muted/20')}>
+				<span class={cn('grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-bold', canStartScrape ? 'bg-football-green text-background' : 'bg-muted text-foreground')}>{canStartScrape ? '✓' : '3'}</span>
+				<span><span class="block text-sm font-semibold text-foreground">Review and run</span><span class="block text-xs text-muted-foreground">One final action</span></span>
+			</a>
 		</nav>
+
+		<div class="flex flex-col gap-3 border border-border bg-muted/20 px-4 py-3 sm:flex-row sm:items-center sm:justify-between" aria-live="polite">
+			<div class="min-w-0">
+				<p class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Current setup</p>
+				<p class="mt-1 truncate text-sm font-medium text-foreground">{setupSummary}</p>
+			</div>
+			<a href="#controls" class="shrink-0 text-sm font-semibold text-football-blue hover:text-football-green">Review setup →</a>
+		</div>
 	</header>
 
-		<Card variant="prediction">
+		<Card variant="prediction" class="order-6">
 			<details id="automation" class="group">
 				<summary class="flex cursor-pointer list-none items-center justify-between gap-4 rounded px-1 py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-football-blue">
 					<span><span class="block text-lg font-semibold text-foreground">Automation &amp; specialist workflows</span><span class="mt-1 block text-sm text-muted-foreground">Optional schedules, scrape-to-predict orchestration, and the World Cup pipeline.</span></span>
@@ -1285,8 +1384,38 @@ function tomorrowLocalDate(): string {
 		</Card>
 
 		<!-- Section 2: Data selection -->
-	<Card id="selection" title="1. Choose competitions" variant="data" class="scroll-mt-24">
-		<div class="space-y-6">
+	<Card id="selection" title="1. Choose competitions" variant="data" class="order-2 scroll-mt-24">
+		<div class="space-y-5">
+			<div class="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-end">
+				<div>
+					<p class="text-sm font-semibold text-foreground">Start with a preset</p>
+					<p class="mt-1 text-xs leading-5 text-muted-foreground">One click chooses a sensible primary league. You can fine-tune the catalog below.</p>
+					<div class="mt-3 flex flex-wrap gap-2">
+						<Button variant="secondary" size="sm" onclick={() => applyScopePreset('romania')}>Romania</Button>
+						<Button variant="secondary" size="sm" onclick={() => applyScopePreset('top-five')}>Top 5 Europe</Button>
+						<Button variant="secondary" size="sm" onclick={() => applyScopePreset('world-cup')}>World Cup</Button>
+					</div>
+				</div>
+				{#if selectedCountries.length > 0 || selectedLeagues.length > 0}
+					<Button variant="ghost" size="sm" onclick={clearScope}>Clear selection</Button>
+				{/if}
+			</div>
+
+			{#if selectedLeagueBadges.length > 0}
+				<div class="flex flex-wrap items-center gap-2 border border-football-green/30 bg-football-green/5 p-3">
+					<span class="text-xs font-semibold uppercase tracking-wide text-football-green">Selected</span>
+					{#each selectedLeagueBadges as badge (badge.value)}
+						<Badge variant="info">{badge.label}</Badge>
+					{/each}
+				</div>
+			{/if}
+
+			<details class="group border border-border bg-muted/10" open={selectedLeagues.length === 0}>
+				<summary class="flex cursor-pointer list-none items-center justify-between gap-4 px-4 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-football-blue">
+					<span><span class="block text-sm font-semibold text-foreground">Browse the full catalog</span><span class="mt-1 block text-xs text-muted-foreground">Search countries first, then only their leagues are shown.</span></span>
+					<span class="text-xs font-medium text-football-blue group-open:hidden">Open</span><span class="hidden text-xs font-medium text-football-blue group-open:inline">Close</span>
+				</summary>
+				<div class="space-y-6 border-t border-border p-4">
 			<!-- Countries -->
 			<div>
 				<div class="mb-3 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
@@ -1327,8 +1456,8 @@ function tomorrowLocalDate(): string {
 				{:else if filteredCountries.length === 0}
 					<p class="text-sm text-muted-foreground" role="status">No countries match your search.</p>
 				{:else}
-					<div class="grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-3">
-						{#each filteredCountries as country (country.country)}
+					<div class="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+						{#each displayedCountries as country (country.country)}
 							<label class={cn(
 								'flex items-center space-x-2 p-2 border cursor-pointer transition-colors duration-200',
 								selectedCountries.includes(country.country)
@@ -1346,6 +1475,13 @@ function tomorrowLocalDate(): string {
 							</label>
 						{/each}
 					</div>
+					{#if !countryQuery.trim() && (hiddenCountryCount > 0 || showAllCountries)}
+						<div class="mt-3 flex justify-center">
+							<Button variant="ghost" size="sm" onclick={() => (showAllCountries = !showAllCountries)}>
+								{showAllCountries ? 'Show fewer countries' : `Show all countries (${hiddenCountryCount} more)`}
+							</Button>
+						</div>
+					{/if}
 					{#if selectedCountryBadges.length > 0}
 						<div class="flex flex-wrap gap-1.5 mt-2">
 							{#each selectedCountryBadges as badge (badge.value)}
@@ -1395,13 +1531,18 @@ function tomorrowLocalDate(): string {
 						placeholder="Search by country, league, or OddsHarvester slug"
 						autocomplete="off"
 					/>
-					{#if filteredLeagueGroups.length === 0}
+					{#if selectedCountries.length === 0 && !leagueQuery.trim()}
+						<div class="mt-3 border border-dashed border-border bg-muted/20 p-5 text-center">
+							<p class="text-sm font-medium text-foreground">Choose a country first</p>
+							<p class="mt-1 text-xs text-muted-foreground">This keeps the catalog compact instead of rendering every league at once.</p>
+						</div>
+					{:else if displayedLeagueGroups.length === 0}
 						<p class="mt-3 text-sm text-muted-foreground" role="status">
 							No catalog leagues match the active country filter or search.
 						</p>
 					{:else}
 						<div class="mt-3 space-y-4" aria-label="OddsHarvester league catalog">
-							{#each filteredLeagueGroups as country (country.country)}
+							{#each displayedLeagueGroups as country (country.country)}
 								<section class="overflow-hidden border border-border">
 									<div class="flex items-center justify-between border-b border-border bg-muted/40 px-3 py-2">
 										<h3 class="text-xs font-semibold uppercase tracking-wide text-foreground">{country.country}</h3>
@@ -1439,28 +1580,27 @@ function tomorrowLocalDate(): string {
 							{/each}
 						</div>
 					{/if}
-					{#if selectedLeagueBadges.length > 0}
-						<div class="flex flex-wrap gap-1.5 mt-2">
-							{#each selectedLeagueBadges as badge (badge.value)}
-								<Badge variant="info">{badge.label}</Badge>
-							{/each}
-						</div>
-					{/if}
 				{/if}
 			</div>
+				</div>
+			</details>
 		</div>
 	</Card>
 
 	<!-- Section 3: Historic and future ranges -->
-	<Card id="coverage" title="2. Set coverage" variant="data" class="scroll-mt-24">
-		<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+	<Card id="coverage" title="2. Set coverage" variant="data" class="order-3 scroll-mt-24">
+		<div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
 			<!-- Past History -->
-			<div class="space-y-3">
+			<div class={cn('space-y-4 border p-4', pastEnabled ? 'border-football-blue/40 bg-football-blue/5' : 'border-border bg-muted/10')}>
 				<div class="flex items-center justify-between">
-					<p class="text-sm font-medium text-foreground">Past History</p>
+					<div>
+						<p class="text-sm font-semibold text-foreground">Historical results</p>
+						<p class="mt-1 text-xs text-muted-foreground">Train and validate models with previous seasons.</p>
+					</div>
 					<label class="relative inline-flex items-center cursor-pointer">
 						<input
 							type="checkbox"
+							aria-label="Include historical results"
 							checked={pastEnabled}
 							onchange={() => (pastEnabled = !pastEnabled)}
 							class="sr-only peer"
@@ -1469,72 +1609,70 @@ function tomorrowLocalDate(): string {
 					</label>
 				</div>
 				{#if pastEnabled}
-					<div class="space-y-3" transition:slide={{ duration: 200 }}>
-						<div class="grid grid-cols-2 gap-2 md:grid-cols-4">
-							<Input label="Historic days" name="scrape-historic-days" type="number" min="0" bind:value={historicDays} />
-							<Input label="Historic weeks" name="scrape-historic-weeks" type="number" min="0" bind:value={historicWeeks} />
-							<Input label="Historic months" name="scrape-historic-months" type="number" min="0" bind:value={historicMonths} />
-							<Input label="Historic years" name="scrape-historic-years" type="number" min="0" bind:value={historicYears} />
+					<div class="space-y-4" transition:slide={{ duration: 160 }}>
+						<div>
+							<p class="mb-2 text-xs font-medium text-muted-foreground">Quick range</p>
+							<div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
+								{#each historyPresetOptions.slice(0, 4) as option (option.value)}
+									<button
+										type="button"
+										class={cn('border px-3 py-2 text-xs font-semibold transition-colors', historyPresetYears === option.value ? 'border-football-blue bg-football-blue text-background' : 'border-border bg-background hover:bg-muted')}
+										onclick={() => applyHistoryPreset(option.value)}
+									>{option.label}</button>
+								{/each}
+							</div>
 						</div>
-						<div class="flex flex-wrap items-center gap-2">
-							<Button variant="secondary" size="sm" onclick={applyHistoricInterval} disabled={historicIntervalDays <= 0}>
-								Apply interval ({historicIntervalDays} days)
-							</Button>
-							<span class="text-xs text-muted-foreground">Backend historic scraping executes seasons derived from this range.</span>
-						</div>
-						<div class="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto]">
+						<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
 							<div>
-								<label for="scrape-history-preset" class="text-xs text-muted-foreground mb-1 block">History preset</label>
-								<Select
-									name="scrape-history-preset"
-									bind:value={historyPresetYears}
-									options={historyPresetOptions}
-									onchange={(event: Event) => applyHistoryPreset((event.target as HTMLSelectElement).value)}
-								/>
+								<label for="scrape-past-from" class="mb-1 block text-xs text-muted-foreground">From</label>
+								<Input id="scrape-past-from" type="date" bind:value={pastFrom} />
 							</div>
-							<div class="flex items-end">
-								<Button variant="secondary" size="sm" onclick={() => applyHistoryPreset()}>
-									Fill dates
-								</Button>
+							<div>
+								<label for="scrape-past-to" class="mb-1 block text-xs text-muted-foreground">To</label>
+								<Input id="scrape-past-to" type="date" bind:value={pastTo} />
 							</div>
 						</div>
-						<div>
-							<label for="scrape-past-from" class="text-xs text-muted-foreground mb-1 block">From</label>
-							<Input id="scrape-past-from" type="date" bind:value={pastFrom} />
-						</div>
-						<div>
-							<label for="scrape-past-to" class="text-xs text-muted-foreground mb-1 block">To</label>
-							<Input id="scrape-past-to" type="date" bind:value={pastTo} />
-						</div>
-						<div>
-							<label for="scrape-history-pages" class="text-xs text-muted-foreground mb-1 block">Max pages per season</label>
+						<div class="max-w-48">
+							<label for="scrape-history-pages" class="mb-1 block text-xs text-muted-foreground">Pages per season</label>
 							<Input id="scrape-history-pages" type="number" min="1" max="50" bind:value={historicMaxPages} />
 						</div>
-						<div class="border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
-							<p>
-								History runs as normal <span class="font-mono text-foreground">scrape_odds / historic</span>
-								jobs, not through the ticket pipeline.
-							</p>
+						<div class="border border-border bg-background/60 p-3 text-xs text-muted-foreground">
 							{#if historicSeasonPreview.length > 0}
-								<p class="mt-2">
-									Seasons to scrape:
+								<p>
+									<span class="font-semibold text-foreground">{historicSeasonPreview.length} seasons:</span>
 									<span class="font-mono text-foreground">{historicSeasonPreview.join(', ')}</span>
 								</p>
 							{:else}
-								<p class="mt-2">Fill dates to preview the seasons that will be scraped.</p>
+								<p>Choose a range to preview the seasons.</p>
 							{/if}
 						</div>
+						<details class="group border-t border-border pt-3">
+							<summary class="cursor-pointer list-none text-xs font-semibold text-football-blue focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-football-blue">Custom interval <span class="group-open:hidden">+</span><span class="hidden group-open:inline">−</span></summary>
+							<div class="mt-3 space-y-3">
+								<div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
+									<Input label="Days" name="scrape-historic-days" type="number" min="0" bind:value={historicDays} />
+									<Input label="Weeks" name="scrape-historic-weeks" type="number" min="0" bind:value={historicWeeks} />
+									<Input label="Months" name="scrape-historic-months" type="number" min="0" bind:value={historicMonths} />
+									<Input label="Years" name="scrape-historic-years" type="number" min="0" bind:value={historicYears} />
+								</div>
+								<Button variant="secondary" size="sm" onclick={applyHistoricInterval} disabled={historicIntervalDays <= 0}>Apply custom interval</Button>
+							</div>
+						</details>
 					</div>
 				{/if}
 			</div>
 
 			<!-- Future Matches -->
-			<div class="space-y-3">
+			<div class={cn('space-y-4 border p-4', futureEnabled ? 'border-football-green/40 bg-football-green/5' : 'border-border bg-muted/10')}>
 				<div class="flex items-center justify-between">
-					<p class="text-sm font-medium text-foreground">Future Matches</p>
+					<div>
+						<p class="text-sm font-semibold text-foreground">Upcoming fixtures</p>
+						<p class="mt-1 text-xs text-muted-foreground">Collect the next matches and current odds.</p>
+					</div>
 					<label class="relative inline-flex items-center cursor-pointer">
 						<input
 							type="checkbox"
+							aria-label="Include upcoming fixtures"
 							checked={futureEnabled}
 							onchange={() => (futureEnabled = !futureEnabled)}
 							class="sr-only peer"
@@ -1543,16 +1681,27 @@ function tomorrowLocalDate(): string {
 					</label>
 				</div>
 				{#if futureEnabled}
-					<div class="space-y-3" transition:slide={{ duration: 200 }}>
-						<div class="grid grid-cols-2 gap-2 md:grid-cols-4">
-							<Input label="Future days" name="scrape-future-days" type="number" min="0" bind:value={futureDays} />
-							<Input label="Future weeks" name="scrape-future-weeks" type="number" min="0" bind:value={futureWeeks} />
-							<Input label="Future months" name="scrape-future-months" type="number" min="0" bind:value={futureMonths} />
-							<Input label="Future years" name="scrape-future-years" type="number" min="0" bind:value={futureYears} />
+					<div class="space-y-4" transition:slide={{ duration: 160 }}>
+						<div>
+							<p class="mb-2 text-xs font-medium text-muted-foreground">Quick horizon</p>
+							<div class="grid grid-cols-3 gap-2">
+								{#each [1, 7, 30] as days (days)}
+									<button type="button" class={cn('border px-3 py-2 text-xs font-semibold transition-colors', futureIntervalDays === days ? 'border-football-green bg-football-green text-background' : 'border-border bg-background hover:bg-muted')} onclick={() => setFuturePreset(days)}>{days === 1 ? 'Tomorrow' : `${days} days`}</button>
+								{/each}
+							</div>
 						</div>
-						<div class="border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
-							The backend supports an upcoming scrape horizon as <span class="font-mono text-foreground">future_days</span>. This form will send <span class="font-mono text-foreground">{futureIntervalDays}</span> days.
+						<div class="max-w-48">
+							<Input label="Upcoming days" name="scrape-future-days" type="number" min="0" bind:value={futureDays} />
 						</div>
+						<div class="border border-border bg-background/60 p-3 text-xs text-muted-foreground">The scrape will cover the next <span class="font-mono font-semibold text-foreground">{futureIntervalDays}</span> days.</div>
+						<details class="group border-t border-border pt-3">
+							<summary class="cursor-pointer list-none text-xs font-semibold text-football-blue focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-football-blue">Longer custom horizon <span class="group-open:hidden">+</span><span class="hidden group-open:inline">−</span></summary>
+							<div class="mt-3 grid grid-cols-3 gap-2">
+								<Input label="Weeks" name="scrape-future-weeks" type="number" min="0" bind:value={futureWeeks} />
+								<Input label="Months" name="scrape-future-months" type="number" min="0" bind:value={futureMonths} />
+								<Input label="Years" name="scrape-future-years" type="number" min="0" bind:value={futureYears} />
+							</div>
+						</details>
 					</div>
 				{/if}
 			</div>
@@ -1560,8 +1709,32 @@ function tomorrowLocalDate(): string {
 	</Card>
 
 	<!-- Section 4: Controls -->
-	<Card id="controls" title="3. Review and run" variant="data" class="scroll-mt-24">
+	<Card id="controls" title="3. Review and run" variant="data" class="order-4 scroll-mt-24">
 		<div class="space-y-4">
+			<div class="grid gap-3 sm:grid-cols-3">
+				<div class="border border-border bg-muted/20 p-3">
+					<p class="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Scope</p>
+					<p class="mt-1 text-sm font-semibold text-foreground">{selectedLeagues.length} league{selectedLeagues.length === 1 ? '' : 's'}</p>
+					<p class="mt-1 truncate text-xs text-muted-foreground">{selectedCountries.join(', ') || 'Choose a preset above'}</p>
+				</div>
+				<div class="border border-border bg-muted/20 p-3">
+					<p class="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Historical</p>
+					<p class="mt-1 text-sm font-semibold text-foreground">{pastEnabled ? `${historicSeasonPreview.length} seasons` : 'Off'}</p>
+					<p class="mt-1 text-xs text-muted-foreground">{pastEnabled ? `${pastFrom || '—'} → ${pastTo || '—'}` : 'No historic jobs'}</p>
+				</div>
+				<div class="border border-border bg-muted/20 p-3">
+					<p class="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Upcoming</p>
+					<p class="mt-1 text-sm font-semibold text-foreground">{futureEnabled ? `${futureIntervalDays} days` : 'Off'}</p>
+					<p class="mt-1 text-xs text-muted-foreground">Engine: {scraperEngine === 'auto' ? 'Automatic' : scraperEngine}</p>
+				</div>
+			</div>
+
+			<details class="group border border-border bg-muted/10">
+				<summary class="flex cursor-pointer list-none items-center justify-between gap-4 px-4 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-football-blue">
+					<span><span class="block text-sm font-semibold text-foreground">Advanced run settings</span><span class="mt-1 block text-xs text-muted-foreground">Scheduling, scraper engine and duplicate handling use safe defaults.</span></span>
+					<span class="text-xs font-medium text-football-blue group-open:hidden">Customize</span><span class="hidden text-xs font-medium text-football-blue group-open:inline">Hide</span>
+				</summary>
+				<div class="space-y-4 border-t border-border p-4">
 			<!-- Auto-scrape -->
 			<div class="flex items-center justify-between">
 				<div>
@@ -1571,6 +1744,7 @@ function tomorrowLocalDate(): string {
 				<label class="relative inline-flex items-center cursor-pointer">
 					<input
 						type="checkbox"
+						aria-label="Enable auto-scrape schedule"
 						checked={autoScrape}
 						onchange={() => (autoScrape = !autoScrape)}
 						class="sr-only peer"
@@ -1623,6 +1797,7 @@ function tomorrowLocalDate(): string {
 				<label class="relative inline-flex items-center cursor-pointer">
 					<input
 						type="checkbox"
+						aria-label="Skip existing matches"
 						checked={dedupSkip}
 						onchange={() => (dedupSkip = !dedupSkip)}
 						class="sr-only peer"
@@ -1638,8 +1813,8 @@ function tomorrowLocalDate(): string {
 					{/each}
 				</div>
 			{/if}
-
-			<Separator />
+				</div>
+			</details>
 
 			<div class="space-y-3">
 				{#if pastEnabled && selectedScrapeLeagueSlugs.length === 0}
@@ -1676,11 +1851,14 @@ function tomorrowLocalDate(): string {
 						{submitError}
 					</div>
 				{/if}
+				{#if !canStartScrape && !submitting}
+					<p class="text-center text-xs text-muted-foreground">Select at least one supported league and keep one coverage range enabled.</p>
+				{/if}
 				<Button
 					variant="glow"
 					size="lg"
 					fullWidth
-					disabled={submitting || !isLargeScopeAcknowledged || (selectedCountries.length === 0 && selectedLeagues.length === 0) || (pastEnabled && selectedScrapeLeagueSlugs.length === 0)}
+					disabled={!canStartScrape}
 					onclick={startScrape}
 				>
 					{#if submitting}
@@ -1754,7 +1932,7 @@ function tomorrowLocalDate(): string {
 	</Card>
 
 	<!-- Section 4: Job Table -->
-	<Card id="jobs" title="Recent scrape jobs" variant="data" class="scroll-mt-24">
+	<Card id="jobs" title="Recent scrape jobs" variant="data" class="order-5 scroll-mt-24">
 		{#if loadingJobs}
 			<div class="space-y-3">
 				<Skeleton class="h-12 w-full" />

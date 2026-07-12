@@ -7,6 +7,11 @@ test('Prepare is the canonical data-preparation workspace', async () => {
 	assert.match(source, /id="selection"/);
 	assert.match(source, /id="coverage"/);
 	assert.match(source, /id="controls"/);
+	assert.match(source, /Top 5 Europe/);
+	assert.match(source, /Browse the full catalog/);
+	assert.match(source, /Advanced run settings/);
+	assert.match(source, /filteredCountries\.slice\(0, 12\)/);
+	assert.match(source, /selectedCountries\.length > 0 \|\| leagueQuery\.trim\(\)/);
 	assert.doesNotMatch(source, /href="\/scrape/);
 });
 
