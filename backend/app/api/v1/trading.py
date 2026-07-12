@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +17,7 @@ from app.schemas.trading import (
     TradingAccountHealthResponse,
     TradingAccountResponse,
 )
+from app.services.trading_delivery import TradingDeliveryError, publish_trading_intent
 from app.services.trading_execution import (
     cancel_execution,
     create_execution_intent,
@@ -51,7 +54,7 @@ async def create_trading_account(
         provider="paper-local",
         mode="paper",
         currency=body.currency.upper(),
-        balance=body.initial_balance,
+        balance=Decimal(str(body.initial_balance)),
         enabled=True,
     )
     db.add(account)
@@ -101,7 +104,7 @@ async def create_execution(
     user: User = Depends(get_current_user),
 ):
     try:
-        intent, created = await create_execution_intent(
+        intent, _created = await create_execution_intent(
             db,
             user_id=user.id,
             trading_account_id=body.trading_account_id,
@@ -110,16 +113,17 @@ async def create_execution(
             side=body.side,
             order_type=body.order_type,
         )
-        if created:
-            settings = get_settings()
-            if settings.task_queue_backend == "inline":
+        settings = get_settings()
+        if settings.task_queue_backend == "inprocess":
+            if intent.status == "queued" and intent.delivery_status != "completed":
+                intent.transport = "inprocess"
+                intent.delivery_attempts += 1
                 await execute_paper_intent(db, intent.id)
-            else:
-                # Persist before the worker consumes the identifier.
-                await db.commit()
-                from app.tasks.trading import execute_trading_intent_task
-
-                await execute_trading_intent_task.kiq(intent.id)
+        elif intent.status == "queued" and intent.delivery_status in {"pending", "failed", "publishing"}:
+            # Persist before the worker consumes the identifier. Reusing the
+            # same idempotency key republishes durable failed deliveries.
+            await db.commit()
+            await publish_trading_intent(db, intent)
         loaded = await load_execution(db, intent.id, user.id)
         if loaded is None:
             raise RuntimeError("Execution could not be reloaded")
@@ -130,6 +134,8 @@ async def create_execution(
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except TradingDeliveryError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.get("/executions/{execution_id}", response_model=ExecutionResponse)

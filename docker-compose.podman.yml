@@ -54,6 +54,7 @@ services:
       BET_TRADING_LIVE_ENABLED: "false"
       BET_TRADING_BETFAIR_READ_ONLY_ENABLED: "false"
       BET_TRADING_TASKIQ_QUEUE_NAME: bet-trading
+      BET_FLUMINE_ROOT: /workspace/flumine
       BET_ODDSHARVESTER_PYTHON: /workspace/OddsHarvester/.venv/bin/python
       BET_PENALTYBLOG_PYTHON: /workspace/penaltyblog/.venv/bin/python
       BET_PENALTYBLOG_BRIDGE: /app/app/bridges/penaltyblog_bridge.py
@@ -67,6 +68,7 @@ services:
       - ./OddsHarvester:/workspace/OddsHarvester:ro
       - ./penaltyblog:/workspace/penaltyblog:ro
       - ./soccerdata:/workspace/soccerdata:ro
+      - ./flumine:/workspace/flumine:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -95,6 +97,7 @@ services:
       BET_TRADING_LIVE_ENABLED: "false"
       BET_TRADING_BETFAIR_READ_ONLY_ENABLED: "false"
       BET_TRADING_TASKIQ_QUEUE_NAME: bet-trading
+      BET_FLUMINE_ROOT: /workspace/flumine
       BET_ODDSHARVESTER_PYTHON: /workspace/OddsHarvester/.venv/bin/python
       BET_PENALTYBLOG_PYTHON: /workspace/penaltyblog/.venv/bin/python
       BET_PENALTYBLOG_BRIDGE: /app/app/bridges/penaltyblog_bridge.py
@@ -106,6 +109,7 @@ services:
       - ./OddsHarvester:/workspace/OddsHarvester:ro
       - ./penaltyblog:/workspace/penaltyblog:ro
       - ./soccerdata:/workspace/soccerdata:ro
+      - ./flumine:/workspace/flumine:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -131,11 +135,14 @@ services:
       BET_TRADING_LIVE_ENABLED: "false"
       BET_TRADING_BETFAIR_READ_ONLY_ENABLED: "false"
       BET_TRADING_TASKIQ_QUEUE_NAME: bet-trading
+      BET_FLUMINE_ROOT: /workspace/flumine
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    volumes:
+      - ./flumine:/workspace/flumine:ro
     command: taskiq worker app.tasks.trading_broker:trading_broker app.tasks.trading
     restart: unless-stopped
     networks:

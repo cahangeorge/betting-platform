@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.adapters.betfair_readonly import BetfairReadOnlyAdapter
+from app.adapters.flumine_paper import FluminePaperAdapter
 from app.config import Settings
 from app.models.trading import ExecutionIntent, ExecutionOrder, TradingAccount
 from app.services.trading_execution import create_execution_intent, execute_paper_intent
@@ -89,7 +90,7 @@ async def test_paper_execution_uses_persisted_odds_and_has_no_external_order():
 
     orders = [value for value in db.added if isinstance(value, ExecutionOrder)]
     assert intent.status == "filled"
-    assert orders[0].provider == "paper-local"
+    assert orders[0].provider == "flumine-paper-local"
     assert orders[0].external_order_id is None
     assert orders[0].average_price == 2.25
     assert account.balance == 90.0
@@ -167,3 +168,14 @@ async def test_betfair_boundary_is_read_only_and_not_configured():
 
     assert health.status == "not_configured"
     assert not hasattr(adapter, "place_order")
+
+
+def test_local_flumine_limit_order_contract_is_used_without_execution_client():
+    instruction = FluminePaperAdapter(Settings()).build_back_limit(price=2.25, size=10)
+
+    assert instruction.framework == "flumine"
+    assert instruction.order_type == "Limit"
+    assert instruction.side == "BACK"
+    assert instruction.price == 2.25
+    assert instruction.size == 10
+    assert not hasattr(FluminePaperAdapter, "place_order")

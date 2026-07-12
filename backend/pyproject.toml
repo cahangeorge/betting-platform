@@ -18,6 +18,7 @@ dependencies = [
     "python-dateutil>=2.9.0",
     "taskiq>=0.12.0",
     "taskiq-redis>=1.0.0",
+    "flumine>=3.0.0,<4",
 ]
 
 [project.optional-dependencies]

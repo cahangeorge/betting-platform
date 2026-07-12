@@ -1,9 +1,11 @@
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.adapters.flumine_paper import FluminePaperAdapter
 from app.config import Settings, get_settings
 from app.models.match import Match, OddsEntry
 from app.models.ticket import Ticket, TicketLeg
@@ -107,7 +109,8 @@ async def create_execution_intent(
         raise ValueError("Only open tickets can be executed")
     if ticket.stake <= 0:
         raise ValueError("Ticket stake must be positive")
-    if account.balance < ticket.stake:
+    stake = Decimal(str(ticket.stake)).quantize(Decimal("0.01"))
+    if account.balance < stake:
         raise ValueError("Insufficient paper trading balance")
 
     leg = ticket.legs[0]
@@ -135,9 +138,10 @@ async def create_execution_intent(
     odds_entry = odds_result.scalar_one_or_none()
     if odds_entry is None:
         raise ValueError("No persisted 1x2 odds are available for this match")
-    price = _persisted_price(odds_entry, selection)
-    if price is None or price <= 1:
+    persisted_price = _persisted_price(odds_entry, selection)
+    if persisted_price is None or persisted_price <= 1:
         raise ValueError(f"No persisted {selection} price is available for this match")
+    price = Decimal(str(persisted_price)).quantize(Decimal("0.0001"))
 
     intent = ExecutionIntent(
         user_id=user_id,
@@ -150,9 +154,11 @@ async def create_execution_intent(
         selection=selection,
         side="BACK",
         order_type="LIMIT",
-        stake=ticket.stake,
+        stake=stake,
         limit_price=price,
         status="queued",
+        transport=settings.task_queue_backend,
+        delivery_status="pending",
     )
     db.add(intent)
     await db.flush()
@@ -162,7 +168,7 @@ async def create_execution_intent(
             "execution.queued",
             "queued",
             message="Paper execution accepted for deterministic local processing.",
-            payload={"odds_entry_id": odds_entry.id, "persisted_price": price},
+            payload={"odds_entry_id": odds_entry.id, "persisted_price": str(price)},
         )
     )
     await db.flush()
@@ -184,6 +190,17 @@ async def execute_paper_intent(db: AsyncSession, execution_id: int) -> Execution
     if intent.mode != "paper":
         raise PermissionError("Live execution is not implemented")
 
+    try:
+        instruction = FluminePaperAdapter().build_back_limit(price=float(intent.limit_price), size=float(intent.stake))
+    except (RuntimeError, ValueError) as exc:
+        intent.status = "failed"
+        intent.delivery_status = "completed"
+        intent.error = f"Flumine paper instruction rejected: {exc}"
+        intent.completed_at = datetime.now(timezone.utc)
+        db.add(_event(intent, "execution.failed", "failed", from_status="queued", message=intent.error))
+        await db.flush()
+        return intent
+
     account = await db.get(TradingAccount, intent.trading_account_id, with_for_update=True)
     if account is None or not account.enabled or account.mode != "paper" or account.provider != "paper-local":
         intent.status = "failed"
@@ -202,10 +219,10 @@ async def execute_paper_intent(db: AsyncSession, execution_id: int) -> Execution
 
     intent.status = "accepted"
     db.add(_event(intent, "execution.accepted", "accepted", from_status="queued"))
-    account.balance = round(account.balance - intent.stake, 2)
+    account.balance = (account.balance - intent.stake).quantize(Decimal("0.01"))
     order = ExecutionOrder(
         intent=intent,
-        provider="paper-local",
+        provider="flumine-paper-local",
         external_order_id=None,
         status="filled",
         requested_price=intent.limit_price,
@@ -215,6 +232,8 @@ async def execute_paper_intent(db: AsyncSession, execution_id: int) -> Execution
     )
     db.add(order)
     intent.status = "filled"
+    intent.delivery_status = "completed"
+    intent.last_delivery_error = None
     intent.completed_at = datetime.now(timezone.utc)
     db.add(
         _event(
@@ -222,7 +241,15 @@ async def execute_paper_intent(db: AsyncSession, execution_id: int) -> Execution
             "execution.filled",
             "filled",
             from_status="accepted",
-            message="Paper order filled locally at the persisted odds price; no external order was sent.",
+            message=(
+                "Flumine BACK LIMIT contract filled locally at the persisted odds price; "
+                "no external order was sent."
+            ),
+            payload={
+                "framework": instruction.framework,
+                "order_type": instruction.order_type,
+                "persistence_type": instruction.persistence_type,
+            },
         )
     )
     await db.flush()

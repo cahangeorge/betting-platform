@@ -49,6 +49,7 @@ services:
       BET_TRADING_LIVE_ENABLED: "false"
       BET_TRADING_BETFAIR_READ_ONLY_ENABLED: "false"
       BET_TRADING_TASKIQ_QUEUE_NAME: bet-trading
+      BET_FLUMINE_ROOT: /workspace/flumine
       BET_ODDSHARVESTER_PYTHON: /workspace/OddsHarvester/.venv/bin/python
       BET_PENALTYBLOG_PYTHON: /workspace/penaltyblog/.venv/bin/python
       BET_PENALTYBLOG_BRIDGE: /app/app/bridges/penaltyblog_bridge.py
@@ -69,6 +70,7 @@ services:
       - ./OddsHarvester:/workspace/OddsHarvester:ro
       - ./penaltyblog:/workspace/penaltyblog:ro
       - ./soccerdata:/workspace/soccerdata:ro
+      - ./flumine:/workspace/flumine:ro
       - shared_data:/shared_data
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     restart: unless-stopped
@@ -90,6 +92,7 @@ services:
       BET_TRADING_LIVE_ENABLED: "false"
       BET_TRADING_BETFAIR_READ_ONLY_ENABLED: "false"
       BET_TRADING_TASKIQ_QUEUE_NAME: bet-trading
+      BET_FLUMINE_ROOT: /workspace/flumine
       BET_ODDSHARVESTER_PYTHON: /workspace/OddsHarvester/.venv/bin/python
       BET_PENALTYBLOG_PYTHON: /workspace/penaltyblog/.venv/bin/python
       BET_PENALTYBLOG_BRIDGE: /app/app/bridges/penaltyblog_bridge.py
@@ -108,6 +111,7 @@ services:
       - ./OddsHarvester:/workspace/OddsHarvester:ro
       - ./penaltyblog:/workspace/penaltyblog:ro
       - ./soccerdata:/workspace/soccerdata:ro
+      - ./flumine:/workspace/flumine:ro
       - shared_data:/shared_data
     command: taskiq worker app.tasks.broker:broker app.tasks.jobs
     restart: unless-stopped
@@ -127,6 +131,7 @@ services:
       BET_TRADING_LIVE_ENABLED: "false"
       BET_TRADING_BETFAIR_READ_ONLY_ENABLED: "false"
       BET_TRADING_TASKIQ_QUEUE_NAME: bet-trading
+      BET_FLUMINE_ROOT: /workspace/flumine
       PYTHONPATH: /app
     depends_on:
       postgres:
@@ -135,6 +140,7 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app
+      - ./flumine:/workspace/flumine:ro
     command: taskiq worker app.tasks.trading_broker:trading_broker app.tasks.trading
     restart: unless-stopped
 

@@ -65,6 +65,7 @@ class Settings(BaseSettings):
     trading_live_enabled: bool = False
     trading_betfair_read_only_enabled: bool = False
     trading_taskiq_queue_name: str = "bet-trading"
+    flumine_root: str = ""
 
     penaltyblog_python: str = ""
     penaltyblog_bridge: str = ""
@@ -129,6 +130,10 @@ class Settings(BaseSettings):
         if self.soccerdata_bridge:
             return self.soccerdata_bridge
         return str(self.repo_root / "backend" / "app" / "bridges" / "soccerdata_bridge.py")
+
+    @property
+    def resolved_flumine_root(self) -> str:
+        return self.flumine_root or str(self.repo_root / "flumine")
 
     @property
     def resolved_soccerdata_root(self) -> str:

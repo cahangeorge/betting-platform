@@ -1,7 +1,8 @@
 from datetime import datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models import Base
@@ -21,7 +22,7 @@ class TradingAccount(Base):
     provider: Mapped[str] = mapped_column(String(50), default="paper-local", nullable=False)
     mode: Mapped[str] = mapped_column(String(20), default="paper", nullable=False)
     currency: Mapped[str] = mapped_column(String(3), default="EUR", nullable=False)
-    balance: Mapped[float] = mapped_column(Float, default=1000.0, nullable=False)
+    balance: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("1000.00"), nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
@@ -53,9 +54,14 @@ class ExecutionIntent(Base):
     selection: Mapped[str] = mapped_column(String(50), nullable=False)
     side: Mapped[str] = mapped_column(String(10), default="BACK", nullable=False)
     order_type: Mapped[str] = mapped_column(String(20), default="LIMIT", nullable=False)
-    stake: Mapped[float] = mapped_column(Float, nullable=False)
-    limit_price: Mapped[float] = mapped_column(Float, nullable=False)
+    stake: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    limit_price: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
     status: Mapped[str] = mapped_column(String(30), default="queued", nullable=False, index=True)
+    transport: Mapped[str] = mapped_column(String(20), default="inprocess", nullable=False)
+    delivery_status: Mapped[str] = mapped_column(String(30), default="pending", nullable=False, index=True)
+    transport_task_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    delivery_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_delivery_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
@@ -84,10 +90,10 @@ class ExecutionOrder(Base):
     provider: Mapped[str] = mapped_column(String(50), default="paper-local", nullable=False)
     external_order_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="filled", nullable=False)
-    requested_price: Mapped[float] = mapped_column(Float, nullable=False)
-    average_price: Mapped[float | None] = mapped_column(Float, nullable=True)
-    requested_size: Mapped[float] = mapped_column(Float, nullable=False)
-    matched_size: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    requested_price: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
+    average_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)
+    requested_size: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    matched_size: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False

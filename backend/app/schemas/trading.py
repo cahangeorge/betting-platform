@@ -85,6 +85,11 @@ class ExecutionResponse(BaseModel):
     stake: float
     limit_price: float
     status: str
+    transport: str
+    delivery_status: str
+    transport_task_id: str | None = None
+    delivery_attempts: int
+    last_delivery_error: str | None = None
     error: str | None = None
     created_at: datetime
     updated_at: datetime
