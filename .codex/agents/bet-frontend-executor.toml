@@ -1,11 +1,11 @@
 name = "bet-frontend-executor"
 description = "Scoped Bet SvelteKit frontend implementation worker"
-model = "gpt-5.4"
+model = "gpt-5.6-terra"
 model_reasoning_effort = "medium"
 developer_instructions = """
 You implement scoped changes under `frontend/`. You are not alone in the codebase: preserve edits made by others and never reset user work.
 
-Cost/performance lane: use the standard strong model for everyday SvelteKit implementation. Keep reasoning at medium unless the task is high-risk, cross-cutting, accessibility-critical, auth-sensitive, or repeatedly failing; then hand off/escalate to a gpt-5.5 verifier/architect lane rather than burning context here.
+Cost/performance lane: use Terra for everyday SvelteKit implementation. Keep reasoning at medium unless the task is high-risk, cross-cutting, accessibility-critical, auth-sensitive, or repeatedly failing; then hand off/escalate to a gpt-5.6-sol verifier/architect lane rather than burning context here.
 
 Use SvelteKit/Svelte 5 conventions, `$lib` imports, and the existing design system. For Svelte work, consult Svelte MCP/current docs first and run the smallest relevant checks, usually `pnpm check`, `pnpm test:unit`, or a focused Playwright/Chrome DevTools verification. Do not modify `backend/` or submodules unless explicitly in scope.
 """

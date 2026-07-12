@@ -1,3 +1,6 @@
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { defineConfig } from '@playwright/test';
 
 const mode = process.env.E2E_MODE === 'live' ? 'live' : 'hybrid';
@@ -8,11 +11,23 @@ const backendHost = backendTarget.hostname;
 const backendPort = backendTarget.port || (backendTarget.protocol === 'https:' ? '443' : '80');
 const backendHealthURL = new URL('/api/v1/health', backendURL).toString();
 const backendCwd = process.env.E2E_BACKEND_CWD ?? '../backend';
-const backendAlembicCommand = process.env.E2E_BACKEND_ALEMBIC_COMMAND ?? '.venv/bin/alembic';
-const backendPythonCommand = process.env.E2E_BACKEND_PYTHON_COMMAND ?? '.venv/bin/python';
+const backendCwdAbsolute = resolve(process.cwd(), backendCwd);
+const defaultBackendPythonCommand = existsSync(resolve(backendCwdAbsolute, '.venv/bin/python'))
+	? '.venv/bin/python'
+	: 'python';
+const backendPythonCommand = process.env.E2E_BACKEND_PYTHON_COMMAND ?? defaultBackendPythonCommand;
+const backendAlembicCommand =
+	process.env.E2E_BACKEND_ALEMBIC_COMMAND ??
+	(existsSync(resolve(backendCwdAbsolute, '.venv/bin/alembic'))
+		? '.venv/bin/alembic'
+		: `${backendPythonCommand} -m alembic`);
+const backendDatabaseURL = process.env.BET_DATABASE_URL ?? '';
+const runBackendMigrations =
+	process.env.E2E_BACKEND_RUN_MIGRATIONS === '1' ||
+	(backendDatabaseURL.length > 0 && !backendDatabaseURL.startsWith('sqlite+'));
 const backendCommand =
 	process.env.E2E_BACKEND_COMMAND ??
-	`${backendAlembicCommand} upgrade head && ${backendPythonCommand} -m uvicorn app.main:app --host ${backendHost} --port ${backendPort}`;
+	`${runBackendMigrations ? `${backendAlembicCommand} upgrade head && ` : ''}${backendPythonCommand} -m uvicorn app.main:app --host ${backendHost} --port ${backendPort}`;
 const isLiveMode = mode === 'live';
 const skipWebServer = process.env.E2E_SKIP_WEBSERVER === '1';
 const frontendTarget = new URL(frontendURL);

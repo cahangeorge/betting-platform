@@ -1,0 +1,33 @@
+name: Frontend
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Install frontend
+        run: pnpm install --frozen-lockfile
+      - name: Svelte check
+        run: pnpm check
+      - name: E2E TypeScript check
+        run: pnpm run check:e2e
+      - name: Unit tests
+        run: pnpm test:unit
+      - name: Build
+        run: pnpm build

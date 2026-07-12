@@ -17,6 +17,7 @@
 	import DialogHeader from '$lib/components/ui/dialog/dialog-header.svelte';
 	import DialogTitle from '$lib/components/ui/dialog/dialog-title.svelte';
 	import DialogFooter from '$lib/components/ui/dialog/dialog-footer.svelte';
+	import ScheduledJobRunTable from '$lib/components/jobs/ScheduledJobRunTable.svelte';
 	import { jobsApi } from '$lib/api/jobs';
 	import { predictionsApi } from '$lib/api/predictions';
 	import { ApiClientError } from '$lib/api/client';
@@ -1162,6 +1163,8 @@
 				</div>
 			{/if}
 		</div>
+
+		<ScheduledJobRunTable jobs={automaticPredictionJobs} title="Recent prediction automation runs" />
 
 		<!-- Progress bar -->
 		{#if running}

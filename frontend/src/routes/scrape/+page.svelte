@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { SvelteDate } from 'svelte/reactivity';
 	import { fade, slide } from 'svelte/transition';
 	import Button from '$lib/components/ui/Button.svelte';
 	import Card from '$lib/components/ui/Card.svelte';
@@ -8,6 +9,7 @@
 	import Select from '$lib/components/ui/Select.svelte';
 	import Skeleton from '$lib/components/ui/skeleton/skeleton.svelte';
 	import Separator from '$lib/components/ui/separator/separator.svelte';
+	import ScheduledJobRunTable from '$lib/components/jobs/ScheduledJobRunTable.svelte';
 	import { jobsApi } from '$lib/api/jobs';
 	import { ApiClientError } from '$lib/api/client';
 	import { apiBaseUrl } from '$lib/api/base';
@@ -19,7 +21,14 @@
 		buildHistoricSeasons,
 		buildHistoryDateRange,
 		buildScrapeLeagueSlugs,
-		isLeagueScrapeSelectable
+		catalogAvailabilityLabel,
+		filterScrapeLeagueGroups,
+		formatCatalogRefreshTime,
+		getLeagueCatalogAvailability,
+		getLargeScrapeScopeWarning,
+		isLeagueScrapeSelectable,
+		parseScrapeCatalog,
+		type CatalogAvailability
 	} from './catalog.helpers';
 
 	const BASE_URL = apiBaseUrl();
@@ -109,8 +118,8 @@
 		return `${year}-${month}-${day}`;
 	}
 
-	function tomorrowLocalDate(): string {
-		const date = new Date();
+function tomorrowLocalDate(): string {
+		const date = new SvelteDate();
 		date.setDate(date.getDate() + 1);
 		return localDateString(date);
 	}
@@ -120,7 +129,13 @@
 	let allLeagues = $state<LeagueInfo[]>([]);
 	let selectedCountries = $state<string[]>([]);
 	let selectedLeagues = $state<string[]>([]);
+	let countryQuery = $state('');
+	let leagueQuery = $state('');
+	let acknowledgedLargeScopeKey = $state<string | null>(null);
 	let loadingCatalog = $state(true);
+	let catalogSource = $state<string | null>(null);
+	let catalogStatus = $state<CatalogAvailability>(null);
+	let catalogLastRefreshedAt = $state<string | null>(null);
 
 	// Past History
 	let pastEnabled = $state(true);
@@ -187,13 +202,17 @@
 	let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 	// --- Derived ---
-	const filteredLeagues = $derived(
-		selectedCountries.length === 0
-			? allLeagues
-			: countries
-					.filter((c) => selectedCountries.includes(c.country))
-					.flatMap((c) => c.leagues)
+	const filteredLeagueGroups = $derived(
+		filterScrapeLeagueGroups(countries, selectedCountries, leagueQuery)
 	);
+	const filteredLeagues = $derived(filteredLeagueGroups.flatMap((country) => country.leagues));
+	const filteredCountries = $derived(
+		countries.filter((country) =>
+			country.country.toLocaleLowerCase().includes(countryQuery.trim().toLocaleLowerCase())
+		)
+	);
+	const catalogStatusLabel = $derived(catalogAvailabilityLabel(catalogStatus));
+	const catalogRefreshLabel = $derived(formatCatalogRefreshTime(catalogLastRefreshedAt));
 
 	const selectedCountryBadges = $derived(
 		selectedCountries.map((c) => ({
@@ -208,6 +227,8 @@
 			return { value: id, label: league?.name ?? id };
 		})
 	);
+
+	const selectedScrapeLeagueSlugs = $derived(buildScrapeLeagueSlugs(allLeagues, selectedLeagues));
 
 	const latestPipelineJob = $derived.by(() => {
 		const pipelineJobs = jobs.filter((job) => job.job_type === 'world_cup_pipeline');
@@ -252,6 +273,14 @@
 	const historyPresetOptions = HISTORY_PRESET_OPTIONS;
 
 	const historicSeasonPreview = $derived(buildHistoricSeasons(pastFrom, pastTo, buildScrapeLeagueSlugs(allLeagues, selectedLeagues)));
+	const largeScopeWarning = $derived(
+		pastEnabled
+			? getLargeScrapeScopeWarning(selectedScrapeLeagueSlugs.length, historicSeasonPreview.length)
+			: null
+	);
+	const isLargeScopeAcknowledged = $derived(
+		largeScopeWarning === null || acknowledgedLargeScopeKey === largeScopeWarning.key
+	);
 
 	const historicIntervalDays = $derived(
 		intervalToDays(historicDays, historicWeeks, historicMonths, historicYears)
@@ -286,8 +315,12 @@
 		try {
 			const res = await fetch(`${BASE_URL}/api/v1/catalog/countries`, { credentials: 'include' });
 			if (res.ok) {
-				countries = await res.json();
+				const catalog = parseScrapeCatalog(await res.json());
+				countries = catalog.countries;
 				allLeagues = countries.flatMap((c) => c.leagues);
+				catalogSource = catalog.source;
+				catalogStatus = catalog.status;
+				catalogLastRefreshedAt = catalog.lastRefreshedAt;
 			}
 		} catch {
 			// silently handle — catalog may not be available yet
@@ -461,8 +494,8 @@
 	function applyHistoricInterval() {
 		const days = historicIntervalDays;
 		if (days <= 0) return;
-		const end = new Date();
-		const start = new Date();
+		const end = new SvelteDate();
+		const start = new SvelteDate();
 		start.setDate(start.getDate() - days);
 		pastEnabled = true;
 		pastFrom = localDateString(start);
@@ -523,9 +556,15 @@
 	}
 
 	async function startScrape() {
-		submitting = true;
 		submitError = '';
 		submitSuccess = '';
+
+		if (largeScopeWarning && !isLargeScopeAcknowledged) {
+			submitError = 'Acknowledge the large historical scrape scope before starting.';
+			return;
+		}
+
+		submitting = true;
 
 		const scrapeLeagueSlugs = buildScrapeLeagueSlugs(allLeagues, selectedLeagues);
 		if (selectedLeagues.length > 0 && scrapeLeagueSlugs.length !== selectedLeagues.length) {
@@ -698,8 +737,9 @@
 		expandedJobId = expandedJobId === id ? null : id;
 	}
 
-	function toggleLogsPanel() {
-		logsPanelOpen = !logsPanelOpen;
+
+	function handleLogsDetailsToggle(event: Event) {
+		logsPanelOpen = (event.currentTarget as HTMLDetailsElement).open;
 		if (logsPanelOpen && jobLogs.length === 0) {
 			void fetchJobLogs(selectedLogJobId ?? jobs[0]?.id ?? null);
 		}
@@ -771,13 +811,31 @@
 	});
 </script>
 
-<div class="mx-auto max-w-4xl space-y-8 overflow-hidden" transition:fade={{ duration: 200 }}>
+<svelte:head>
+	<title>Prepare match data · Betfront</title>
+</svelte:head>
+
+<div class="mx-auto min-w-0 max-w-4xl space-y-6 overflow-hidden pb-8" transition:fade={{ duration: 200 }}>
+	<header class="space-y-4">
 		<div>
-			<h1 class="text-2xl font-extrabold font-sport text-foreground">SCRAPING</h1>
-			<p class="mt-1 text-muted-foreground">Configure and run data scraping jobs for odds and match data</p>
+			<p class="text-xs font-semibold uppercase tracking-[0.16em] text-football-blue">Data preparation</p>
+			<h1 class="mt-1 text-2xl font-extrabold font-sport text-foreground sm:text-3xl">Prepare match data</h1>
+			<p class="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">Choose the competitions, set data coverage, then queue a traceable scrape. Automation, specialist pipelines, and logs stay out of the primary path.</p>
 		</div>
 
-		<Card title="Automatic scraping actions" variant="prediction">
+		<nav aria-label="Scrape preparation steps" class="grid grid-cols-3 overflow-hidden rounded-md border border-border bg-muted/30 text-xs sm:flex sm:w-fit">
+			<a href="#selection" class="min-w-0 border-r border-border px-3 py-2 text-center font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-football-blue">1. Scope</a>
+			<a href="#coverage" class="min-w-0 border-r border-border px-3 py-2 text-center font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-football-blue">2. Coverage</a>
+			<a href="#controls" class="min-w-0 px-3 py-2 text-center font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-football-blue">3. Review &amp; run</a>
+		</nav>
+	</header>
+
+		<Card variant="prediction">
+			<details id="automation" class="group">
+				<summary class="flex cursor-pointer list-none items-center justify-between gap-4 rounded px-1 py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-football-blue">
+					<span><span class="block text-lg font-semibold text-foreground">Automation &amp; specialist workflows</span><span class="mt-1 block text-sm text-muted-foreground">Optional schedules, scrape-to-predict orchestration, and the World Cup pipeline.</span></span>
+					<span class="shrink-0 text-xs font-medium text-football-blue group-open:hidden">Show</span><span class="hidden shrink-0 text-xs font-medium text-football-blue group-open:inline">Hide</span>
+				</summary>
 			<div class="space-y-5">
 				<div class="space-y-3 border border-border bg-muted/20 p-3">
 					<div class="flex flex-wrap items-center justify-between gap-2">
@@ -795,14 +853,6 @@
 								disabled={!interactive || loadingScheduledJobs}
 							>
 								Refresh
-							</Button>
-							<Button
-								variant="glow"
-								size="sm"
-								onclick={saveAutomaticScrapeAction}
-								disabled={!interactive || savingScheduledJob}
-							>
-								{savingScheduledJob ? 'Saving...' : 'Save autoscrape'}
 							</Button>
 						</div>
 					</div>
@@ -833,6 +883,8 @@
 						</div>
 					{/if}
 				</div>
+
+				<ScheduledJobRunTable jobs={[...automaticScrapeJobs, ...orchestrationJobs]} title="Recent scrape automation runs" />
 
 				<div class="space-y-3 border border-border bg-muted/20 p-3">
 					<div>
@@ -924,10 +976,12 @@
 					{/if}
 				</div>
 
-				<div>
-					<p class="text-sm font-semibold text-foreground">World Cup ticket pipeline</p>
-					<p class="text-xs text-muted-foreground">Runs the existing backend pipeline. Historical league scraping below stays separate and editable.</p>
-				</div>
+				<details id="world-cup" class="group rounded border border-border bg-muted/10 p-3">
+					<summary class="flex cursor-pointer list-none items-center justify-between gap-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-football-blue">
+						<span><span class="block text-sm font-semibold text-foreground">World Cup ticket pipeline</span><span class="mt-1 block text-xs text-muted-foreground">Specialist pipeline: scrape, predict, and create tickets for one target date.</span></span>
+						<span class="shrink-0 text-xs font-medium text-football-blue group-open:hidden">Configure</span><span class="hidden shrink-0 text-xs font-medium text-football-blue group-open:inline">Hide</span>
+					</summary>
+					<div class="mt-4 space-y-5">
 				<div class="grid grid-cols-2 md:grid-cols-4 gap-3">
 					<div class="border border-border bg-muted/30 p-3">
 						<p class="text-[10px] uppercase tracking-wide text-muted-foreground">Target date</p>
@@ -1224,15 +1278,45 @@
 						{/if}
 					</div>
 				{/if}
+					</div>
+				</details>
 			</div>
+			</details>
 		</Card>
 
 		<!-- Section 2: Data selection -->
-	<Card title="Selectie de date" variant="data">
+	<Card id="selection" title="1. Choose competitions" variant="data" class="scroll-mt-24">
 		<div class="space-y-6">
 			<!-- Countries -->
 			<div>
-				<p class="text-sm font-medium text-foreground mb-3">Countries</p>
+				<div class="mb-3 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+					<div>
+						<p class="text-sm font-medium text-foreground">Countries</p>
+						<p class="mt-1 text-xs text-muted-foreground">
+							{countries.length} countries from the {catalogSource ?? 'OddsHarvester football'} catalog.
+						</p>
+						{#if catalogStatusLabel || catalogRefreshLabel}
+							<div class="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground" aria-live="polite">
+								{#if catalogStatusLabel}
+									<Badge variant={catalogStatus === 'validated' ? 'success' : catalogStatus === 'discovered' ? 'warning' : 'danger'}>
+										{catalogStatusLabel}
+									</Badge>
+								{/if}
+								{#if catalogRefreshLabel}
+									<span>Last refreshed {catalogRefreshLabel}</span>
+								{/if}
+							</div>
+						{/if}
+					</div>
+					<Input
+						id="country-catalog-search"
+						label="Find a country"
+						bind:value={countryQuery}
+						placeholder="Search countries"
+						autocomplete="off"
+						class="w-full sm:max-w-xs"
+					/>
+				</div>
 				{#if loadingCatalog}
 					<div class="space-y-2">
 						<Skeleton class="h-6 w-full" />
@@ -1240,9 +1324,11 @@
 					</div>
 				{:else if countries.length === 0}
 					<p class="text-sm text-muted-foreground">No countries available</p>
+				{:else if filteredCountries.length === 0}
+					<p class="text-sm text-muted-foreground" role="status">No countries match your search.</p>
 				{:else}
-					<div class="grid grid-cols-2 md:grid-cols-3 gap-2">
-						{#each countries as country (country.country)}
+					<div class="grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-3">
+						{#each filteredCountries as country (country.country)}
 							<label class={cn(
 								'flex items-center space-x-2 p-2 border cursor-pointer transition-colors duration-200',
 								selectedCountries.includes(country.country)
@@ -1274,22 +1360,25 @@
 
 			<!-- Leagues -->
 			<div>
-				<div class="flex items-center justify-between mb-3">
-					<p class="text-sm font-medium text-foreground">
-						Leagues
-						{#if selectedCountries.length > 0}
-							<span class="text-muted-foreground font-normal">(filtered)</span>
-						{/if}
-					</p>
+				<div class="mb-3 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+					<div>
+						<p class="text-sm font-medium text-foreground">OddsHarvester leagues</p>
+						<p class="mt-1 text-xs text-muted-foreground">
+							{allLeagues.length} available from the catalog
+							{#if selectedCountries.length > 0}
+								· {selectedCountries.length} country filter{selectedCountries.length === 1 ? '' : 's'} active
+							{/if}
+						</p>
+					</div>
 					{#if filteredLeagues.length > 0}
 						<button
 							type="button"
 							onclick={toggleAllLeagues}
-							class="text-xs text-football-blue hover:text-football-green transition-colors"
+							class="self-start text-xs text-football-blue transition-colors hover:text-football-green sm:self-auto"
 						>
 							{filteredLeagues.filter(isLeagueScrapeSelectable).every((l) => selectedLeagues.includes(l.id))
-								? 'Deselect supported'
-								: 'Select supported'}
+								? 'Deselect visible supported'
+								: 'Select visible supported'}
 						</button>
 					{/if}
 				</div>
@@ -1298,34 +1387,58 @@
 						<Skeleton class="h-6 w-full" />
 						<Skeleton class="h-6 w-2/3" />
 					</div>
-				{:else if filteredLeagues.length === 0}
-					<p class="text-sm text-muted-foreground">No leagues available. Select a country above.</p>
 				{:else}
-					<div class="max-h-48 overflow-y-auto scroll-thin space-y-1 border border-border p-2">
-						{#each filteredLeagues as league (league.id)}
-							{@const selectable = isLeagueScrapeSelectable(league)}
-							<label class={cn(
-								'flex items-center space-x-2 p-2 transition-colors duration-200',
-								selectable ? 'cursor-pointer' : 'cursor-not-allowed opacity-60',
-								selectedLeagues.includes(league.id)
-									? 'bg-football-green/5'
-									: 'hover:bg-muted'
-							)}>
-								<input
-									type="checkbox"
-									checked={selectedLeagues.includes(league.id)}
-									disabled={!selectable}
-									onchange={() => toggleLeague(league.id)}
-									class="w-4 h-4 accent-[hsl(var(--football-green))]"
-								/>
-								<span class="text-sm text-foreground">{league.name}</span>
-								{#if !selectable}
-									<span class="text-[10px] uppercase tracking-wide text-muted-foreground">Unavailable</span>
-								{/if}
-								<span class="text-xs text-muted-foreground ml-auto font-mono">{league.matches_count}</span>
-							</label>
-						{/each}
-					</div>
+					<Input
+						id="league-catalog-search"
+						label="Find a league"
+						bind:value={leagueQuery}
+						placeholder="Search by country, league, or OddsHarvester slug"
+						autocomplete="off"
+					/>
+					{#if filteredLeagueGroups.length === 0}
+						<p class="mt-3 text-sm text-muted-foreground" role="status">
+							No catalog leagues match the active country filter or search.
+						</p>
+					{:else}
+						<div class="mt-3 space-y-4" aria-label="OddsHarvester league catalog">
+							{#each filteredLeagueGroups as country (country.country)}
+								<section class="overflow-hidden border border-border">
+									<div class="flex items-center justify-between border-b border-border bg-muted/40 px-3 py-2">
+										<h3 class="text-xs font-semibold uppercase tracking-wide text-foreground">{country.country}</h3>
+										<span class="font-mono text-xs text-muted-foreground">{country.leagues.length}</span>
+									</div>
+									<div class="grid grid-cols-1 gap-px bg-border sm:grid-cols-2 xl:grid-cols-3">
+										{#each country.leagues as league (league.id)}
+											{@const selectable = isLeagueScrapeSelectable(league)}
+											{@const availability = getLeagueCatalogAvailability(league)}
+											<label class={cn(
+												'flex min-h-12 items-center gap-2 bg-background p-3 transition-colors duration-200',
+												selectable ? 'cursor-pointer hover:bg-muted' : 'cursor-not-allowed opacity-60',
+												selectedLeagues.includes(league.id) ? 'bg-football-green/5' : ''
+											)}>
+												<input
+													type="checkbox"
+													checked={selectedLeagues.includes(league.id)}
+													disabled={!selectable}
+													onchange={() => toggleLeague(league.id)}
+													class="h-4 w-4 shrink-0 accent-[hsl(var(--football-green))]"
+											/>
+											<span class="min-w-0 text-sm text-foreground">{league.name}</span>
+											{#if availability}
+												<Badge variant={availability === 'validated' ? 'success' : availability === 'discovered' ? 'warning' : 'danger'} class="shrink-0 px-1.5 py-0 text-[10px]">
+													{catalogAvailabilityLabel(availability)}
+												</Badge>
+											{:else if !selectable}
+												<span class="text-[10px] uppercase tracking-wide text-muted-foreground">Unavailable</span>
+											{/if}
+												<span class="ml-auto shrink-0 font-mono text-xs text-muted-foreground">{league.matches_count}</span>
+											</label>
+										{/each}
+									</div>
+								</section>
+							{/each}
+						</div>
+					{/if}
 					{#if selectedLeagueBadges.length > 0}
 						<div class="flex flex-wrap gap-1.5 mt-2">
 							{#each selectedLeagueBadges as badge (badge.value)}
@@ -1339,7 +1452,7 @@
 	</Card>
 
 	<!-- Section 3: Historic and future ranges -->
-	<Card title="Historic/future ranges" variant="data">
+	<Card id="coverage" title="2. Set coverage" variant="data" class="scroll-mt-24">
 		<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
 			<!-- Past History -->
 			<div class="space-y-3">
@@ -1447,7 +1560,7 @@
 	</Card>
 
 	<!-- Section 4: Controls -->
-	<Card title="Controls" variant="data">
+	<Card id="controls" title="3. Review and run" variant="data" class="scroll-mt-24">
 		<div class="space-y-4">
 			<!-- Auto-scrape -->
 			<div class="flex items-center justify-between">
@@ -1466,13 +1579,21 @@
 				</label>
 			</div>
 			{#if autoScrape}
-				<div class="flex items-end gap-2 pl-4 border-l-2 border-football-green/30" transition:slide={{ duration: 200 }}>
+				<div class="space-y-3 border-l-2 border-football-green/30 pl-4" transition:slide={{ duration: 200 }}>
+					<div class="flex flex-col gap-2 sm:flex-row sm:items-end">
 					<div class="flex-1">
 						<label for="scrape-auto-interval" class="text-xs text-muted-foreground mb-1 block">Interval</label>
 						<Input id="scrape-auto-interval" type="number" bind:value={autoIntervalNumber} placeholder="24" />
 					</div>
 					<div class="flex-1">
 						<Select bind:value={autoIntervalUnit} options={intervalUnitOptions} />
+					</div>
+					</div>
+					<div class="flex flex-col gap-2 rounded border border-football-green/30 bg-football-green/5 p-3 sm:flex-row sm:items-center sm:justify-between">
+						<p class="text-xs leading-5 text-muted-foreground">Save this schedule with the competitions and coverage selected above. Optional prediction and ticket steps remain in Automation.</p>
+						<Button variant="secondary" size="sm" onclick={saveAutomaticScrapeAction} disabled={!interactive || savingScheduledJob}>
+							{savingScheduledJob ? 'Saving...' : 'Save autoscrape schedule'}
+						</Button>
 					</div>
 				</div>
 			{/if}
@@ -1521,6 +1642,30 @@
 			<Separator />
 
 			<div class="space-y-3">
+				{#if pastEnabled && selectedScrapeLeagueSlugs.length === 0}
+					<p class="rounded border border-football-gold/30 bg-football-gold/10 p-3 text-xs leading-5 text-football-gold" role="status">Historical coverage needs at least one supported league. Choose it in step 1 before starting the scrape.</p>
+				{/if}
+				{#if largeScopeWarning}
+					<div class="space-y-3 rounded border border-football-gold/40 bg-football-gold/10 p-3" role="alert">
+						<div>
+							<p class="text-sm font-semibold text-foreground">Large historical scrape scope</p>
+							<p class="mt-1 text-xs leading-5 text-muted-foreground">{largeScopeWarning.message} Jobs run in the background and may take a long time or put pressure on the source. Narrow the scope if this is not intentional.</p>
+						</div>
+						<label class="flex cursor-pointer items-start gap-2 text-xs leading-5 text-foreground">
+							<input
+								type="checkbox"
+								checked={isLargeScopeAcknowledged}
+								onchange={(event) => {
+									acknowledgedLargeScopeKey = (event.currentTarget as HTMLInputElement).checked
+										? largeScopeWarning?.key ?? null
+										: null;
+								}}
+								class="mt-0.5 h-4 w-4 shrink-0 accent-[hsl(var(--football-green))]"
+							/>
+							<span>I understand this will queue a large batch of historical scrapes.</span>
+						</label>
+					</div>
+				{/if}
 				{#if submitSuccess}
 					<div class="p-3 text-sm bg-football-green/10 border border-football-green/30 text-football-green" transition:slide={{ duration: 200 }}>
 						{submitSuccess}
@@ -1535,7 +1680,7 @@
 					variant="glow"
 					size="lg"
 					fullWidth
-					disabled={submitting || (selectedCountries.length === 0 && selectedLeagues.length === 0)}
+					disabled={submitting || !isLargeScopeAcknowledged || (selectedCountries.length === 0 && selectedLeagues.length === 0) || (pastEnabled && selectedScrapeLeagueSlugs.length === 0)}
 					onclick={startScrape}
 				>
 					{#if submitting}
@@ -1551,16 +1696,12 @@
 
 			<Separator />
 
-			<div class="space-y-3">
-					<div class="flex flex-wrap items-center justify-between gap-3">
-						<div>
-							<p class="text-sm font-medium text-foreground">Job logs</p>
-							<p class="text-xs text-muted-foreground">Persistent action-by-action logs for the selected scrape job.</p>
-						</div>
-						<Button variant="secondary" size="sm" onclick={toggleLogsPanel}>
-							{logsPanelOpen ? 'Hide logs' : 'Show logs'}
-						</Button>
-					</div>
+			<details id="logs" class="group rounded border border-border bg-muted/10 p-3" ontoggle={handleLogsDetailsToggle}>
+				<summary class="flex cursor-pointer list-none items-center justify-between gap-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-football-blue">
+					<span><span class="block text-sm font-medium text-foreground">Job logs</span><span class="mt-1 block text-xs text-muted-foreground">Inspect persistent action-by-action logs only when a job needs attention.</span></span>
+					<span class="shrink-0 text-xs font-medium text-football-blue group-open:hidden">Show</span><span class="hidden shrink-0 text-xs font-medium text-football-blue group-open:inline">Hide</span>
+				</summary>
+				<div class="mt-3">
 					{#if logsPanelOpen}
 						<div class="space-y-3 border border-border bg-muted/30 p-3" transition:slide={{ duration: 200 }}>
 							{#if jobs.length > 0}
@@ -1607,12 +1748,13 @@
 							{/if}
 					</div>
 				{/if}
-			</div>
+				</div>
+			</details>
 		</div>
 	</Card>
 
 	<!-- Section 4: Job Table -->
-	<Card title="Jobs" variant="data">
+	<Card id="jobs" title="Recent scrape jobs" variant="data" class="scroll-mt-24">
 		{#if loadingJobs}
 			<div class="space-y-3">
 				<Skeleton class="h-12 w-full" />

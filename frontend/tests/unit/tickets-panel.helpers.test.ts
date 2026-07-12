@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { shouldAutoLoadTicketsData } from '../../src/lib/components/tickets-panel.helpers.ts';
+import {
+	formatResultsRefreshQueuedMessage,
+	shouldAutoLoadTicketsData,
+	verificationActionState
+} from '../../src/lib/components/tickets-panel.helpers.ts';
 
 test('does not auto-load when the server already provided an empty tickets snapshot', () => {
 	assert.equal(
@@ -56,5 +60,39 @@ test('does not auto-load more than once', () => {
 		hasRequestedInitialLoad: true
 	}),
 		false
+	);
+});
+
+test('result refresh messaging reports a queued job without claiming score changes', () => {
+	const message = formatResultsRefreshQueuedMessage({
+		jobId: 19,
+		runId: 42,
+		matchCount: 3
+	});
+
+	assert.match(message, /job #19 \(run #42\)/);
+	assert.match(message, /3 open-ticket matches/);
+	assert.match(message, /has not refreshed scores or settled tickets yet/);
+});
+
+test('blocks verification while final-results refresh is queued or running', () => {
+	assert.deepEqual(
+		verificationActionState({
+			settlementChecking: false,
+			resultsRefreshing: false,
+			watchingResultsRefresh: true
+		}),
+		{ disabled: true, label: 'Waiting for final-results refresh...' }
+	);
+});
+
+test('keeps the verification action available only when no refresh or settlement is running', () => {
+	assert.deepEqual(
+		verificationActionState({
+			settlementChecking: false,
+			resultsRefreshing: false,
+			watchingResultsRefresh: false
+		}),
+		{ disabled: false, label: 'Verify and settle' }
 	);
 });

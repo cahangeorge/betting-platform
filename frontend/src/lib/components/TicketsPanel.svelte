@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { ApiClientError } from '$lib/api/client';
 	import { bankrollApi } from '$lib/api/bankroll';
+	import { dataApi } from '$lib/api/data';
 	import { jobsApi } from '$lib/api/jobs';
 	import { matchesApi } from '$lib/api/matches';
 	import { cronFromInterval, describeScheduledJob, scheduledJobsForArea } from '$lib/scheduled-jobs.helpers';
@@ -16,7 +17,12 @@
 		TicketType
 	} from '$lib/types';
 	import { onMount } from 'svelte';
-	import { shouldAutoLoadTicketsData } from './tickets-panel.helpers';
+	import { countFinalScoreConflicts, finalScoreConflictPolicyMessage } from '$lib/result-refresh.helpers';
+	import {
+		formatResultsRefreshQueuedMessage,
+		shouldAutoLoadTicketsData,
+		verificationActionState
+	} from './tickets-panel.helpers';
 	import Badge from './ui/Badge.svelte';
 	import Button from './ui/Button.svelte';
 	import Card from './ui/Card.svelte';
@@ -50,6 +56,12 @@
 	let hasRequestedInitialLoad = $state(false);
 	let settlementChecking = $state(false);
 	let settlementMessage = $state('');
+	let resultsRefreshing = $state(false);
+	let resultsRefreshMessage = $state('');
+	let resultsRefreshConflictPolicy = $state('');
+	let resultsRefreshPoll: ReturnType<typeof setInterval> | undefined;
+	let resultsRefreshWatchJobId = $state<number | null>(null);
+	let resultsRefreshPolicyJobId = $state<number | null>(null);
 	let autoVerificationEnabled = $state(true);
 	let autoVerificationIntervalNumber = $state('1');
 	let autoVerificationIntervalUnit = $state('Hours');
@@ -68,6 +80,7 @@
 	let betError = $state('');
 	let betSubmitting = $state(false);
 	let generateTicketCount = $state('5');
+	let generatePredictionRunId = $state('');
 	let generateDifficulty = $state('balanced');
 	let generateMarkets = $state<string[]>(['1x2']);
 	let generateMinOdds = $state('1.20');
@@ -188,6 +201,83 @@
 		}
 	}
 
+	async function refreshFinalResults() {
+		const matchIds = [...new Set(activeTickets.flatMap((ticket) => ticket.legs.map((leg) => leg.match_id)))];
+		if (matchIds.length === 0) {
+			resultsRefreshMessage = 'There are no open ticket matches to refresh.';
+			return;
+		}
+
+		resultsRefreshing = true;
+		resultsRefreshMessage = '';
+		resultsRefreshConflictPolicy = '';
+		try {
+			const job = await dataApi.refreshFinalResults(matchIds);
+			resultsRefreshMessage = formatResultsRefreshQueuedMessage({
+				jobId: job.id,
+				runId: job.queued_run_id,
+				matchCount: matchIds.length
+			});
+			resultsRefreshPolicyJobId = job.id;
+			resultsRefreshConflictPolicy = finalScoreConflictPolicyMessage({ status: job.status });
+			watchFinalResultsRefresh(job.id);
+		} catch (err) {
+			resultsRefreshMessage = err instanceof ApiClientError
+				? `Final-results refresh failed: ${err.message}`
+				: 'Final-results refresh failed. No ticket was settled.';
+		} finally {
+			resultsRefreshing = false;
+		}
+	}
+
+	async function refreshFinalResultsJobStatus(jobId: number) {
+		try {
+			const job = await dataApi.getJob(jobId);
+			if (resultsRefreshWatchJobId !== jobId) return;
+			if (job.status === 'completed') {
+				resultsRefreshMessage = `Final-results refresh job #${jobId} completed. Review its output before verifying and settling; no ticket was settled automatically.`;
+				void loadFinalScoreConflictPolicy(jobId, job.status);
+				stopFinalResultsRefreshWatch();
+			} else if (job.status === 'failed' || job.status === 'cancelled') {
+				resultsRefreshMessage = `Final-results refresh job #${jobId} ${job.status}${job.error ? `: ${job.error}` : ''}. No ticket was settled.`;
+				resultsRefreshConflictPolicy = finalScoreConflictPolicyMessage({ status: job.status });
+				stopFinalResultsRefreshWatch();
+			}
+		} catch {
+			if (resultsRefreshWatchJobId !== jobId) return;
+			resultsRefreshMessage = `Could not refresh the status for final-results job #${jobId}. Check the scrape job history before verifying tickets.`;
+			stopFinalResultsRefreshWatch();
+		}
+	}
+
+	async function loadFinalScoreConflictPolicy(jobId: number, status: string) {
+		try {
+			const logs = await dataApi.getJobLogs(jobId);
+			if (resultsRefreshPolicyJobId !== jobId) return;
+			resultsRefreshConflictPolicy = finalScoreConflictPolicyMessage({
+				status,
+				conflictCount: countFinalScoreConflicts(logs.items),
+				logsAvailable: true
+			});
+		} catch {
+			if (resultsRefreshPolicyJobId !== jobId) return;
+			resultsRefreshConflictPolicy = finalScoreConflictPolicyMessage({ status, logsAvailable: false });
+		}
+	}
+
+	function stopFinalResultsRefreshWatch() {
+		if (resultsRefreshPoll) clearInterval(resultsRefreshPoll);
+		resultsRefreshPoll = undefined;
+		resultsRefreshWatchJobId = null;
+	}
+
+	function watchFinalResultsRefresh(jobId: number) {
+		stopFinalResultsRefreshWatch();
+		resultsRefreshWatchJobId = jobId;
+		resultsRefreshPoll = setInterval(() => void refreshFinalResultsJobStatus(jobId), 3000);
+		void refreshFinalResultsJobStatus(jobId);
+	}
+
 	async function toggleScheduledJob(jobId: number) {
 		scheduledJobsError = '';
 		try {
@@ -303,6 +393,13 @@
 		}
 	}
 
+	function selectedPredictionRunId(): number | null | undefined {
+		const value = generatePredictionRunId.trim();
+		if (!value) return undefined;
+		const runId = Number(value);
+		return Number.isSafeInteger(runId) && runId > 0 ? runId : null;
+	}
+
 	async function generateAutomaticTickets() {
 		generatingTickets = true;
 		generateError = '';
@@ -311,6 +408,11 @@
 		const bankrollId = selectedBankrollId ? parseInt(selectedBankrollId, 10) : NaN;
 
 		try {
+			const runId = selectedPredictionRunId();
+			if (runId === null) {
+				generateError = 'Enter a positive whole prediction run ID or leave it blank.';
+				return;
+			}
 			if (!Number.isFinite(bankrollId) || bankrollId <= 0) {
 				generateError = 'Create or select a bankroll before generating tickets';
 				return;
@@ -321,6 +423,7 @@
 			}
 			const response = await ticketsApi.generate({
 				bankroll_id: bankrollId,
+				run_id: runId,
 				ticket_count: parseInt(generateTicketCount, 10) || 1,
 				difficulty: generateDifficulty,
 				market_types: generateMarkets,
@@ -345,6 +448,11 @@
 		scheduledJobsError = '';
 		try {
 			const bankrollId = selectedBankrollId ? parseInt(selectedBankrollId, 10) : NaN;
+			const runId = selectedPredictionRunId();
+			if (runId === null) {
+				scheduledJobsError = 'Enter a positive whole prediction run ID or leave it blank.';
+				return;
+			}
 			const created = await jobsApi.createScheduledJob({
 				name: `Auto generate ${generateDifficulty} tickets`,
 				task_type: 'generate_tickets',
@@ -353,6 +461,7 @@
 					source_page: 'tickets',
 					area: 'tickets',
 					bankroll_id: Number.isFinite(bankrollId) && bankrollId > 0 ? bankrollId : undefined,
+					run_id: runId,
 					ticket_count: parseInt(generateTicketCount, 10) || 1,
 					difficulty: generateDifficulty,
 					market_types: generateMarkets,
@@ -522,11 +631,13 @@
 			void loadTickets();
 		}
 		void fetchScheduledJobs();
-			const pollInterval = setInterval(loadTickets, 30000);
-			return () => {
-				clearInterval(pollInterval);
-			};
-		});
+		const pollInterval = setInterval(loadTickets, 30000);
+		return () => {
+			clearInterval(pollInterval);
+			stopFinalResultsRefreshWatch();
+			resultsRefreshPolicyJobId = null;
+		};
+	});
 
 	const selectedBatchIdNumber = $derived.by(() => {
 		const parsed = Number.parseInt(selectedBatchId, 10);
@@ -559,6 +670,13 @@
 	);
 
 	const activeTickets = $derived(tickets.filter((t) => t.status === 'open'));
+	const verificationAction = $derived(
+		verificationActionState({
+			settlementChecking,
+			resultsRefreshing,
+			watchingResultsRefresh: resultsRefreshWatchJobId !== null
+		})
+	);
 	const automaticVerificationJobs = $derived(scheduledJobsForArea(scheduledJobs, 'verification'));
 	const automaticTicketJobs = $derived(scheduledJobsForArea(scheduledJobs, 'tickets'));
 	const tabs = $derived([
@@ -583,21 +701,39 @@
 		<div>
 			<h2 class="text-sm font-semibold text-foreground">Result verification</h2>
 			<p class="mt-1 text-xs text-muted-foreground">
-				Settle open tickets locally when their linked matches already have final scores.
+				Refresh final scores for open-ticket matches first, then verify and settle only tickets with confirmed final scores.
 			</p>
+			{#if resultsRefreshMessage}
+				<p class="mt-2 text-xs text-muted-foreground" role="status">{resultsRefreshMessage}</p>
+			{/if}
+			{#if resultsRefreshConflictPolicy}
+				<p class="mt-2 text-xs text-muted-foreground" role="status">{resultsRefreshConflictPolicy}</p>
+			{/if}
 			{#if settlementMessage}
-				<p class="mt-2 text-xs text-muted-foreground">{settlementMessage}</p>
+				<p class="mt-2 text-xs text-muted-foreground" role="status">{settlementMessage}</p>
 			{/if}
 			{#if scheduledJobsError}
 				<p class="mt-2 text-xs text-destructive">{scheduledJobsError}</p>
 			{/if}
 		</div>
 		<div class="flex flex-wrap gap-2">
+			<Button variant="primary" onclick={refreshFinalResults} disabled={resultsRefreshing || activeTickets.length === 0}>
+				{resultsRefreshing ? 'Refreshing final results...' : 'Refresh final results'}
+			</Button>
 			<Button variant="ghost" onclick={fetchScheduledJobs} disabled={loadingScheduledJobs}>
 				{loadingScheduledJobs ? 'Refreshing jobs...' : 'Refresh jobs'}
 			</Button>
-			<Button variant="secondary" onclick={verifyResults} disabled={settlementChecking}>
-				{settlementChecking ? 'Verifying...' : 'Verify results'}
+			<Button
+				variant="secondary"
+				onclick={verifyResults}
+				disabled={verificationAction.disabled}
+				title={
+					resultsRefreshWatchJobId !== null
+						? 'Wait for the final-results refresh to finish before verifying and settling tickets.'
+						: undefined
+				}
+			>
+				{verificationAction.label}
 			</Button>
 		</div>
 	</div>
@@ -829,8 +965,15 @@
 						<div class="border border-football-green/30 bg-football-green/10 p-3 text-sm text-football-green">{generateMessage}</div>
 					{/if}
 
-					<div class="grid grid-cols-1 gap-4 md:grid-cols-4">
+					<div class="grid grid-cols-1 gap-4 md:grid-cols-5">
 						<Input label="Number of tickets" type="number" min="1" max="50" bind:value={generateTicketCount} />
+						<Input
+							label="Prediction run ID (optional)"
+							type="number"
+							min="1"
+							step="1"
+							bind:value={generatePredictionRunId}
+						/>
 						<Select
 							label="Difficulty / safety"
 							bind:value={generateDifficulty}

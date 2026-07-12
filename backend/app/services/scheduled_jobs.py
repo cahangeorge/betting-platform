@@ -7,19 +7,35 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.database import async_session_factory
-from app.models.job import ScheduledJob
+from app.models.job import ScheduledJob, ScheduledJobRun
 from app.models.prediction import ModelPrediction, PredictionRun
 from app.models.user import User
 from app.schemas.strategy import StrategyRunFilters, StrategyRunRequest
 from app.services.result_settlement import evaluate_model_prediction, settle_due_tickets
 from app.services.scraper import create_scrape_job, execute_scrape_job
+from app.services.task_runs import (
+    claim_queued_task_run,
+    create_task_run,
+    find_active_scrape_task_run,
+    finish_task_run,
+    mark_task_run_enqueue_failed,
+)
 from app.services.ticket_engine import generate_tickets
 
 SCHEDULED_JOB_OWNER_CONFIG_KEY = "_created_by_user_id"
 
 _scheduler_lock = asyncio.Lock()
 _scheduler_task: asyncio.Task | None = None
+
+settings = get_settings()
+
+
+class TaskEnqueueError(RuntimeError):
+    def __init__(self, run: ScheduledJobRun, message: str):
+        super().__init__(message)
+        self.run = run
 
 
 @dataclass(frozen=True)
@@ -190,7 +206,9 @@ async def _run_scrape_job(db: AsyncSession, job: ScheduledJob) -> ScheduledJobRu
             status=executed.status or "failed",
             detail="; ".join(detail_parts),
         )
-    return ScheduledJobRunResult(job_id=job.id, task_type=job.task_type, status="completed", detail=f"scrape_job:{created.id}")
+    return ScheduledJobRunResult(
+        job_id=job.id, task_type=job.task_type, status="completed", detail=f"scrape_job:{created.id}"
+    )
 
 
 async def _run_prediction_job(
@@ -209,7 +227,9 @@ async def _run_prediction_job(
 
     strategy_ids = [int(value) for value in config.get("strategy_ids") or []]
     if not strategy_ids:
-        return ScheduledJobRunResult(job_id=job.id, task_type=job.task_type, status="skipped", detail="missing_strategy_ids")
+        return ScheduledJobRunResult(
+            job_id=job.id, task_type=job.task_type, status="skipped", detail="missing_strategy_ids"
+        )
 
     filters_payload = config.get("filters") if isinstance(config.get("filters"), dict) else {}
     request = StrategyRunRequest(
@@ -233,7 +253,9 @@ async def _run_prediction_job(
     overall_status = _prediction_job_status(strategy_statuses)
     detail = f"summary[{_summarize_prediction_statuses(strategy_statuses)}]; " + ", ".join(strategy_details)
     artifacts = {"prediction_run_ids": prediction_run_ids}
-    return ScheduledJobRunResult(job_id=job.id, task_type=job.task_type, status=overall_status, detail=detail, artifacts=artifacts)
+    return ScheduledJobRunResult(
+        job_id=job.id, task_type=job.task_type, status=overall_status, detail=detail, artifacts=artifacts
+    )
 
 
 def _prediction_run_id_for_ticket_generation(prediction_result: ScheduledJobRunResult) -> int | None:
@@ -408,11 +430,15 @@ async def _run_scrape_predict_tickets_job(db: AsyncSession, job: ScheduledJob) -
 
     prediction_run_id = _prediction_run_id_for_ticket_generation(prediction_result)
     if prediction_run_id is None:
+        detail = (
+            f"{scrape_result.detail}; predictions:{prediction_result.detail}; "
+            "tickets:missing_or_ambiguous_prediction_run_id"
+        )
         return ScheduledJobRunResult(
             job_id=job.id,
             task_type=job.task_type,
             status="partial",
-            detail=f"{scrape_result.detail}; predictions:{prediction_result.detail}; tickets:missing_or_ambiguous_prediction_run_id",
+            detail=detail,
         )
 
     merged_ticket_config = _stamp_owner_if_missing(ticket_config or config, owner_id)
@@ -541,11 +567,15 @@ async def dispatch_scheduled_job(db: AsyncSession, job: ScheduledJob) -> Schedul
     task_type = (job.task_type or "").lower()
     if "world_cup_pipeline" in task_type:
         return await _run_world_cup_pipeline_job(db, job)
-    if "scrape" in task_type and any(token in task_type for token in ("predict", "prediction", "strategy")) and any(
-        token in task_type for token in ("ticket", "slip", "batch")
+    if (
+        "scrape" in task_type
+        and any(token in task_type for token in ("predict", "prediction", "strategy"))
+        and any(token in task_type for token in ("ticket", "slip", "batch"))
     ):
         return await _run_scrape_predict_tickets_job(db, job)
-    if "scrape" in task_type and any(token in task_type for token in ("predict", "prediction", "strategy", "chain", "pipeline")):
+    if "scrape" in task_type and any(
+        token in task_type for token in ("predict", "prediction", "strategy", "chain", "pipeline")
+    ):
         return await _run_scrape_then_predict_job(db, job)
     if any(token in task_type for token in ("predict", "prediction", "strategy")) and any(
         token in task_type for token in ("ticket", "slip", "batch")
@@ -559,37 +589,321 @@ async def dispatch_scheduled_job(db: AsyncSession, job: ScheduledJob) -> Schedul
         return await _run_scrape_job(db, job)
     if any(token in task_type for token in ("predict", "prediction", "strategy")):
         return await _run_prediction_job(db, job)
-    return ScheduledJobRunResult(job_id=job.id, task_type=job.task_type, status="skipped", detail="unsupported_task_type")
+    return ScheduledJobRunResult(
+        job_id=job.id, task_type=job.task_type, status="skipped", detail="unsupported_task_type"
+    )
 
 
-async def run_due_scheduled_jobs(db: AsyncSession, *, now: datetime | None = None, limit: int = 10) -> list[ScheduledJobRunResult]:
+def taskiq_queue_enabled() -> bool:
+    return settings.task_queue_backend.strip().lower() == "taskiq"
+
+
+async def _send_taskiq_run(run: ScheduledJobRun, *, task_name: str) -> str | None:
+    if task_name == "scheduled_job":
+        from app.tasks.jobs import execute_scheduled_job_run_task
+
+        task = await execute_scheduled_job_run_task.kiq(run.id)
+    elif task_name == "scrape_job":
+        from app.tasks.jobs import execute_scrape_job_task
+
+        task = await execute_scrape_job_task.kiq(run.id)
+    elif task_name == "world_cup_pipeline":
+        from app.tasks.jobs import execute_world_cup_pipeline_task
+
+        task = await execute_world_cup_pipeline_task.kiq(run.id)
+    else:
+        raise ValueError(f"Unsupported Taskiq task name: {task_name}")
+    return getattr(task, "task_id", None)
+
+
+async def _enqueue_taskiq_run_after_commit(
+    db: AsyncSession, run: ScheduledJobRun, *, task_name: str
+) -> ScheduledJobRun:
+    """Persist a run before publishing it to Redis so workers never race the transaction."""
+    await db.commit()
+    try:
+        taskiq_task_id = await _send_taskiq_run(run, task_name=task_name)
+    except Exception as exc:
+        await mark_task_run_enqueue_failed(db, run, error=str(exc))
+        await db.commit()
+        raise TaskEnqueueError(run, str(exc)) from exc
+
+    run.taskiq_task_id = taskiq_task_id or run.taskiq_task_id
+    await db.flush()
+    await db.commit()
+    return run
+
+
+async def _publish_committed_taskiq_run(db: AsyncSession, run: ScheduledJobRun, *, task_name: str) -> ScheduledJobRun:
+    """Publish a run that was already committed as part of a scheduler claim batch."""
+    try:
+        taskiq_task_id = await _send_taskiq_run(run, task_name=task_name)
+    except Exception as exc:
+        await mark_task_run_enqueue_failed(db, run, error=str(exc))
+        if run.scheduled_job_id is not None and run.due_at is not None:
+            job = await db.get(ScheduledJob, run.scheduled_job_id)
+            if job is not None:
+                job.next_run = run.due_at
+        return run
+
+    run.taskiq_task_id = taskiq_task_id or run.taskiq_task_id
+    await db.flush()
+    return run
+
+
+async def execute_scheduled_job_run(run_id: int) -> ScheduledJobRun:
+    async with async_session_factory() as db:
+        existing_run = await db.get(ScheduledJobRun, run_id)
+        run = await claim_queued_task_run(db, run_id)
+        if run is None:
+            if existing_run is None:
+                raise LookupError(f"Scheduled job run {run_id} not found")
+            return existing_run
+        await db.commit()
+        if run.scheduled_job_id is None:
+            await finish_task_run(
+                db,
+                run,
+                status="failed",
+                detail="scheduled_job_missing",
+                error=f"Scheduled job run {run_id} is not attached to a scheduled job",
+            )
+            await db.commit()
+            return run
+        job = await db.get(ScheduledJob, run.scheduled_job_id)
+        if job is None:
+            await finish_task_run(
+                db, run, status="failed", detail="scheduled_job_missing", error="Scheduled job not found"
+            )
+            await db.commit()
+            return run
+
+        try:
+            result = await dispatch_scheduled_job(db, job)
+            await finish_task_run(
+                db,
+                run,
+                status=result.status,
+                detail=result.detail,
+                artifacts=result.artifacts,
+            )
+            await db.commit()
+        except Exception as exc:
+            await finish_task_run(db, run, status="failed", detail=str(exc), error=str(exc))
+            await db.commit()
+        return run
+
+
+async def execute_scrape_job_run(run_id: int) -> ScheduledJobRun:
+    async with async_session_factory() as db:
+        existing_run = await db.get(ScheduledJobRun, run_id)
+        run = await claim_queued_task_run(db, run_id)
+        if run is None:
+            if existing_run is None:
+                raise LookupError(f"Scrape job run {run_id} not found")
+            return existing_run
+        await db.commit()
+        scrape_job_ids = (run.artifacts or {}).get("scrape_job_ids") or []
+        if not scrape_job_ids:
+            await finish_task_run(
+                db, run, status="failed", detail="missing_scrape_job_id", error="missing_scrape_job_id"
+            )
+            await db.commit()
+            return run
+
+        try:
+            job = await execute_scrape_job(db, int(scrape_job_ids[0]))
+            status = job.status or "failed"
+            detail = f"scrape_job:{job.id}; status:{status}"
+            if getattr(job, "error", None):
+                detail = f"{detail}; error:{job.error}"
+            await finish_task_run(db, run, status=status, detail=detail)
+            await db.commit()
+        except Exception as exc:
+            await finish_task_run(db, run, status="failed", detail=str(exc), error=str(exc))
+            await db.commit()
+        return run
+
+
+async def execute_world_cup_pipeline_run(run_id: int) -> ScheduledJobRun:
+    from app.services.world_cup_pipeline import execute_world_cup_pipeline_job
+
+    async with async_session_factory() as db:
+        existing_run = await db.get(ScheduledJobRun, run_id)
+        run = await claim_queued_task_run(db, run_id)
+        if run is None:
+            if existing_run is None:
+                raise LookupError(f"World Cup pipeline run {run_id} not found")
+            return existing_run
+        await db.commit()
+        artifacts = run.artifacts or {}
+        scrape_job_ids = artifacts.get("scrape_job_ids") or []
+        user_id = artifacts.get("user_id")
+        if not scrape_job_ids or not user_id:
+            await finish_task_run(
+                db, run, status="failed", detail="missing_pipeline_inputs", error="missing_pipeline_inputs"
+            )
+            await db.commit()
+            return run
+
+        try:
+            await execute_world_cup_pipeline_job(int(scrape_job_ids[0]), int(user_id))
+            await finish_task_run(db, run, status="completed", detail=f"world_cup_pipeline:{scrape_job_ids[0]}")
+            await db.commit()
+        except Exception as exc:
+            await finish_task_run(db, run, status="failed", detail=str(exc), error=str(exc))
+            await db.commit()
+        return run
+
+
+async def enqueue_scrape_job_execution(
+    db: AsyncSession, *, scrape_job_id: int, triggered_by: str = "api", user_id: int | None = None
+) -> ScheduledJobRun:
+    existing_run = await find_active_scrape_task_run(db, task_type="scrape_job", scrape_job_id=scrape_job_id)
+    if existing_run is not None:
+        return existing_run
+
+    artifacts: dict[str, Any] = {"scrape_job_ids": [scrape_job_id]}
+    if user_id is not None:
+        artifacts["user_id"] = user_id
+
+    run = await create_task_run(
+        db,
+        task_type="scrape_job",
+        scrape_job_id=scrape_job_id,
+        triggered_by=triggered_by,
+        artifacts=artifacts,
+    )
+    if taskiq_queue_enabled():
+        return await _enqueue_taskiq_run_after_commit(db, run, task_name="scrape_job")
+    await db.commit()
+    return run
+
+
+async def enqueue_world_cup_pipeline_execution(
+    db: AsyncSession,
+    *,
+    scrape_job_id: int,
+    user_id: int,
+    triggered_by: str = "api",
+) -> ScheduledJobRun:
+    existing_run = await find_active_scrape_task_run(db, task_type="world_cup_pipeline", scrape_job_id=scrape_job_id)
+    if existing_run is not None:
+        return existing_run
+
+    run = await create_task_run(
+        db,
+        task_type="world_cup_pipeline",
+        scrape_job_id=scrape_job_id,
+        triggered_by=triggered_by,
+        artifacts={"scrape_job_ids": [scrape_job_id], "user_id": user_id},
+    )
+    if taskiq_queue_enabled():
+        return await _enqueue_taskiq_run_after_commit(db, run, task_name="world_cup_pipeline")
+    await db.commit()
+    return run
+
+
+async def enqueue_due_scheduled_jobs(
+    db: AsyncSession, *, now: datetime | None = None, limit: int = 10
+) -> list[ScheduledJobRun]:
     current = now or utcnow()
     async with _scheduler_lock:
-        stmt = select(ScheduledJob).where(ScheduledJob.enabled.is_(True)).order_by(ScheduledJob.next_run.asc().nulls_last()).limit(limit)
+        stmt = (
+            select(ScheduledJob)
+            .where(ScheduledJob.enabled.is_(True))
+            .order_by(ScheduledJob.next_run.asc().nulls_last())
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
         result = await db.execute(stmt)
         jobs = list(result.scalars().all())
 
-        results: list[ScheduledJobRunResult] = []
+        runs: list[ScheduledJobRun] = []
         for job in jobs:
             if job.next_run is None:
                 await initialize_next_run(db, job, now=current)
-                results.append(ScheduledJobRunResult(job_id=job.id, task_type=job.task_type, status="scheduled", detail="initialized_next_run"))
                 continue
 
             if not scheduled_job_due(job, now=current):
                 continue
 
-            try:
-                run_result = await dispatch_scheduled_job(db, job)
-            except Exception as exc:  # keep scheduler alive; surface failure in result
-                run_result = ScheduledJobRunResult(job_id=job.id, task_type=job.task_type, status="failed", detail=str(exc))
-
+            run = await create_task_run(
+                db,
+                task_type=job.task_type,
+                scheduled_job=job,
+                due_at=job.next_run,
+                triggered_by="scheduler",
+            )
             job.last_run = current
             job.next_run = next_run_from_cron(job.cron_expression, after=current)
             await db.flush()
-            results.append(run_result)
+            runs.append(run)
 
-        return results
+        if runs:
+            await db.commit()
+            for run in runs:
+                await _publish_committed_taskiq_run(db, run, task_name="scheduled_job")
+            await db.commit()
+
+        return runs
+
+
+async def run_due_scheduled_jobs(
+    db: AsyncSession, *, now: datetime | None = None, limit: int = 10
+) -> list[ScheduledJobRun]:
+    current = now or utcnow()
+    if taskiq_queue_enabled():
+        return await enqueue_due_scheduled_jobs(db, now=current, limit=limit)
+
+    async with _scheduler_lock:
+        stmt = (
+            select(ScheduledJob)
+            .where(ScheduledJob.enabled.is_(True))
+            .order_by(ScheduledJob.next_run.asc().nulls_last())
+            .limit(limit)
+        )
+        result = await db.execute(stmt)
+        jobs = list(result.scalars().all())
+
+        runs: list[ScheduledJobRun] = []
+        for job in jobs:
+            if job.next_run is None:
+                await initialize_next_run(db, job, now=current)
+                continue
+
+            if not scheduled_job_due(job, now=current):
+                continue
+
+            run = await create_task_run(
+                db,
+                task_type=job.task_type,
+                scheduled_job=job,
+                due_at=job.next_run,
+                triggered_by="scheduler",
+                status="running",
+            )
+            try:
+                run_result = await dispatch_scheduled_job(db, job)
+            except Exception as exc:  # keep scheduler alive; surface failure in result
+                run_result = ScheduledJobRunResult(
+                    job_id=job.id, task_type=job.task_type, status="failed", detail=str(exc)
+                )
+
+            job.last_run = current
+            job.next_run = next_run_from_cron(job.cron_expression, after=current)
+            await finish_task_run(
+                db,
+                run,
+                status=run_result.status,
+                detail=run_result.detail,
+                artifacts=run_result.artifacts,
+                error=run_result.detail if run_result.status == "failed" else None,
+            )
+            await db.flush()
+            runs.append(run)
+
+        return runs
 
 
 async def scheduler_loop(*, interval_seconds: int = 60) -> None:

@@ -2,22 +2,23 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
-from fastapi.testclient import TestClient
+from fastapi import BackgroundTasks, HTTPException, Response
 from starlette.requests import Request
 
 from app.api.deps import get_current_user
+from app.api.v1 import auth as auth_api
 from app.api.v1 import dashboard as dashboard_api
 from app.api.v1 import data as data_api
+from app.api.v1 import job_runs as job_runs_api
+from app.api.v1 import jobs as jobs_api
 from app.api.v1 import matches as matches_api
 from app.api.v1 import predictions as predictions_api
 from app.api.v1 import tickets as tickets_api
 from app.api.v1.catalog import CATALOG
-from app.database import get_db
-from app.main import app
+from app.schemas.auth import LoginRequest, SignupRequest
 from app.schemas.data import ScrapeJobCreateRequest, WorldCupPipelineRequest
 from app.schemas.match import MatchResponse
-from app.schemas.ticket import SettlementResponse, TicketCreateRequest
+from app.schemas.ticket import SettlementResponse, TicketCreateRequest, TicketGenerateRequest
 from app.services.auth import hash_password, verify_password
 
 
@@ -44,56 +45,41 @@ class _FakeAuthDb:
         return None
 
 
-def _auth_test_client(fake_db: _FakeAuthDb) -> TestClient:
-    async def override_get_db():
-        yield fake_db
-
-    app.dependency_overrides[get_db] = override_get_db
-    client = TestClient(app)
-    return client
+def _set_cookie_header_values(response: Response) -> list[str]:
+    return [
+        value.decode("latin-1") for key, value in response.raw_headers if key.decode("latin-1").lower() == "set-cookie"
+    ]
 
 
-def test_signup_returns_tokens_and_sets_auth_cookies():
-    client = _auth_test_client(_FakeAuthDb())
+@pytest.mark.asyncio
+async def test_signup_returns_tokens_and_sets_auth_cookies():
+    response = Response()
+    body = SignupRequest(email="  NewUser@Example.com  ", password="password123", name="New User")
 
-    try:
-        response = client.post(
-            "/api/v1/auth/signup",
-            json={"email": "  NewUser@Example.com  ", "password": "password123", "name": "New User"},
-        )
-    finally:
-        app.dependency_overrides.clear()
-        client.close()
+    token = await auth_api.signup(body=body, response=response, db=_FakeAuthDb())
 
-    assert response.status_code == 201
-    assert response.json()["access_token"]
-    set_cookie = response.headers.get("set-cookie", "")
-    assert "access_token=" in set_cookie
-    assert "refresh_token=" in set_cookie
+    assert token.access_token
+    set_cookie_values = _set_cookie_header_values(response)
+    assert any("access_token=" in value for value in set_cookie_values)
+    assert any("refresh_token=" in value for value in set_cookie_values)
 
 
-def test_login_normalizes_email_and_sets_auth_cookies():
+@pytest.mark.asyncio
+async def test_login_normalizes_email_and_sets_auth_cookies():
     fake_user = SimpleNamespace(
         id=42,
         email="test@example.com",
         password_hash=hash_password("password123"),
     )
-    client = _auth_test_client(_FakeAuthDb(existing_user=fake_user))
+    response = Response()
+    body = LoginRequest(email="  TEST@EXAMPLE.COM  ", password="password123")
 
-    try:
-        response = client.post(
-            "/api/v1/auth/login",
-            json={"email": "  TEST@EXAMPLE.COM  ", "password": "password123"},
-        )
-    finally:
-        app.dependency_overrides.clear()
-        client.close()
+    token = await auth_api.login(body=body, response=response, db=_FakeAuthDb(existing_user=fake_user))
 
-    assert response.status_code == 200
-    assert response.json()["access_token"]
-    set_cookie = response.headers.get("set-cookie", "")
-    assert "access_token=" in set_cookie
-    assert "refresh_token=" in set_cookie
+    assert token.access_token
+    set_cookie_values = _set_cookie_header_values(response)
+    assert any("access_token=" in value for value in set_cookie_values)
+    assert any("refresh_token=" in value for value in set_cookie_values)
 
 
 def test_verify_password_returns_false_for_malformed_hash():
@@ -169,7 +155,44 @@ async def test_ticket_creation_maps_domain_permission_errors(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_ticket_generation_passes_explicit_prediction_run_id(monkeypatch):
+    captured = {}
+
+    async def fake_generate_tickets(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(id=77), []
+
+    monkeypatch.setattr(tickets_api, "generate_tickets", fake_generate_tickets)
+
+    result = await tickets_api.generate_ticket_batch(
+        body=TicketGenerateRequest(
+            bankroll_id=5,
+            run_id=31,
+            ticket_count=1,
+            difficulty="safe",
+            market_types=["1x2"],
+            min_odds=1.2,
+            max_odds=3.0,
+            stake=10.0,
+        ),
+        db=object(),
+        user=SimpleNamespace(id=12),
+    )
+
+    assert result.batch_id == 77
+    assert captured["user_id"] == 12
+    assert captured["run_id"] == 31
+
+
+@pytest.mark.asyncio
 async def test_scrape_execute_maps_lookup_errors_to_404(monkeypatch):
+    job = SimpleNamespace(id=999, params={"_created_by_user_id": 12})
+
+    class _DB:
+        async def get(self, model, job_id):
+            assert job_id == job.id
+            return job
+
     async def fake_execute_scrape_job(db, job_id):
         raise LookupError(f"ScrapeJob {job_id} not found")
 
@@ -178,7 +201,7 @@ async def test_scrape_execute_maps_lookup_errors_to_404(monkeypatch):
     with pytest.raises(HTTPException) as exc_info:
         await data_api.run_scrape_job(
             job_id=999,
-            db=object(),
+            db=_DB(),
             user=SimpleNamespace(id=12),
         )
 
@@ -203,7 +226,7 @@ async def test_scrape_start_returns_created_job(monkeypatch):
     async def fake_create_scrape_job(db, job_type, league, params):
         assert job_type == "oddsportal"
         assert league == "Premier League"
-        assert params == {"sport": "football"}
+        assert params == {"sport": "football", "_created_by_user_id": 12}
         return fake_job
 
     monkeypatch.setattr(data_api, "create_scrape_job", fake_create_scrape_job)
@@ -218,8 +241,19 @@ async def test_scrape_start_returns_created_job(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_scrape_background_execute_queues_task():
-    fake_job = SimpleNamespace(id=45, job_type="scrape_odds", status="pending")
+async def test_scrape_background_execute_enqueues_task(monkeypatch):
+    fake_job = SimpleNamespace(
+        id=45,
+        job_type="scrape_odds",
+        status="pending",
+        league=None,
+        params={"_created_by_user_id": 12},
+        started_at=None,
+        completed_at=None,
+        output=None,
+        error=None,
+        created_at=datetime.now(timezone.utc),
+    )
 
     class _DB:
         async def get(self, model, job_id):
@@ -228,19 +262,33 @@ async def test_scrape_background_execute_queues_task():
 
     queued = []
 
-    class _BackgroundTasks:
-        def add_task(self, func, *args):
-            queued.append((func, args))
+    async def fake_enqueue(db, *, scrape_job_id, triggered_by, user_id):
+        queued.append((scrape_job_id, triggered_by, user_id))
+        return SimpleNamespace(
+            id=701,
+            task_type="scrape_job",
+            status="queued",
+            scheduled_job_id=None,
+            scrape_job_id=scrape_job_id,
+            artifacts={"user_id": user_id},
+        )
+
+    monkeypatch.setattr(data_api, "enqueue_scrape_job_execution", fake_enqueue)
+    monkeypatch.setattr(data_api, "taskiq_queue_enabled", lambda: False)
+    background_tasks = BackgroundTasks()
 
     result = await data_api.run_scrape_job_background(
         job_id=fake_job.id,
-        background_tasks=_BackgroundTasks(),
+        background_tasks=background_tasks,
         db=_DB(),
         user=SimpleNamespace(id=12),
     )
 
-    assert result is fake_job
-    assert queued == [(data_api._execute_scrape_job_background, (fake_job.id,))]
+    assert result.id == fake_job.id
+    assert result.queued_run_id == 701
+    assert result.queued_run is not None
+    assert queued == [(fake_job.id, "api", 12)]
+    assert len(background_tasks.tasks) == 1
 
 
 @pytest.mark.asyncio
@@ -249,19 +297,293 @@ async def test_scrape_background_execute_returns_404_when_missing():
         async def get(self, model, job_id):
             return None
 
-    class _BackgroundTasks:
-        def add_task(self, *_args):
-            raise AssertionError("background task should not be queued")
-
     with pytest.raises(HTTPException) as exc_info:
         await data_api.run_scrape_job_background(
             job_id=999,
-            background_tasks=_BackgroundTasks(),
+            background_tasks=BackgroundTasks(),
             db=_DB(),
             user=SimpleNamespace(id=12),
         )
 
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_scrape_background_execute_surfaces_taskiq_enqueue_failures(monkeypatch):
+    fake_job = SimpleNamespace(
+        id=45,
+        job_type="scrape_odds",
+        status="pending",
+        league=None,
+        params={"_created_by_user_id": 12},
+        started_at=None,
+        completed_at=None,
+        output=None,
+        error=None,
+        created_at=datetime.now(timezone.utc),
+    )
+    failed_run = SimpleNamespace(id=702, status="enqueue_failed")
+
+    class _DB:
+        async def get(self, model, job_id):
+            return fake_job
+
+    async def fake_enqueue(db, *, scrape_job_id, triggered_by, user_id):
+        raise data_api.TaskEnqueueError(failed_run, "redis down")
+
+    monkeypatch.setattr(data_api, "enqueue_scrape_job_execution", fake_enqueue)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await data_api.run_scrape_job_background(
+            job_id=fake_job.id,
+            background_tasks=BackgroundTasks(),
+            db=_DB(),
+            user=SimpleNamespace(id=12),
+        )
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == {"message": "Task queue publish failed", "run_id": failed_run.id}
+
+
+@pytest.mark.asyncio
+async def test_scrape_job_runs_are_listed_by_scrape_job_id_for_owner():
+    fake_job = SimpleNamespace(id=45, params={"_created_by_user_id": 12})
+    fake_run = SimpleNamespace(
+        id=701,
+        task_type="scrape_job",
+        status="queued",
+        scrape_job_id=fake_job.id,
+        artifacts={"user_id": 12},
+        scheduled_job_id=None,
+    )
+
+    class _RunScalars:
+        def all(self):
+            return [fake_run]
+
+    class _RunResult:
+        def scalars(self):
+            return _RunScalars()
+
+    class _DB:
+        async def get(self, model, row_id):
+            return fake_job if row_id == fake_job.id else None
+
+        async def execute(self, stmt):
+            return _RunResult()
+
+    result = await data_api.get_scrape_job_runs(
+        job_id=fake_job.id,
+        page=1,
+        per_page=20,
+        db=_DB(),
+        user=SimpleNamespace(id=12, is_admin=False),
+    )
+
+    assert result.total == 1
+    assert len(result.runs) == 1
+    assert result.runs[0].id == fake_run.id
+    assert result.runs[0].scrape_job_id == fake_job.id
+    assert result.runs[0].status == "queued"
+    assert result.page == 1
+    assert result.per_page == 20
+
+
+@pytest.mark.asyncio
+async def test_scrape_job_runs_owner_can_list_empty_page():
+    fake_job = SimpleNamespace(id=45, params={"_created_by_user_id": 12})
+
+    class _RunScalars:
+        def all(self):
+            return []
+
+    class _RunResult:
+        def scalars(self):
+            return _RunScalars()
+
+    class _DB:
+        async def get(self, model, row_id):
+            return fake_job
+
+        async def execute(self, stmt):
+            return _RunResult()
+
+    result = await data_api.get_scrape_job_runs(
+        job_id=fake_job.id,
+        page=1,
+        per_page=20,
+        db=_DB(),
+        user=SimpleNamespace(id=12, is_admin=False),
+    )
+
+    assert result.total == 0
+    assert result.runs == []
+
+
+@pytest.mark.asyncio
+async def test_scrape_job_runs_reject_non_owner():
+    fake_job = SimpleNamespace(id=45, params={"_created_by_user_id": 99})
+    fake_run = SimpleNamespace(
+        id=701,
+        task_type="scrape_job",
+        status="queued",
+        scrape_job_id=fake_job.id,
+        artifacts={"user_id": 99},
+        scheduled_job_id=None,
+    )
+
+    class _RunScalars:
+        def all(self):
+            return [fake_run]
+
+    class _RunResult:
+        def scalars(self):
+            return _RunScalars()
+
+    class _DB:
+        async def get(self, model, row_id):
+            return fake_job if row_id == fake_job.id else None
+
+        async def execute(self, stmt):
+            return _RunResult()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await data_api.get_scrape_job_runs(
+            job_id=fake_job.id,
+            page=1,
+            per_page=20,
+            db=_DB(),
+            user=SimpleNamespace(id=12, is_admin=False),
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_list_scheduled_jobs_filters_to_current_user():
+    owned = SimpleNamespace(id=1, config={"_created_by_user_id": 12})
+    foreign = SimpleNamespace(id=2, config={"_created_by_user_id": 99})
+    legacy_unowned = SimpleNamespace(id=3, config={})
+
+    class _Scalars:
+        def all(self):
+            return [owned, foreign, legacy_unowned]
+
+    class _Result:
+        def scalars(self):
+            return _Scalars()
+
+    class _DB:
+        async def execute(self, *_args, **_kwargs):
+            return _Result()
+
+    result = await jobs_api.list_scheduled_jobs(db=_DB(), user=SimpleNamespace(id=12, is_admin=False))
+
+    assert result == [owned]
+
+
+@pytest.mark.asyncio
+async def test_list_scheduled_jobs_shows_all_for_admin():
+    owned = SimpleNamespace(id=1, config={"_created_by_user_id": 12})
+    foreign = SimpleNamespace(id=2, config={"_created_by_user_id": 99})
+    legacy_unowned = SimpleNamespace(id=3, config={})
+
+    class _Scalars:
+        def all(self):
+            return [owned, foreign, legacy_unowned]
+
+    class _Result:
+        def scalars(self):
+            return _Scalars()
+
+    class _DB:
+        async def execute(self, *_args, **_kwargs):
+            return _Result()
+
+    result = await jobs_api.list_scheduled_jobs(db=_DB(), user=SimpleNamespace(id=12, is_admin=True))
+
+    assert result == [owned, foreign, legacy_unowned]
+
+
+@pytest.mark.asyncio
+async def test_scheduled_job_detail_and_toggle_require_owner():
+    job = SimpleNamespace(id=10, config={"_created_by_user_id": 99}, enabled=True)
+
+    class _DB:
+        flushes = 0
+
+        async def get(self, _model, row_id):
+            return job if row_id == job.id else None
+
+        async def flush(self):
+            self.flushes += 1
+
+    db = _DB()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await jobs_api.get_scheduled_job(job_id=job.id, db=db, user=SimpleNamespace(id=12, is_admin=False))
+    assert exc_info.value.status_code == 403
+
+    with pytest.raises(HTTPException) as exc_info:
+        await jobs_api.toggle_scheduled_job(job_id=job.id, db=db, _user=SimpleNamespace(id=12, is_admin=False))
+    assert exc_info.value.status_code == 403
+    assert job.enabled is True
+    assert db.flushes == 0
+
+    result = await jobs_api.toggle_scheduled_job(job_id=job.id, db=db, _user=SimpleNamespace(id=99, is_admin=False))
+    assert result is job
+    assert job.enabled is False
+    assert db.flushes == 1
+
+
+@pytest.mark.asyncio
+async def test_direct_job_run_requires_owner_or_admin():
+    run = SimpleNamespace(id=701, scheduled_job_id=12, task_type="scrape_job", status="queued")
+    job = SimpleNamespace(id=12, config={"_created_by_user_id": 99})
+
+    class _DB:
+        async def get(self, model, row_id):
+            return run if row_id == run.id else job
+
+    with pytest.raises(HTTPException) as exc_info:
+        await job_runs_api.get_job_run(
+            run_id=run.id,
+            db=_DB(),
+            user=SimpleNamespace(id=12, is_admin=False),
+        )
+
+    assert exc_info.value.status_code == 403
+
+    result = await job_runs_api.get_job_run(
+        run_id=run.id,
+        db=_DB(),
+        user=SimpleNamespace(id=99, is_admin=False),
+    )
+    assert result is run
+
+
+@pytest.mark.asyncio
+async def test_direct_api_triggered_job_run_allows_artifact_owner():
+    run = SimpleNamespace(
+        id=702,
+        scheduled_job_id=None,
+        scrape_job_id=45,
+        artifacts={"user_id": 12},
+        task_type="scrape_job",
+        status="queued",
+    )
+
+    class _DB:
+        async def get(self, model, row_id):
+            return run
+
+    result = await job_runs_api.get_job_run(
+        run_id=run.id,
+        db=_DB(),
+        user=SimpleNamespace(id=12, is_admin=False),
+    )
+
+    assert result is run
 
 
 def test_world_cup_pipeline_request_defaults_to_safe_ticket_generation():

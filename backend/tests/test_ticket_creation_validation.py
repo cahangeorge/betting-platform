@@ -290,6 +290,8 @@ async def test_generate_tickets_can_scope_to_explicit_prediction_run(monkeypatch
 
     assert ticket_calls[0]["legs_data"][0]["model_prediction_id"] == 101
     assert "prediction_runs.id = 11" in db.statements[0]
+    assert "prediction_runs.status = 'completed'" in db.statements[0]
+    assert "ORDER BY prediction_runs.completed_at" not in db.statements[0]
     assert "model_predictions.run_id = 11" in db.statements[1]
 
 

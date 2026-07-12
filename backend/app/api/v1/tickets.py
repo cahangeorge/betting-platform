@@ -328,6 +328,7 @@ async def generate_ticket_batch(
             db=db,
             user_id=user.id,
             bankroll_id=body.bankroll_id,
+            run_id=body.run_id,
             ticket_count=body.ticket_count,
             difficulty=body.difficulty,
             market_types=body.market_types,

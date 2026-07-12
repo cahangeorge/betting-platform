@@ -197,13 +197,14 @@ async def generate_tickets(
         raise ValueError("min_odds must be lower than or equal to max_odds")
 
     normalized_markets = {market.lower() for market in (market_types or ["1x2"])}
-    run_stmt = select(PredictionRun.id).where(
-        PredictionRun.user_id == user_id,
-        PredictionRun.status.in_(["completed", "partial"]),
-    )
+    run_stmt = select(PredictionRun.id).where(PredictionRun.user_id == user_id)
     if run_id is not None:
-        run_stmt = run_stmt.where(PredictionRun.id == run_id)
+        run_stmt = run_stmt.where(
+            PredictionRun.id == run_id,
+            PredictionRun.status == "completed",
+        )
     else:
+        run_stmt = run_stmt.where(PredictionRun.status.in_(["completed", "partial"]))
         run_stmt = run_stmt.order_by(
             PredictionRun.completed_at.desc().nulls_last(),
             PredictionRun.started_at.desc().nulls_last(),

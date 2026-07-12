@@ -106,6 +106,7 @@ LIVE_RELEVANT_MATCH_STATUSES = {
 }
 
 LIVE_RELEVANT_ODDS_MARKETS = {"1x2", "home_away", "homeaway", "match_winner", "matchwinner"}
+FINAL_MATCH_STATUSES = {"finished", "ft", "fulltime", "completed", "final"}
 
 
 def _normalize_scrape_value(value):
@@ -322,6 +323,47 @@ async def create_scrape_job(
     return job
 
 
+async def create_result_refresh_job(db: AsyncSession, match_ids: list[int], *, user_id: int) -> ScrapeJob:
+    """Create a real, source-addressable result refresh job for known matches only."""
+    requested_ids = sorted({int(match_id) for match_id in match_ids})
+    if not requested_ids:
+        raise ValueError("At least one match ID is required for result refresh")
+
+    source_stmt = (
+        select(Match, MatchSource.url)
+        .join(MatchSource, MatchSource.match_id == Match.id)
+        .where(
+            Match.id.in_(requested_ids),
+            MatchSource.source == ODDS_SOURCE,
+            MatchSource.url.is_not(None),
+        )
+    )
+    source_result = await db.execute(source_stmt)
+    rows = list(source_result.all())
+    sources_by_match_id = {match.id: url for match, url in rows if url}
+    missing_ids = sorted(set(requested_ids) - set(sources_by_match_id))
+    if missing_ids:
+        joined_ids = ", ".join(str(match_id) for match_id in missing_ids)
+        raise ValueError(f"Result refresh requires an OddsHarvester source URL for match IDs: {joined_ids}")
+
+    sports = {match.sport for match, _url in rows if match.sport}
+    if len(sports) > 1:
+        raise ValueError("Result refresh match IDs must belong to one sport")
+
+    return await create_scrape_job(
+        db,
+        "refresh_results",
+        params={
+            "_created_by_user_id": user_id,
+            "command": "upcoming",
+            "sport": next(iter(sports), "football"),
+            "match_ids": requested_ids,
+            "match_links": [sources_by_match_id[match_id] for match_id in requested_ids],
+            "result_refresh": True,
+        },
+    )
+
+
 def _coerce_datetime(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -380,6 +422,52 @@ def _derive_match_status(record: dict, match_date: datetime | None) -> str:
     if match_date and match_date <= now:
         return "live"
     return "scheduled"
+
+
+def _has_final_result(match: Match) -> bool:
+    return (
+        match.home_score is not None
+        and match.away_score is not None
+        and _normalize_status(match.status) in FINAL_MATCH_STATUSES
+    )
+
+
+def _has_conflicting_final_score(match: Match | None, record: dict) -> bool:
+    """Return whether a completed match received a different complete score pair."""
+    if match is None or not _has_final_result(match):
+        return False
+
+    incoming_home_score = _coerce_int(record.get("home_score"))
+    incoming_away_score = _coerce_int(record.get("away_score"))
+    return (
+        incoming_home_score is not None
+        and incoming_away_score is not None
+        and (incoming_home_score, incoming_away_score) != (match.home_score, match.away_score)
+    )
+
+
+def _resolve_match_result(
+    match: Match | None, record: dict, match_date: datetime | None
+) -> tuple[str, int | None, int | None]:
+    """Keep a persisted final result stable across incomplete or conflicting refreshes."""
+    incoming_home_score = _coerce_int(record.get("home_score"))
+    incoming_away_score = _coerce_int(record.get("away_score"))
+    if match is not None and _has_final_result(match):
+        if _has_conflicting_final_score(match, record):
+            logger.warning(
+                "Ignored conflicting final score refresh for match_id=%s: persisted=%s-%s incoming=%s-%s",
+                getattr(match, "id", None),
+                match.home_score,
+                match.away_score,
+                incoming_home_score,
+                incoming_away_score,
+            )
+        return match.status, match.home_score, match.away_score
+
+    status = _derive_match_status(record, match_date)
+    if status == "scheduled":
+        return status, None, None
+    return status, incoming_home_score, incoming_away_score
 
 
 def _market_key_to_odds(
@@ -509,6 +597,14 @@ def _build_oddsharvester_args(job: ScrapeJob) -> list[str]:
     else:
         args.extend(["--market", ",".join(DEFAULT_MARKETS)])
 
+    match_links = params.get("match_links")
+    if match_links:
+        if not isinstance(match_links, list):
+            raise ValueError("match_links must be a list")
+        for match_link in match_links:
+            if match_link:
+                args.extend(["--match-link", str(match_link)])
+
     if params.get("target_bookmaker"):
         args.extend(["--target-bookmaker", str(params["target_bookmaker"])])
 
@@ -544,7 +640,7 @@ def _job_oddsharvester_timeout(job: ScrapeJob) -> int | None:
     return _coerce_int(params.get("timeout_seconds") or params.get("oddsharvester_timeout_seconds"))
 
 
-async def _upsert_match_from_record(db: AsyncSession, record: dict, sport: str) -> tuple[Match, bool]:
+async def _upsert_match_from_record(db: AsyncSession, record: dict, sport: str) -> tuple[Match, bool, bool]:
     match_link = record.get("match_link")
     source_id = _extract_source_id(match_link)
 
@@ -574,12 +670,8 @@ async def _upsert_match_from_record(db: AsyncSession, record: dict, sport: str) 
         db.add(match)
         await db.flush()
 
-    status = _derive_match_status(record, match_date)
-    home_score = _coerce_int(record.get("home_score"))
-    away_score = _coerce_int(record.get("away_score"))
-    if status == "scheduled":
-        home_score = None
-        away_score = None
+    final_score_conflict = _has_conflicting_final_score(match, record)
+    status, home_score, away_score = _resolve_match_result(match, record, match_date)
 
     match.external_id = source_id or match.external_id
     match.sport = sport
@@ -587,7 +679,7 @@ async def _upsert_match_from_record(db: AsyncSession, record: dict, sport: str) 
     match.away_team = str(record.get("away_team") or match.away_team)
     match.home_score = home_score
     match.away_score = away_score
-    match.match_date = match_date
+    match.match_date = match_date or match.match_date
     match.competition = record.get("league_name") or match.competition
     match.status = status
 
@@ -609,7 +701,7 @@ async def _upsert_match_from_record(db: AsyncSession, record: dict, sport: str) 
 
     await db.flush()
     current_snapshot = _match_broadcast_snapshot(match)
-    return match, previous_snapshot != current_snapshot
+    return match, previous_snapshot != current_snapshot, final_score_conflict
 
 
 async def _ingest_match_odds(db: AsyncSession, match: Match, record: dict) -> dict[str, int | dict[str, Any] | None]:
@@ -739,14 +831,32 @@ async def _ingest_scraped_payload(
     matches_written = 0
     odds_written = 0
     skipped_records = 0
+    final_score_conflicts = 0
     match_updates: dict[int, dict[str, Any]] = {}
     odds_updates: dict[int, dict[str, Any]] = {}
     for record in payload:
         if not isinstance(record, dict):
             skipped_records += 1
             continue
-        match, match_changed = await _upsert_match_from_record(db, record, sport=sport)
+        match, match_changed, final_score_conflict = await _upsert_match_from_record(db, record, sport=sport)
         matches_written += 1
+        if final_score_conflict:
+            final_score_conflicts += 1
+            await append_scrape_job_log(
+                db,
+                job.id,
+                action="final_score_conflict",
+                level="warning",
+                message=f"Retained persisted final score for match {match.id}; refresh reported a conflicting score",
+                metadata={
+                    "match_id": match.id,
+                    "persisted_score": {"home": match.home_score, "away": match.away_score},
+                    "incoming_score": {
+                        "home": _coerce_int(record.get("home_score")),
+                        "away": _coerce_int(record.get("away_score")),
+                    },
+                },
+            )
         odds_result = await _ingest_match_odds(db, match, record)
         odds_written += int(odds_result["written"])
 
@@ -766,6 +876,7 @@ async def _ingest_scraped_payload(
             "matches_upserted": matches_written,
             "odds_written": odds_written,
             "skipped_records": skipped_records,
+            "final_score_conflicts": final_score_conflicts,
         },
     )
 
@@ -819,7 +930,9 @@ async def execute_scrape_job(db: AsyncSession, job_id: int) -> ScrapeJob:
                 await db.flush()
                 return job
 
-        if job.job_type in {"oddsportal", "scrape_odds"}:
+        if job.job_type in {"oddsportal", "scrape_odds", "refresh_results"}:
+            if job.job_type == "refresh_results" and not (job.params or {}).get("match_links"):
+                raise ValueError("Result refresh job is missing source match links")
             args = _build_oddsharvester_args(job)
             timeout_seconds = _job_oddsharvester_timeout(job)
             scraper_engine = (job.params or {}).get("scraper_engine") or "playwright"

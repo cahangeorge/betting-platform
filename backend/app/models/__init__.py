@@ -7,8 +7,9 @@ class Base(DeclarativeBase):
 
 # ruff: noqa: E402
 from app.models.bankroll import Bankroll, BookmakerAccount, LedgerEntry
-from app.models.job import ScheduledJob
-from app.models.match import Match, MatchSource, MatchStat, OddsEntry
+from app.models.football_catalog import FootballLeagueCatalog
+from app.models.job import ScheduledJob, ScheduledJobRun
+from app.models.match import Match, MatchResultCorrection, MatchSource, MatchStat, OddsEntry
 from app.models.prediction import EnsemblePrediction, ModelPrediction, Prediction, PredictionRun, PredictionSession
 from app.models.scrape import ScrapedDataset, ScrapeJob, ScrapeJobLog
 from app.models.strategy import Strategy
@@ -21,6 +22,7 @@ __all__ = [
     "User",
     "Session",
     "Match",
+    "MatchResultCorrection",
     "OddsEntry",
     "MatchStat",
     "MatchSource",
@@ -41,6 +43,8 @@ __all__ = [
     "BookmakerAccount",
     "LedgerEntry",
     "ScheduledJob",
+    "ScheduledJobRun",
     "Strategy",
     "Todo",
+    "FootballLeagueCatalog",
 ]

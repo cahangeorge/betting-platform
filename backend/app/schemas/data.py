@@ -1,6 +1,9 @@
 from datetime import datetime
+from typing import Annotated
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
+
+from app.schemas.job import ScheduledJobRunResponse
 
 
 class ScrapeJobResponse(BaseModel):
@@ -16,6 +19,11 @@ class ScrapeJobResponse(BaseModel):
     output: str | None = None
     error: str | None = None
     created_at: datetime
+
+
+class ScrapeJobQueuedResponse(ScrapeJobResponse):
+    queued_run_id: int | None = None
+    queued_run: ScheduledJobRunResponse | None = None
 
 
 class ScrapeJobLogResponse(BaseModel):
@@ -41,6 +49,46 @@ class ScrapeJobCreateRequest(BaseModel):
     job_type: str = Field(validation_alias=AliasChoices("job_type", "type"))
     league: str | None = None
     params: dict | None = None
+
+
+class ResultRefreshRequest(BaseModel):
+    """Request a source-backed refresh for already known match results."""
+
+    match_ids: list[Annotated[int, Field(gt=0)]] = Field(min_length=1, max_length=100)
+
+
+class MatchResultCorrectionRequest(BaseModel):
+    """Admin-authorized manual correction to a final match score."""
+
+    home_score: int = Field(ge=0)
+    away_score: int = Field(ge=0)
+    source: str = Field(min_length=1, max_length=100)
+    reason: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("source", "reason")
+    @classmethod
+    def require_non_blank_audit_fields(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be blank")
+        return normalized
+
+
+class MatchResultCorrectionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    match_id: int
+    corrected_by_user_id: int
+    source: str
+    reason: str
+    previous_home_score: int | None = None
+    previous_away_score: int | None = None
+    previous_status: str
+    corrected_home_score: int
+    corrected_away_score: int
+    corrected_status: str
+    created_at: datetime
 
 
 class ScrapedDatasetResponse(BaseModel):

@@ -1,19 +1,10 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-
 import { expect, type Locator, type Page, test } from '@playwright/test';
 
 import { createAuthenticatedSession } from '../helpers/auth';
 import { backendRequest, withBearerToken } from '../helpers/backend';
+import { runDirectSql, shouldSkipDirectDatabaseCleanup } from '../helpers/database';
 import { cleanupSessionArtifacts } from '../helpers/cleanup';
 import type { AuthSession } from '../helpers/types';
-
-const execFileAsync = promisify(execFile);
-
-const DEFAULT_POSTGRES_CONTAINER = process.env.E2E_POSTGRES_CONTAINER ?? 'bet_postgres_1';
-const DEFAULT_DB_NAME = process.env.E2E_POSTGRES_DB ?? 'betting_platform';
-const DEFAULT_DB_USER = process.env.E2E_POSTGRES_USER ?? 'betuser';
-const DEFAULT_CONTAINER_RUNTIME = process.env.E2E_CONTAINER_RUNTIME ?? 'podman';
 
 interface ScheduledJob {
 	id: number;
@@ -52,29 +43,10 @@ async function createScheduledJobFromButton(
 }
 
 async function deleteScheduledJobs(jobIds: number[]): Promise<void> {
-	if (jobIds.length === 0) return;
+	if (jobIds.length === 0 || shouldSkipDirectDatabaseCleanup()) return;
 
 	try {
-		await execFileAsync(
-			DEFAULT_CONTAINER_RUNTIME,
-			[
-				'exec',
-				'-i',
-				DEFAULT_POSTGRES_CONTAINER,
-				'psql',
-				'-U',
-				DEFAULT_DB_USER,
-				'-d',
-				DEFAULT_DB_NAME,
-				'-t',
-				'-A',
-				'-c',
-				`DELETE FROM scheduled_jobs WHERE id IN (${jobIds.join(', ')});`
-			],
-			{
-				maxBuffer: 1024 * 1024 * 4
-			}
-		);
+		await runDirectSql(`DELETE FROM scheduled_jobs WHERE id IN (${jobIds.join(', ')});`);
 	} catch (error) {
 		console.warn(
 			`best-effort scheduled job cleanup skipped: ${
@@ -83,6 +55,7 @@ async function deleteScheduledJobs(jobIds: number[]): Promise<void> {
 		);
 	}
 }
+
 
 test('scheduled jobs can be saved from UI controls and toggled in hybrid mode', async ({ page, context }) => {
 	const session = await createAuthenticatedSession(context);

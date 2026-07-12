@@ -92,32 +92,39 @@
 	</div>
 
 	{#if useAppShell}
-		<div class="hidden min-h-screen min-w-0 grid-cols-[220px_minmax(0,1fr)_320px] pt-16 lg:grid">
-			<aside class="relative" aria-label="Navigation sidebar">
-				<div class="fixed left-0 top-16 z-30 h-[calc(100vh-64px)] w-[220px]">
-					<Sidebar bind:open={sidebarOpen} user={data.user} />
-				</div>
-			</aside>
+		<div class="hidden min-h-screen min-w-0 pt-16 lg:block">
+			<Sidebar bind:open={sidebarOpen} user={data.user} />
 
-			<main id="main-content" class="min-h-[calc(100vh-4rem)] min-w-0">
-				<div class="min-w-0 max-w-none p-4 lg:p-6">
+			<main id="main-content" class="min-h-[calc(100vh-4rem)] min-w-0 pl-16 xl:pl-60">
+				<div class="min-w-0 max-w-none p-5 lg:p-6 xl:p-8">
 					{#if isNavigating}
 						<div class="flex items-center justify-center py-20" transition:fade={{ duration: 150 }}>
 							<Loading message="Loading..." />
 						</div>
 					{:else}
-						<div class="min-w-0" transition:fade={{ duration: 200, delay: 50 }}>
-							{@render children()}
-						</div>
+						{#key $page.url.pathname}
+							<div class="min-w-0" transition:fade={{ duration: 200, delay: 50 }}>
+								{@render children()}
+							</div>
+						{/key}
 					{/if}
 				</div>
 			</main>
 
-			<aside class="relative" aria-label="Bet slip">
-				<div class="sticky top-16 h-[calc(100vh-64px)] overflow-y-auto border-l border-border scroll-thin">
-					<BetSlipDrawer />
+		</div>
+
+		<div class="hidden lg:block">
+			{#if $betslipHasLegs}
+				<BetslipFAB onclick={() => (betslipOpen = true)} />
+			{/if}
+			{#if betslipOpen}
+				<div class="fixed inset-0 z-50" transition:fade={{ duration: 150 }}>
+					<button class="absolute inset-0 bg-black/50 backdrop-blur-sm" onclick={() => (betslipOpen = false)} aria-label="Close bet slip"></button>
+					<div class="absolute bottom-6 right-6 max-h-[calc(100vh-7rem)] w-[26rem] overflow-hidden border border-border bg-card" transition:slide={{ duration: 250, axis: 'y' }}>
+						<div class="h-full overflow-y-auto scroll-thin"><BetSlipDrawer bind:open={betslipOpen} /></div>
+					</div>
 				</div>
-			</aside>
+			{/if}
 		</div>
 
 		<div class="pb-16 pt-16 lg:hidden">
@@ -125,16 +132,18 @@
 				<Sidebar bind:open={sidebarOpen} user={data.user} />
 			{/if}
 
-			<main id="main-content-mobile" class="min-h-[calc(100vh-4rem)] min-w-0">
+			<main id="main-content" class="min-h-[calc(100vh-4rem)] min-w-0">
 				<div class="min-w-0 max-w-none p-4">
 					{#if isNavigating}
 						<div class="flex items-center justify-center py-20" transition:fade={{ duration: 150 }}>
 							<Loading message="Loading..." />
 						</div>
 					{:else}
-						<div class="min-w-0" transition:fade={{ duration: 200, delay: 50 }}>
-							{@render children()}
-						</div>
+						{#key $page.url.pathname}
+							<div class="min-w-0" transition:fade={{ duration: 200, delay: 50 }}>
+								{@render children()}
+							</div>
+						{/key}
 					{/if}
 				</div>
 			</main>
@@ -162,7 +171,7 @@
 				</div>
 			{/if}
 
-			<BottomNav />
+			<BottomNav onOpenNavigation={toggleSidebar} />
 		</div>
 	{:else}
 		<main id="main-content" class="min-h-[calc(100vh-4rem)] pt-16">
@@ -172,9 +181,11 @@
 						<Loading message="Loading..." />
 					</div>
 				{:else}
-					<div transition:fade={{ duration: 200, delay: 50 }}>
-						{@render children()}
-					</div>
+					{#key $page.url.pathname}
+						<div transition:fade={{ duration: 200, delay: 50 }}>
+							{@render children()}
+						</div>
+					{/key}
 				{/if}
 			</div>
 		</main>

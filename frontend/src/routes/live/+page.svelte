@@ -9,6 +9,8 @@
 	import { betslip, createBetslipLeg } from '$lib/stores/betslip';
 	import { matchEvents, oddsUpdates, predictionUpdates } from '$lib/stores/liveSocket';
 	import { browser } from '$app/environment';
+	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { onMount } from 'svelte';
 
 	let { data }: { data: PageData } = $props();
@@ -28,7 +30,7 @@
 	let minLiveEdge = $state(1);
 	let allLeagues = $state<string[]>(['All']);
 	let lastUpdated = $state(new Date().toISOString());
-	let liveMatches = $state<PageData['matches']>([]);
+	let liveMatches = $state<PageData['matches'] | null>(null);
 	let isLoading = $state(false);
 	let errorMessage = $state<string | null>(null);
 	let dataAgeSeconds = $state<number | null>(null);
@@ -53,12 +55,12 @@
 		timestamp: string;
 	};
 
-	function sanitizeLeague(value: string): string {
+	function sanitizeLeague(value: string, leagueOptions: string[] = allLeagues): string {
 		const normalized = value.trim();
 		if (!normalized || normalized === 'All') {
 			return 'All';
 		}
-		if (allLeagues.includes(normalized)) {
+		if (leagueOptions.includes(normalized)) {
 			return normalized;
 		}
 		return 'All';
@@ -66,9 +68,9 @@
 
 	$effect(() => {
 		minLiveEdge = data.minLiveValueEdge ?? 1;
+		const nextMatches = data.matches || [];
 		statusFilter = (data.statusFilter as 'All' | 'Live' | 'Halftime' | 'Finished') ?? 'All';
-		selectedLeague = sanitizeLeague((data.selectedLeague as string) || 'All');
-		liveMatches = data.matches || [];
+		liveMatches = nextMatches;
 		lastUpdated = data.lastUpdated || new Date().toISOString();
 		errorMessage = data.error ?? null;
 		dataAgeSeconds = data.dataAgeSeconds ?? null;
@@ -80,9 +82,9 @@
 		heartbeatAt = (data.heartbeatAt as string) || new Date().toISOString();
 		jobsActive = (data.jobsActive as number) ?? 0;
 
-		allLeagues = getLeagueOptions(liveMatches);
-
-		selectedLeague = sanitizeLeague(selectedLeague);
+		const nextLeagueOptions = getLeagueOptions(nextMatches);
+		allLeagues = nextLeagueOptions;
+		selectedLeague = sanitizeLeague((data.selectedLeague as string) || 'All', nextLeagueOptions);
 	});
 
 	function buildLoadParams() {
@@ -108,15 +110,28 @@
 		return params;
 	}
 
-	function syncQueryToUrl() {
-		if (!browser) {
-			return;
+	async function syncQueryToUrl(): Promise<boolean> {
+		if (!browser || page.url.pathname !== '/live') {
+			return false;
 		}
 
 		const params = buildQueryParams();
 		const query = params.toString();
-		const pathname = window.location.pathname;
-		window.history.replaceState({}, '', query ? `${pathname}?${query}` : pathname);
+		const nextUrl = query ? `/live?${query}` : '/live';
+		const currentUrl = `${page.url.pathname}${page.url.search}`;
+
+		if (currentUrl === nextUrl) {
+			return false;
+		}
+
+		await goto(nextUrl, {
+			replaceState: true,
+			noScroll: true,
+			keepFocus: true,
+			invalidateAll: true,
+			state: page.state
+		});
+		return true;
 	}
 
 	async function fetchLiveHeartbeat(): Promise<LiveHeartbeatSnapshot | null> {
@@ -155,8 +170,9 @@
 			bridgeIssues = heartbeat?.bridge_issues ?? bridgeIssues;
 			heartbeatAt = heartbeat?.timestamp ?? response.generated_at;
 			isDemo = response.is_demo || !bridgeReady;
-			allLeagues = getLeagueOptions(response.matches);
-			selectedLeague = sanitizeLeague(selectedLeague);
+			const nextLeagueOptions = getLeagueOptions(response.matches);
+			allLeagues = nextLeagueOptions;
+			selectedLeague = sanitizeLeague(selectedLeague, nextLeagueOptions);
 		} catch (error) {
 			errorMessage = error instanceof Error ? error.message : 'Failed to refresh live matches.';
 		} finally {
@@ -179,7 +195,7 @@
 		}, 150);
 	}
 
-	const renderedMatches = $derived.by(() => (liveMatches.length > 0 ? liveMatches : (data.matches ?? [])));
+	const renderedMatches = $derived.by(() => liveMatches ?? data.matches ?? []);
 
 	const filteredMatches = $derived.by(() => {
 		const matches = [...renderedMatches];
@@ -283,7 +299,12 @@
 	});
 
 	$effect(() => {
-		if (!didInitialize) {
+		const pathname = page.url.pathname;
+		statusFilter;
+		selectedLeague;
+		minLiveEdge;
+
+		if (!browser || !didInitialize || pathname !== '/live') {
 			return;
 		}
 
@@ -291,10 +312,26 @@
 			clearTimeout(refreshDebounce);
 		}
 
-		refreshDebounce = setTimeout(() => {
-			syncQueryToUrl();
-			void refreshLiveMatches();
+		const timeout = setTimeout(() => {
+			void (async () => {
+				try {
+					const navigated = await syncQueryToUrl();
+					if (!navigated && page.url.pathname === '/live') {
+						await refreshLiveMatches();
+					}
+				} catch (error) {
+					errorMessage = error instanceof Error ? error.message : 'Failed to refresh live matches.';
+				}
+			})();
 		}, 350);
+		refreshDebounce = timeout;
+
+		return () => {
+			clearTimeout(timeout);
+			if (refreshDebounce === timeout) {
+				refreshDebounce = undefined;
+			}
+		};
 	});
 
 	function getStatusBadge(status: string): { variant: string; label: string } {
@@ -605,7 +642,7 @@
 		</div>
 	</Card>
 
-	{#if isLoading && liveMatches.length === 0}
+	{#if isLoading && (liveMatches?.length ?? 0) === 0}
 		<div class="flex justify-center py-12">
 			<Loading />
 		</div>

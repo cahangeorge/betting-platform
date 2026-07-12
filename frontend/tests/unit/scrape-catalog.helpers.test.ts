@@ -8,7 +8,13 @@ import {
 	buildHistoryDateRange,
 	buildScrapeLeagueSlugs,
 	buildWorldCupSeasonsFromDateRange,
-	isLeagueScrapeSelectable
+	catalogAvailabilityLabel,
+	filterScrapeLeagueGroups,
+	getLargeScrapeScopeWarning,
+	isLeagueScrapeSelectable,
+	normaliseCatalogAvailability,
+	parseCatalogMetadata,
+	parseScrapeCatalog
 } from '../../src/routes/scrape/catalog.helpers.ts';
 
 test('history presets expose long World Cup backfill ranges', () => {
@@ -45,6 +51,84 @@ test('omits leagues that do not have scrape support', () => {
 		isLeagueScrapeSelectable({ scrape_slug: 'world-cup' }),
 		true
 	);
+});
+
+test('keeps the legacy catalog array working while consuming dynamic source, status, and refresh fields', () => {
+	const catalog = parseScrapeCatalog([
+		{
+			country: 'Australia',
+			leagues: [
+				{
+					id: 'a-league',
+					name: 'A-League',
+					matches_count: 0,
+					scrape_slug: 'australia-a-league',
+					source: 'discovered',
+					status: 'validated',
+					last_seen_at: '2026-07-12T09:30:00Z'
+				}
+			]
+		}
+	]);
+
+	assert.equal(catalog.countries.length, 1);
+	assert.equal(catalog.source, 'discovered');
+	assert.equal(catalog.status, 'validated');
+	assert.equal(catalog.lastRefreshedAt, '2026-07-12T09:30:00Z');
+	assert.equal(catalogAvailabilityLabel(catalog.status), 'Ready to scrape');
+});
+
+test('makes unvalidated and unavailable dynamic leagues non-selectable without changing legacy behavior', () => {
+	assert.equal(normaliseCatalogAvailability('available'), 'validated');
+	assert.equal(normaliseCatalogAvailability('pending_validation'), 'discovered');
+	assert.equal(isLeagueScrapeSelectable({ scrape_slug: 'australia-a-league', status: 'validated' }), true);
+	assert.equal(isLeagueScrapeSelectable({ scrape_slug: 'australia-npl', status: 'discovered' }), false);
+	assert.equal(isLeagueScrapeSelectable({ scrape_slug: 'australia-state', status: 'unavailable' }), false);
+	assert.deepEqual(parseCatalogMetadata({ source: 'oddsportal', status: 'available', last_seen_at: '2026-07-12T10:00:00Z' }), {
+		source: 'oddsportal',
+		status: 'validated',
+		lastRefreshedAt: '2026-07-12T10:00:00Z'
+	});
+});
+
+test('keeps every returned league in country groups and searches by country, name, or scraper slug', () => {
+	const countries = [
+		{
+			country: 'England',
+			leagues: [
+				{ id: 'premier', name: 'Premier League', matches_count: 380, scrape_slug: 'england-premier-league' },
+				{ id: 'league-one', name: 'League One', matches_count: 552, scrape_slug: 'england-league-one' }
+			]
+		},
+		{
+			country: 'Romania',
+			leagues: [{ id: 'superliga', name: 'SuperLiga', matches_count: 240, scrape_slug: 'romania-superliga' }]
+		}
+	];
+
+	assert.deepEqual(
+		filterScrapeLeagueGroups(countries, [], '').map((country) => country.leagues.map((league) => league.id)),
+		[['premier', 'league-one'], ['superliga']]
+	);
+	assert.deepEqual(filterScrapeLeagueGroups(countries, [], 'one').map((country) => country.country), ['England']);
+	assert.deepEqual(filterScrapeLeagueGroups(countries, [], 'romania-superliga').map((country) => country.country), ['Romania']);
+	assert.deepEqual(filterScrapeLeagueGroups(countries, ['England'], '').map((country) => country.country), ['England']);
+});
+
+test('requires acknowledgement only for broad or long historical scrape scopes', () => {
+	assert.equal(getLargeScrapeScopeWarning(24, 19), null);
+	assert.deepEqual(getLargeScrapeScopeWarning(25, 10), {
+		key: '25:10',
+		queuedHistoricJobs: 10,
+		estimatedLeagueSeasonWork: 250,
+		message: 'This queues 10 historical backend jobs covering up to 250 league-season combinations (25 supported leagues × 10 seasons).'
+	});
+	assert.deepEqual(getLargeScrapeScopeWarning(1, 20), {
+		key: '1:20',
+		queuedHistoricJobs: 20,
+		estimatedLeagueSeasonWork: 20,
+		message: 'This queues 20 historical backend jobs covering up to 20 league-season combinations (1 supported league × 20 seasons).'
+	});
 });
 
 test('builds a concrete date range for history presets', () => {

@@ -27,14 +27,30 @@ class Settings(BaseSettings):
     bridge_timeout_seconds: int = 180
     oddsharvester_timeout_seconds: int = 600
 
-    scheduled_jobs_enabled: bool = True
+    scheduled_jobs_enabled: bool = False
     scheduled_jobs_interval_seconds: int = 60
+    task_queue_backend: str = "inline"
+    redis_url: str = "redis://localhost:6379/0"
+    taskiq_broker_url: str = ""
+    taskiq_result_backend_url: str = ""
+    taskiq_queue_name: str = "bet"
+    taskiq_consumer_group: str = "bet-workers"
+    taskiq_poll_interval_seconds: int = 60
+    taskiq_result_ttl_seconds: int = 86400
 
     penaltyblog_python: str = ""
     penaltyblog_bridge: str = ""
     soccerdata_python: str = ""
     soccerdata_bridge: str = ""
     oddsharvester_python: str = ""
+
+    @property
+    def resolved_taskiq_broker_url(self) -> str:
+        return self.taskiq_broker_url or self.redis_url
+
+    @property
+    def resolved_taskiq_result_backend_url(self) -> str:
+        return self.taskiq_result_backend_url or self.redis_url
 
     model_config = {"env_prefix": "BET_", "env_file": ".env", "extra": "allow"}
 

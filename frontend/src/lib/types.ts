@@ -365,6 +365,7 @@ export interface PlaceBetRequest {
 
 export interface TicketGenerateRequest {
 	bankroll_id?: number | null;
+	run_id?: number;
 	ticket_count: number;
 	difficulty: string;
 	market_types: string[];
@@ -471,6 +472,8 @@ export interface ScrapeJob {
 	completed_at: string | null;
 	error: string | null;
 	output?: string | null;
+	queued_run_id?: number | null;
+	queued_run?: ScheduledJobRun | null;
 }
 
 export interface ScrapeJobCreateRequest {
@@ -512,6 +515,46 @@ export interface ScheduledJobCreateRequest {
 	cron_expression: string;
 	task_type: string;
 	config?: Record<string, unknown>;
+}
+
+export type ScheduledJobRunStatus =
+	| 'queued'
+	| 'pending'
+	| 'running'
+	| 'completed'
+	| 'partial'
+	| 'failed'
+	| 'enqueue_failed'
+	| 'skipped'
+	| 'cancelled'
+	| string;
+
+export interface ScheduledJobRun {
+	id: number;
+	job_id: number | null;
+	scheduled_job_id: number | null;
+	scrape_job_id: number | null;
+	task_type: string;
+	status: ScheduledJobRunStatus;
+	detail: string | null;
+	artifacts: Record<string, unknown> | null;
+	taskiq_task_id: string | null;
+	attempt: number | null;
+	queued_at: string | null;
+	started_at: string | null;
+	finished_at: string | null;
+	duration_ms: number | null;
+	error: string | null;
+	triggered_by: string | null;
+	due_at: string | null;
+	created_at: string | null;
+}
+
+export interface ScheduledJobRunPage {
+	runs: ScheduledJobRun[];
+	total: number;
+	page: number;
+	per_page: number;
 }
 
 // ─── Strategy Run Results ─────────────────────────────
@@ -608,6 +651,10 @@ export interface PnlPoint {
 export interface Country {
 	country: string;
 	leagues: LeagueInfo[];
+	/** Optional metadata returned by the dynamic OddsPortal catalog. */
+	source?: string | null;
+	status?: string | null;
+	last_refreshed_at?: string | null;
 }
 
 export interface LeagueInfo {
@@ -615,6 +662,23 @@ export interface LeagueInfo {
 	name: string;
 	matches_count: number;
 	scrape_slug?: string | null;
+	/** `validated`, `discovered`, or `unavailable` when the catalog provides it. */
+	status?: string | null;
+	source?: string | null;
+	source_url?: string | null;
+	last_refreshed_at?: string | null;
+	last_seen_at?: string | null;
+}
+
+/**
+ * The catalog endpoint remains backwards compatible with its original array
+ * response. Dynamic catalog deployments may instead return this envelope.
+ */
+export interface CatalogResponse {
+	countries: Country[];
+	source?: string | null;
+	status?: string | null;
+	last_refreshed_at?: string | null;
 }
 
 // ─── Strategies ───────────────────────────────────────

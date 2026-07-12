@@ -1,0 +1,59 @@
+name: Backend
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: bet
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d bet"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install backend
+        run: python -m pip install -e '.[dev]'
+      - name: Postgres migration smoke
+        env:
+          BET_DATABASE_URL: postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/bet
+        run: alembic upgrade head
+      - name: Taskiq Redis import smoke
+        env:
+          BET_TASK_QUEUE_BACKEND: taskiq
+          BET_REDIS_URL: redis://127.0.0.1:6379/0
+        run: |
+          python - <<'PY'
+          from app.tasks.broker import broker
+          from app.tasks.jobs import execute_scheduled_job_run_task
+          print(type(broker).__name__, execute_scheduled_job_run_task.task_name)
+          PY
+      - name: Run backend tests
+        run: python -m pytest -q

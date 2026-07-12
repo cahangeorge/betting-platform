@@ -43,6 +43,12 @@ services:
       BET_CORS_ORIGINS: "*"
       BET_COOKIE_SECURE: "true"
       BET_DEBUG: "false"
+      BET_TASK_QUEUE_BACKEND: taskiq
+      BET_REDIS_URL: redis://redis:6379/0
+      BET_TASKIQ_RESULT_BACKEND_URL: redis://redis:6379/1
+      BET_TASKIQ_QUEUE_NAME: bet
+      BET_TASKIQ_CONSUMER_GROUP: bet-workers
+      BET_SCHEDULED_JOBS_ENABLED: "false"
       BET_ODDSHARVESTER_PYTHON: /workspace/OddsHarvester/.venv/bin/python
       BET_PENALTYBLOG_PYTHON: /workspace/penaltyblog/.venv/bin/python
       BET_PENALTYBLOG_BRIDGE: /workspace/betfront/scripts/penaltyblog_bridge.py
@@ -62,6 +68,61 @@ services:
         condition: service_healthy
     command: >
       sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    restart: unless-stopped
+    networks:
+      - betnet
+
+  backend-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      BET_DATABASE_URL: postgresql+asyncpg://betuser:${POSTGRES_PASSWORD:-betpassword_dev}@postgres:5432/betting_platform
+      BET_JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production}
+      BET_TASK_QUEUE_BACKEND: taskiq
+      BET_REDIS_URL: redis://redis:6379/0
+      BET_TASKIQ_RESULT_BACKEND_URL: redis://redis:6379/1
+      BET_TASKIQ_QUEUE_NAME: bet
+      BET_TASKIQ_CONSUMER_GROUP: bet-workers
+      BET_ODDSHARVESTER_PYTHON: /workspace/OddsHarvester/.venv/bin/python
+      BET_PENALTYBLOG_PYTHON: /workspace/penaltyblog/.venv/bin/python
+      BET_PENALTYBLOG_BRIDGE: /workspace/betfront/scripts/penaltyblog_bridge.py
+      BET_SOCCERDATA_PYTHON: /workspace/soccerdata/.venv/bin/python
+      BET_SOCCERDATA_BRIDGE: /workspace/betfront/scripts/soccerdata_bridge.py
+    volumes:
+      - ./OddsHarvester:/workspace/OddsHarvester:ro
+      - ./penaltyblog:/workspace/penaltyblog:ro
+      - ./soccerdata:/workspace/soccerdata:ro
+      - ./betfront:/workspace/betfront:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: taskiq worker app.tasks.broker:broker app.tasks.jobs
+    restart: unless-stopped
+    networks:
+      - betnet
+
+  backend-scheduler:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      BET_DATABASE_URL: postgresql+asyncpg://betuser:${POSTGRES_PASSWORD:-betpassword_dev}@postgres:5432/betting_platform
+      BET_JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production}
+      BET_TASK_QUEUE_BACKEND: taskiq
+      BET_REDIS_URL: redis://redis:6379/0
+      BET_TASKIQ_RESULT_BACKEND_URL: redis://redis:6379/1
+      BET_TASKIQ_QUEUE_NAME: bet
+      BET_TASKIQ_CONSUMER_GROUP: bet-workers
+      BET_TASKIQ_POLL_INTERVAL_SECONDS: 60
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: python -m app.tasks.jobs
     restart: unless-stopped
     networks:
       - betnet

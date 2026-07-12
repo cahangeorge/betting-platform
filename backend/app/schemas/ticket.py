@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class TicketLegResponse(BaseModel):
@@ -105,6 +105,7 @@ class TicketSettlementRunResponse(BaseModel):
 
 class TicketGenerateRequest(BaseModel):
     bankroll_id: int | None = None
+    run_id: int | None = Field(default=None, ge=1)
     ticket_count: int = 5
     difficulty: str = "balanced"
     market_types: list[str] = ["1x2"]

@@ -33,7 +33,8 @@ Integrated local defaults: frontend `127.0.0.1:5175`, backend `127.0.0.1:8001`.
 
 Use `docs/codex/model-routing.md` as the routing policy.
 
-- Start with `gpt-5.3-codex-spark` explorer agents for read-only lookup.
-- Use `gpt-5.4` medium for normal implementation.
-- Escalate to `gpt-5.5` high only for verification gates, high-risk architecture, security/auth/billing, migrations, scraper brittleness, or repeated failures.
+- Start with `gpt-5.3-codex-spark` explorer agents for pure read-only lookup.
+- Use `gpt-5.6-luna` low/medium for lightweight analysis, writing, or vision where Spark is too narrow.
+- Use `gpt-5.6-terra` medium for normal implementation.
+- Escalate to `gpt-5.6-sol` high/xhigh/max only for verification gates, high-risk architecture, security/auth/billing, migrations, scraper brittleness, or repeated failures.
 - Keep context small: activate only the skill/agent docs needed for the current task.

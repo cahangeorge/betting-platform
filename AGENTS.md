@@ -122,6 +122,7 @@ Global MCP servers, shared skills, hooks, and the oh-my-codex plugin stay in `$C
 Use `docs/codex/model-routing.md` for cost/performance routing.
 
 - Explorer agents use `gpt-5.3-codex-spark` with low reasoning for cheap read-only lookup.
-- Executor agents use `gpt-5.4` with medium reasoning for normal implementation.
-- Verifier/risk-review agents use `gpt-5.5` with high reasoning only for final evidence, high-risk decisions, or repeated failures.
+- Lightweight analysis/writing/vision agents use `gpt-5.6-luna` with low/medium reasoning when Spark is too narrow.
+- Executor agents use `gpt-5.6-terra` with medium reasoning for normal implementation.
+- Verifier/risk-review agents use `gpt-5.6-sol` with high reasoning only for final evidence, high-risk decisions, or repeated failures.
 - Do not load every skill/agent up front; activate only what the current task needs.

@@ -115,6 +115,32 @@
 		--chart-4: 280 65% 60%;
 		--chart-5: 340 75% 55%;
 	}
+
+	/* Dark is the decision-workbench default. Add .light only when the user opts in. */
+	:root:not(.light) {
+		--background: 222.2 84% 4.9%;
+		--foreground: 210 40% 98%;
+		--card: 222.2 47.4% 8.5%;
+		--card-foreground: 210 40% 98%;
+		--popover: 222.2 47.4% 8.5%;
+		--popover-foreground: 210 40% 98%;
+		--primary: 165 72% 45%;
+		--primary-foreground: 222.2 47.4% 11.2%;
+		--secondary: 217.2 32.6% 17.5%;
+		--secondary-foreground: 210 40% 98%;
+		--muted: 217.2 32.6% 17.5%;
+		--muted-foreground: 215 20.2% 65.1%;
+		--accent: 217.2 32.6% 17.5%;
+		--accent-foreground: 210 40% 98%;
+		--destructive: 0 72% 51%;
+		--destructive-foreground: 210 40% 98%;
+		--border: 217.2 28% 21%;
+		--input: 217.2 28% 25%;
+		--ring: 165 72% 45%;
+		--football-green: 165 72% 45%;
+		--football-blue: 204 88% 58%;
+		--football-gold: 42 94% 60%;
+	}
 }
 
 @layer base {
@@ -124,6 +150,7 @@
 	body {
 		@apply bg-background text-foreground;
 		font-family: var(--font-sans);
+		letter-spacing: -0.01em;
 	}
 
 	/* Skip-to-content link (accessible, visually hidden until focused) */
@@ -154,6 +181,21 @@
 			transition-duration: 0.01ms !important;
 			scroll-behavior: auto !important;
 		}
+	}
+}
+
+@layer components {
+	.workbench-page {
+		@apply mx-auto w-full max-w-7xl space-y-6;
+	}
+	.workbench-eyebrow {
+		@apply text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground;
+	}
+	.workbench-heading {
+		@apply text-3xl font-semibold tracking-tight text-foreground sm:text-4xl;
+	}
+	.workbench-surface {
+		@apply border border-border bg-card shadow-[0_16px_48px_rgba(0,0,0,0.16)];
 	}
 }
 

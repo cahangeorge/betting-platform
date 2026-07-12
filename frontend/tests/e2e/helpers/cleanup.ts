@@ -1,45 +1,21 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-
+import { runDirectSql, shouldSkipDirectDatabaseCleanup } from './database';
 import { deleteSeededMatches } from './seed';
 import type { AuthSession } from './types';
-
-const execFileAsync = promisify(execFile);
-
-const DEFAULT_POSTGRES_CONTAINER = process.env.E2E_POSTGRES_CONTAINER ?? 'bet_postgres_1';
-const DEFAULT_DB_NAME = process.env.E2E_POSTGRES_DB ?? 'betting_platform';
-const DEFAULT_DB_USER = process.env.E2E_POSTGRES_USER ?? 'betuser';
-const DEFAULT_CONTAINER_RUNTIME = process.env.E2E_CONTAINER_RUNTIME ?? 'podman';
 
 function sqlLiteral(value: string): string {
 	return `'${value.split("'").join("''")}'`;
 }
 
 async function runSql(sql: string): Promise<void> {
-	await execFileAsync(
-		DEFAULT_CONTAINER_RUNTIME,
-		[
-			'exec',
-			'-i',
-			DEFAULT_POSTGRES_CONTAINER,
-			'psql',
-			'-U',
-			DEFAULT_DB_USER,
-			'-d',
-			DEFAULT_DB_NAME,
-			'-t',
-			'-A',
-			'-c',
-			sql
-		],
-		{
-			maxBuffer: 1024 * 1024 * 4
-		}
-	);
+	if (shouldSkipDirectDatabaseCleanup()) return;
+	await runDirectSql(sql);
 }
+
 
 export async function cleanupSessionArtifacts(session: AuthSession): Promise<void> {
 	const competition = `E2E ${session.namespace}`;
+
+	if (shouldSkipDirectDatabaseCleanup()) return;
 
 	await deleteSeededMatches(competition);
 

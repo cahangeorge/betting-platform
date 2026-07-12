@@ -44,6 +44,32 @@ class Match(Base):
     ticket_legs: Mapped[list["TicketLeg"]] = relationship(
         "TicketLeg", back_populates="match", cascade="all, delete-orphan"
     )
+    result_corrections: Mapped[list["MatchResultCorrection"]] = relationship(
+        "MatchResultCorrection", back_populates="match", cascade="all, delete-orphan"
+    )
+
+
+class MatchResultCorrection(Base):
+    """An explicit, attributable correction to a persisted final match result."""
+
+    __tablename__ = "match_result_corrections"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    match_id: Mapped[int] = mapped_column(ForeignKey("matches.id", ondelete="CASCADE"), nullable=False, index=True)
+    corrected_by_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    source: Mapped[str] = mapped_column(String(100), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    previous_home_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    previous_away_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    previous_status: Mapped[str] = mapped_column(String(50), nullable=False)
+    corrected_home_score: Mapped[int] = mapped_column(Integer, nullable=False)
+    corrected_away_score: Mapped[int] = mapped_column(Integer, nullable=False)
+    corrected_status: Mapped[str] = mapped_column(String(50), nullable=False, default="finished")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    match: Mapped["Match"] = relationship("Match", back_populates="result_corrections")
 
 
 class OddsEntry(Base):

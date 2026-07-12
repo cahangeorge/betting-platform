@@ -27,7 +27,7 @@
 	const pages: CommandItem[] = [
 		{
 			id: 'dashboard',
-			label: 'Dashboard',
+			label: 'Home',
 			icon: Home,
 			shortcut: 'H',
 			group: 'primary',
@@ -35,19 +35,19 @@
 		},
 		{
 			id: 'scrape',
-			label: 'Scrape',
+			label: 'Prepare data',
 			icon: Download,
 			shortcut: 'S',
 			group: 'primary',
-			action: () => goto('/scrape')
+			action: () => goto('/prepare')
 		},
 		{
 			id: 'predict',
-			label: 'Predict',
+			label: 'Analyze',
 			icon: Brain,
 			shortcut: 'P',
 			group: 'primary',
-			action: () => goto('/predict')
+			action: () => goto('/analyze')
 		},
 		{
 			id: 'tickets',
@@ -59,52 +59,52 @@
 		},
 		{
 			id: 'account',
-			label: 'Account',
+			label: 'Account settings',
 			icon: User,
 			shortcut: 'A',
 			group: 'primary',
-			action: () => goto('/account')
+			action: () => goto('/settings/account')
 		},
 		{
 			id: 'data',
-			label: 'Data',
+			label: 'Data explorer',
 			icon: Database,
 			shortcut: 'D',
 			group: 'secondary',
-			action: () => goto('/data')
+			action: () => goto('/prepare/data')
 		},
 		{
 			id: 'configuratii',
-			label: 'Configuratii',
+			label: 'Strategies',
 			icon: Settings,
 			shortcut: 'C',
 			group: 'secondary',
-			action: () => goto('/configuratii')
+			action: () => goto('/settings/strategies')
 		},
 		{
 			id: 'live',
-			label: 'Live',
+			label: 'Live opportunities',
 			icon: Eye,
 			shortcut: 'L',
 			group: 'secondary',
-			action: () => goto('/live')
+			action: () => goto('/opportunities?view=live')
 		},
 		{
 			id: 'value-bets',
-			label: 'Value Bets',
+			label: 'Value opportunities',
 			icon: Zap,
 			group: 'secondary',
-			action: () => goto('/value-bets')
+			action: () => goto('/opportunities?view=value')
 		}
 	];
 
 	const actions: CommandItem[] = [
 		{
 			id: 'run-prediction',
-			label: 'Run Prediction',
+			label: 'Run analysis',
 			icon: Zap,
 			group: 'action',
-			action: () => goto('/predict')
+			action: () => goto('/analyze')
 		},
 		{
 			id: 'place-bet',
@@ -115,10 +115,10 @@
 		},
 		{
 			id: 'view-live',
-			label: 'Check Live Markets',
+			label: 'Check live opportunities',
 			icon: Eye,
 			group: 'action',
-			action: () => goto('/live')
+			action: () => goto('/opportunities?view=live')
 		}
 	];
 
@@ -156,9 +156,9 @@
 	);
 
 	const sectionMeta: Record<CommandItem['group'], string> = {
-		primary: 'Core Workflow',
+		primary: 'Workspace',
 		action: 'Actions',
-		secondary: 'Explore',
+		secondary: 'Tools',
 		match: 'Matches'
 	};
 

@@ -18,9 +18,9 @@ test('dashboard can add a seeded match to the slip and place a ticket', async ({
 
 		await page.goto('/');
 		await page.waitForLoadState('networkidle');
-		const futureTab = page.getByRole('tab', { name: /^Viitor\b/ });
+		const futureTab = page.getByRole('tab', { name: /^Today\b/ });
 		await futureTab.click();
-		await expect(page.getByRole('heading', { name: 'Meciuri viitoare si predictii' })).toBeVisible();
+		await expect(page.getByRole('heading', { name: 'Upcoming matches and predictions' })).toBeVisible();
 		await expect(page.getByText(fixtures.scheduledMatchLabel).first()).toBeVisible();
 
 		await page.getByRole('button', { name: /1\s+1\.91/ }).first().click();

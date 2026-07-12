@@ -72,9 +72,9 @@
 			>
 				<Menu class="w-5 h-5 text-muted-foreground" />
 			</Button>
-			<a href={homeHref} class="flex items-center space-x-3">
-				<span class="text-lg font-extrabold tracking-tight hidden sm:inline text-foreground font-sport tracking-wider">
-					Betfront
+			<a href={homeHref} class="flex items-center space-x-3" aria-label="Betfront home">
+				<span class="hidden text-sm font-semibold tracking-tight text-foreground sm:inline">
+					Betfront <span class="text-muted-foreground">/ Decision Workbench</span>
 				</span>
 			</a>
 		</div>
@@ -88,7 +88,7 @@
 				aria-label="Open command palette"
 			>
 				<Search class="w-4 h-4 text-muted-foreground" />
-				<span class="text-sm text-muted-foreground">Go to…</span>
+				<span class="text-sm text-muted-foreground">Navigate</span>
 				<span class="text-[10px] font-mono text-muted-foreground">Ctrl/⌘ K</span>
 			</Button>
 
@@ -124,7 +124,7 @@
 						<DropdownMenuSeparator />
 						<DropdownMenuItem>
 							<a href="/account" class="block w-full text-sm text-muted-foreground hover:text-foreground transition-colors">
-								Account
+								Account settings
 							</a>
 						</DropdownMenuItem>
 						<DropdownMenuItem>
@@ -132,14 +132,14 @@
 								class="w-full text-left text-sm text-destructive hover:text-destructive/80 transition-colors"
 								onclick={handleLogout}
 							>
-								Sign Out
+								Sign out
 							</button>
 						</DropdownMenuItem>
 					</DropdownMenuContent>
 				</DropdownMenuRoot>
 			{:else}
 				<a href="/login">
-					<Button size="sm">Sign In</Button>
+					<Button size="sm">Sign in</Button>
 				</a>
 			{/if}
 		</div>

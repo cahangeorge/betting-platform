@@ -8,15 +8,17 @@
 		if (stored === 'light' || stored === 'dark') {
 			theme = stored;
 		} else {
-			theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+			theme = 'dark';
 		}
 		document.documentElement.classList.toggle('dark', theme === 'dark');
+		document.documentElement.classList.toggle('light', theme === 'light');
 	});
 
 	function toggle() {
 		theme = theme === 'dark' ? 'light' : 'dark';
 		localStorage.setItem('theme', theme);
 		document.documentElement.classList.toggle('dark', theme === 'dark');
+		document.documentElement.classList.toggle('light', theme === 'light');
 	}
 </script>
 
