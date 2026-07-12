@@ -25,7 +25,7 @@ pregatire date -> scraping/import -> normalizare si persistenta
     -> betslip/ticket -> plasare -> rezultat -> settlement -> PnL
 ```
 
-`betfront/` este o aplicatie Astro/React arhivata si nu mai este montata sau executata de platforma activa. Bridge-urile Python pentru `penaltyblog` si `soccerdata` sunt detinute de backend. `flumine/` este un framework de trading separat si nu este conectat la fluxul activ.
+`betfront/` este o aplicatie Astro/React arhivata si nu mai este montata sau executata de platforma activa. Bridge-urile Python pentru `penaltyblog` si `soccerdata` sunt detinute de backend. `flumine/` este conectat numai la executia locala paper, prin obiecte de ordin offline; executia externa ramane imposibila.
 
 ## 2. Cum a fost inventariat proiectul
 
@@ -56,7 +56,7 @@ Aceste excluderi elimina date generate sau sensibile, nu componente logice ale p
 | `OddsHarvester/` | Python, Click, Playwright/Patchright | Scraping OddsPortal, cote, piete, istoric si meciuri viitoare | Integrat prin backend |
 | `soccerdata/` | Python, pandas, Selenium/scrapers | Date istorice si statistici din surse multiple | Integrat prin bridge |
 | `penaltyblog/` | Python, Cython, modele statistice/Bayes | Predictii, probabilitati, ratings, backtest, betting utilities | Integrat prin bridge |
-| `flumine/` | Python | Trading Betfair/Betdaq/BetConnect, simulare si executie ordine | Standalone, neconectat |
+| `flumine/` | Python | Trading Betfair/Betdaq/BetConnect, simulare si executie ordine | Integrat paper-only, montat read-only |
 | `betfront/` | Astro, React, Prisma, SQLite | UI si logica veche | Arhiva fara dependenta runtime activa |
 | `docs-tanstack-betfront-old/` | Markdown | Arhiva conceptelor din vechiul `frontbet/` TanStack | Documentatie istorica |
 | `nginx/` | Nginx | Reverse proxy frontend/backend | Activ in compose |
@@ -69,7 +69,7 @@ Aceste excluderi elimina date generate sau sensibile, nu componente logice ale p
 
 `OddsHarvester/`, `penaltyblog/` si `soccerdata/` sunt submodule-uri/proiecte nested cu propriile reguli, dependinte si suite de teste. Backend-ul le monteaza read-only in rularea compusa si le invoca prin interpretoare/bridge-uri configurabile.
 
-Checkout-ul local analizat are toate cele trei submodule-uri la commit-uri diferite de gitlink-urile inregistrate in repository-ul parinte, marcate cu `+` de `git submodule status`. Documentul descrie starea locala efectiva, nu doar commit-ul asteptat de repository-ul parinte.
+Gitlink-urile parintelui si configuratia `.gitmodules` urmaresc acum branch-urile `platform` pentru toate cele trei submodule-uri. Commit-urile `penaltyblog` si `soccerdata` exista pe remote; commit-ul OddsHarvester cu rapoartele de sanatate este inca local si trebuie publicat inaintea branch-ului parinte.
 
 ### 3.2 Tooling, rapoarte si artefacte locale
 
@@ -135,23 +135,23 @@ Navigatia principala din `frontend/src/lib/navigation.ts` structureaza produsul 
 5. **Tickets** (`/tickets`) — revizuire, creare, plasare, urmarire si settlement;
 6. **Monitoring** (`/monitoring`) — automatizari, activare/dezactivare schedule-uri si istoric de rulare.
 
-Rutele `Prepare`, `Analyze` si `Opportunities` sunt workbench-uri simplificate care trimit spre suprafetele operationale detaliate existente.
+Rutele `Prepare`, `Analyze` si `Opportunities` sunt suprafetele canonice si detin implementarea operationala. Rutele vechi emit redirect permanent `308`, pastrand query string-ul, fara sa mai incarce datele vechilor pagini.
 
 ### 5.1 Inventarul rutelor frontend
 
 | Ruta | Responsabilitate |
 |---|---|
 | `/` | Dashboard Today/Performance, upcoming matches, value bets, tickets si verificare predictii |
-| `/prepare` | Ghid de pregatire a datelor |
+| `/prepare` | Configurare scraping, catalog, coverage, automatizari, joburi si loguri |
 | `/prepare/data` | Data explorer simplificat |
-| `/scrape` | Configurare scraping, catalog, coverage, automatizari, joburi si loguri |
+| `/scrape` | Redirect permanent spre `/prepare` |
 | `/data` | Dataset-uri si date persistate |
-| `/analyze` | Intrare simplificata in analiza |
-| `/predict` | Strategii, rulări single/ensemble, istoric si detalii predictii |
+| `/analyze` | Strategii, rulări single/ensemble, istoric si detalii predictii |
+| `/predict` | Redirect permanent spre `/analyze` |
 | `/opportunities?view=value` | Hub pentru oportunitati value |
-| `/value-bets` | Feed value bet calculat din probabilitate si cote |
+| `/value-bets` | Redirect permanent spre `/opportunities?view=value` |
 | `/opportunities?view=live` | Hub pentru oportunitati live |
-| `/live` | Overview live, feed health, WebSocket si betslip live |
+| `/live` | Redirect permanent spre `/opportunities?view=live` |
 | `/tickets` | Bilete, batch-uri, leg swaps, plasare, rezultate si settlement |
 | `/monitoring` | Scheduled jobs, run history si politica de refresh rezultate |
 | `/settings/strategies` | Administrare strategii predictive |
@@ -258,7 +258,7 @@ Health checks sunt disponibile la `/health` si `/api/v1/health`; documentatia Op
 | `ticket_engine.py` | selectie candidati, validare, generare si reguli de bilet |
 | `result_settlement.py` | evaluarea rezultatelor si settlement |
 | `scheduled_jobs.py` | schedule-uri, run lineage, executie si status |
-| `task_runs.py` | dispatch inline sau Taskiq si corelarea run-urilor |
+| `task_runs.py` | claim/lease/heartbeat si corelarea run-urilor `inprocess` sau Taskiq |
 | `run_authorization.py` | verificarea dreptului utilizatorului asupra rularilor |
 | `football_catalog.py` | catalog persistent de tari/ligi si sincronizare |
 | `world_cup_pipeline.py` | pipeline specializat de colectare/predictie |
@@ -309,7 +309,7 @@ Health checks sunt disponibile la `/health` si `/api/v1/health`; documentatia Op
 - `BookmakerAccount`: contul unui bookmaker;
 - `LedgerEntry`: miscarea financiara auditabila.
 
-Migratiile `001`-`008` acopera schema initiala, statistici/strategii, legarea predictiilor de ticket legs, raportarea calitatii, logurile de scraping, run history, corectiile de rezultat si catalogul ligilor.
+Migratiile `001`-`011` acopera schema initiala, statistici/strategii, legarea predictiilor de ticket legs, raportarea calitatii, logurile de scraping, run history, corectiile de rezultat, catalogul ligilor, livrarea asincrona durabila si domeniul de trading paper.
 
 ## 9. Fluxurile end-to-end
 
@@ -325,11 +325,11 @@ Migratiile `001`-`008` acopera schema initiala, statistici/strategii, legarea pr
 1. Utilizatorul alege tara, liga, sursa si intervalul.
 2. Frontend-ul foloseste catalogul persistent si slug-ul OddsHarvester.
 3. Backend-ul creeaza `ScrapeJob` si, pentru executii async, `ScheduledJobRun`.
-4. Jobul este executat inline sau trimis in Taskiq.
+4. Jobul este executat `inprocess` sau trimis in Taskiq prin outbox-ul persistent.
 5. OddsHarvester/soccerdata colecteaza datele.
 6. Backend-ul normalizeaza meciurile, pietele si cotele.
 7. Rezultatele, dataset-ul si logurile sunt persistate.
-8. Un job fara rezultate utile nu trebuie prezentat ca succes functional.
+8. Raportul versionat al scraperului clasifica executia `healthy`, `degraded` sau `failed`; un rezultat degradat devine run `partial`, iar un job fara rezultate utile nu este prezentat ca succes functional.
 
 ### 9.3 Predictie si ensemble
 
@@ -370,8 +370,8 @@ Migratiile `001`-`008` acopera schema initiala, statistici/strategii, legarea pr
 
 1. `ScheduledJob` defineste task-ul, cron-ul si parametrii.
 2. Scheduler-ul identifica joburile due si creeaza run-uri persistente.
-3. Taskiq publica run-ul in Redis.
-4. Worker-ul executa run-ul si actualizeaza statusul in PostgreSQL.
+3. Outbox-ul publica run-ul in Redis dupa commit si pastreaza esecurile de livrare pentru retry.
+4. Worker-ul revendica run-ul cu lease atomic, il reinnoieste prin heartbeat si actualizeaza acelasi status indiferent de transport.
 5. UI-ul arata status, ultima/urmatoarea executie si istoricul.
 
 ## 10. Proiectele Python auxiliare
@@ -436,7 +436,7 @@ Platforma il invoca prin `backend/app/bridges/penaltyblog_bridge.py`, cu interpr
 - paper trading si simulare istorica;
 - middleware si background workers.
 
-Backend-ul are acum un domeniu izolat de executie **paper-local** (conturi, intentii, ordine si evenimente persistate). Acesta nu importa si nu porneste framework-ul `flumine/`, nu incarca credentiale si nu poate trimite ordine externe. Endpoint-ul istoric `POST /tickets/{id}/place` ramane exclusiv evidenta manuala; numai `/trading/executions` reprezinta fluxul de executie paper. Limita Betfair este read-only, dezactivata separat si raporteaza `not_configured`; executia live este hard-disabled.
+Backend-ul are un domeniu izolat de executie **paper-local** (conturi, intentii, ordine si evenimente persistate). Adapterul `flumine_paper.py` incarca checkout-ul local si foloseste efectiv `LimitOrder` pentru a construi si valida instructiunea BACK LIMIT, dar nu creeaza client, market sau execution engine si nu expune nicio metoda de plasare externa. Livrarea `inprocess` si Taskiq foloseste aceeasi intentie persistata, cu stare de delivery si retry idempotent. Endpoint-ul istoric `POST /tickets/{id}/place` ramane exclusiv evidenta manuala; numai `/trading/executions` reprezinta fluxul de executie paper. Limita Betfair este read-only, dezactivata separat si raporteaza `not_configured`; executia live este hard-disabled.
 
 ## 11. Aplicatiile si documentatia legacy
 
@@ -447,11 +447,11 @@ Backend-ul are acum un domeniu izolat de executie **paper-local** (conturi, inte
 - pagini vechi pentru data, predict, scrape, jobs, tickets si account;
 - server logic pentru scraper, predictii, ticket builder si monitoring;
 - schema Prisma si seed-uri;
-- scripturi de bridge pentru penaltyblog si soccerdata;
+- copii istorice ale vechilor scripturi de bridge;
 - experimente de integrare flumine;
 - teste Vitest si Playwright.
 
-Regula de proiect este sa nu fie folosita sau modificata ca UI curent. Singura dependenta activa ramasa este localizarea bridge-urilor Python. Pe termen lung, acestea trebuie mutate sub ownership-ul backend-ului pentru ca serviciul activ sa nu depinda de o aplicatie arhivata.
+Regula de proiect este sa nu fie folosita sau modificata ca UI curent. Platforma activa nu mai importa, monteaza sau executa nimic din `betfront/`; bridge-urile sunt sub `backend/app/bridges/` si primesc explicit root-urile proiectelor nested.
 
 ### 11.2 `docs-tanstack-betfront-old/`
 
@@ -587,13 +587,12 @@ Nu exista presupunerea unui singur CI universal pentru toate submodule-urile; fi
 
 ## 16. Limite si datorie tehnica vizibila
 
-1. **Bridge-uri externalizate:** backend-ul detine entrypoint-urile, dar compatibilitatea lor ramane dependenta de interpretoarele si checkout-urile nested configurate explicit.
-2. **Doua niveluri de navigatie:** noile rute workbench (`prepare/analyze/opportunities/monitoring`) coexistă cu suprafetele detaliate mai vechi (`scrape/predict/value-bets/live`). Este o migrare controlata, nu doua produse diferite.
-3. **Flumine neintegrat:** conceptele de trading exista, dar nu exista executie reala din platforma activa.
-4. **Submodule-uri deviate:** checkout-urile locale OddsHarvester/penaltyblog/soccerdata nu coincid cu gitlink-urile parintelui.
-5. **Async dual-mode:** dezvoltarea poate executa inline/in-process, in timp ce compose foloseste Taskiq. Ambele cai trebuie mentinute semantic echivalente.
-6. **Scraping fragil prin natura sa:** selectori, HTML, rate limits si geo/locale se pot schimba upstream.
-7. **UI si API in evolutie:** repository-ul local are schimbari necomise in frontend, backend, migratii si CI; acest document descrie snapshot-ul local, nu o versiune release stabila.
+1. **Bridge-uri externe:** entrypoint-urile sunt detinute de backend, dar compatibilitatea depinde in continuare de interpretoarele si checkout-urile nested configurate explicit.
+2. **Publicare submodule:** gitlink-urile sunt aliniate local; commit-ul OddsHarvester trebuie publicat pe `origin/platform` inainte ca branch-ul parinte sa poata fi publicat reproductibil.
+3. **Trading limitat intentionat:** Flumine este integrat numai pentru contractul paper-local. Betfair ramane read-only si neconfigurat, iar executia live este hard-disabled.
+4. **Async dual-mode:** dezvoltarea foloseste `inprocess`, iar compose foloseste Taskiq. Paritatea este acoperita prin acelasi model de run, outbox, lease, heartbeat si teste, dar trebuie pastrata la modificarile viitoare.
+5. **Scraping fragil prin natura sa:** selectori, HTML, rate limits si geo/locale se pot schimba upstream; rapoartele si canarii detecteaza degradarea, nu o elimina.
+6. **UI si API in evolutie:** acest document descrie branch-ul local de integrare, nu o versiune release publicata si stabila.
 
 ## 17. Fisiere de orientare
 
