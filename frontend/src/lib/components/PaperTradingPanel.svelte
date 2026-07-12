@@ -6,14 +6,10 @@
 	import Card from './ui/Card.svelte';
 
 	let { serverAccounts = [] }: { serverAccounts?: TradingAccount[] } = $props();
-	let accounts = $state<TradingAccount[]>([]);
+	let accounts = $derived(serverAccounts);
 	let health = $state<Record<number, TradingAccountHealth>>({});
 	let message = $state('');
 	let creating = $state(false);
-
-	$effect(() => {
-		accounts = serverAccounts;
-	});
 
 	async function createPaperAccount() {
 		creating = true;
