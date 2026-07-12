@@ -1,14 +1,14 @@
 [submodule "OddsHarvester"]
 	path = OddsHarvester
 	url = https://github.com/cahangeorge/OddsHarvester.git
-	branch = master
+	branch = platform
 
 [submodule "penaltyblog"]
 	path = penaltyblog
 	url = https://github.com/cahangeorge/penaltyblog.git
-	branch = master
+	branch = platform
 
 [submodule "soccerdata"]
 	path = soccerdata
 	url = https://github.com/cahangeorge/soccerdata.git
-	branch = master
+	branch = platform
