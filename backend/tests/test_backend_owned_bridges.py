@@ -1,0 +1,116 @@
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+from app.config import Settings
+from app.services import python_bridge
+
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+BRIDGE_ROOT = BACKEND_ROOT / "app" / "bridges"
+
+
+def _run_bridge(script: Path, payload: dict, output: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(script), "--payload", json.dumps(payload), "--output", str(output)],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, **env},
+    )
+
+
+def test_bridge_defaults_are_backend_owned_and_dependency_roots_are_explicit():
+    settings = Settings(_env_file=None)
+
+    assert settings.resolved_penaltyblog_bridge == str(BRIDGE_ROOT / "penaltyblog_bridge.py")
+    assert settings.resolved_soccerdata_bridge == str(BRIDGE_ROOT / "soccerdata_bridge.py")
+    assert settings.resolved_penaltyblog_root == str(BACKEND_ROOT.parent / "penaltyblog")
+    assert settings.resolved_soccerdata_root == str(BACKEND_ROOT.parent / "soccerdata")
+    assert "betfront" not in settings.resolved_penaltyblog_bridge
+    assert "betfront" not in settings.resolved_soccerdata_bridge
+
+
+def test_provider_validation_is_scoped(tmp_path):
+    existing = tmp_path / "runtime"
+    existing.mkdir()
+    settings = Settings(
+        _env_file=None,
+        penaltyblog_python=str(tmp_path / "missing-penalty-python"),
+        penaltyblog_bridge=str(tmp_path / "missing-penalty-bridge"),
+        penaltyblog_root=str(tmp_path / "missing-penalty-root"),
+        soccerdata_python=str(tmp_path / "missing-soccer-python"),
+        soccerdata_bridge=str(tmp_path / "missing-soccer-bridge"),
+        soccerdata_root=str(tmp_path / "missing-soccer-root"),
+        oddsharvester_python=str(existing),
+    )
+
+    assert settings.provider_validation_issues("oddsharvester") == []
+    assert len(settings.provider_validation_issues("penaltyblog")) == 3
+    assert len(settings.provider_validation_issues("soccerdata")) == 3
+
+
+def test_soccerdata_bridge_preserves_output_protocol_on_failure(tmp_path):
+    output = tmp_path / "soccerdata-output.json"
+    result = _run_bridge(
+        BRIDGE_ROOT / "soccerdata_bridge.py",
+        {"operation": "deterministic_unknown_operation"},
+        output,
+        {"BET_SOCCERDATA_ROOT": str(tmp_path)},
+    )
+
+    response = json.loads(output.read_text())
+    assert result.returncode != 0
+    assert response["ok"] is False
+    assert response["error"] == "Unsupported operation: deterministic_unknown_operation"
+    assert "traceback" in response
+
+
+def test_penaltyblog_catalog_preserves_legacy_envelope(tmp_path):
+    stubs = tmp_path / "stubs"
+    stubs.mkdir()
+    (stubs / "numpy.py").write_text("class generic: pass\nclass ndarray: pass\n", encoding="utf-8")
+    (stubs / "pandas.py").write_text("class DataFrame: pass\nclass Series: pass\n", encoding="utf-8")
+    output = tmp_path / "penaltyblog-output.json"
+
+    result = _run_bridge(
+        BRIDGE_ROOT / "penaltyblog_bridge.py",
+        {"operation": "catalog", "payload": {}},
+        output,
+        {
+            "BET_PENALTYBLOG_ROOT": str(tmp_path),
+            "PYTHONPATH": str(stubs),
+        },
+    )
+
+    response = json.loads(output.read_text())
+    assert result.returncode == 0, result.stderr
+    assert response["ok"] is True
+    assert response["result"]["operation"] == "catalog"
+    groups = response["result"]["result"]["groups"]
+    assert {group["id"] for group in groups} >= {"models", "betting", "ratings"}
+
+
+@pytest.mark.asyncio
+async def test_penaltyblog_wrapper_checks_only_its_provider_at_use_site(monkeypatch, tmp_path):
+    runtime = tmp_path / "runtime"
+    runtime.write_text("placeholder", encoding="utf-8")
+    monkeypatch.setattr(python_bridge.settings, "penaltyblog_python", str(runtime))
+    monkeypatch.setattr(python_bridge.settings, "penaltyblog_bridge", str(runtime))
+    monkeypatch.setattr(python_bridge.settings, "penaltyblog_root", str(tmp_path))
+    monkeypatch.setattr(python_bridge.settings, "soccerdata_python", str(tmp_path / "missing"))
+    captured: dict[str, object] = {}
+
+    async def fake_run_bridge(payload, python_bin, bridge_script, **kwargs):
+        captured.update(payload=payload, python_bin=python_bin, bridge_script=bridge_script, kwargs=kwargs)
+        return {"operation": "catalog", "result": {}}
+
+    monkeypatch.setattr(python_bridge, "run_bridge", fake_run_bridge)
+
+    response = await python_bridge.run_penaltyblog({"operation": "catalog", "payload": {}})
+
+    assert response["operation"] == "catalog"
+    assert captured["kwargs"]["extra_env"] == {"BET_PENALTYBLOG_ROOT": str(tmp_path)}

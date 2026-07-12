@@ -25,7 +25,7 @@ pregatire date -> scraping/import -> normalizare si persistenta
     -> betslip/ticket -> plasare -> rezultat -> settlement -> PnL
 ```
 
-`betfront/` este o aplicatie Astro/React arhivata. Nu este platforma UI curenta, dar inca gazduieste doua bridge-uri Python folosite de backend pentru `penaltyblog` si `soccerdata`. `flumine/` este un framework de trading separat si nu este conectat la fluxul activ.
+`betfront/` este o aplicatie Astro/React arhivata si nu mai este montata sau executata de platforma activa. Bridge-urile Python pentru `penaltyblog` si `soccerdata` sunt detinute de backend. `flumine/` este un framework de trading separat si nu este conectat la fluxul activ.
 
 ## 2. Cum a fost inventariat proiectul
 
@@ -57,7 +57,7 @@ Aceste excluderi elimina date generate sau sensibile, nu componente logice ale p
 | `soccerdata/` | Python, pandas, Selenium/scrapers | Date istorice si statistici din surse multiple | Integrat prin bridge |
 | `penaltyblog/` | Python, Cython, modele statistice/Bayes | Predictii, probabilitati, ratings, backtest, betting utilities | Integrat prin bridge |
 | `flumine/` | Python | Trading Betfair/Betdaq/BetConnect, simulare si executie ordine | Standalone, neconectat |
-| `betfront/` | Astro, React, Prisma, SQLite | UI si logica veche; gazduieste bridge-uri Python reutilizate | Arhiva cu dependenta reziduala |
+| `betfront/` | Astro, React, Prisma, SQLite | UI si logica veche | Arhiva fara dependenta runtime activa |
 | `docs-tanstack-betfront-old/` | Markdown | Arhiva conceptelor din vechiul `frontbet/` TanStack | Documentatie istorica |
 | `nginx/` | Nginx | Reverse proxy frontend/backend | Activ in compose |
 | `scripts/` | Bash/Python | Setup, seed si smoke flows | Operational |
@@ -122,7 +122,7 @@ flowchart LR
 - Backend-ul este sursa de adevar pentru utilizatori, meciuri, cote, joburi, rulări, predictii, bilete si ledger.
 - Scraper-ele si modelele externe sunt adaptoare de calcul/colectare, nu baze de date de produs.
 - Redis transporta executia asincrona; istoricul autoritativ al rularilor ramane in PostgreSQL prin `ScheduledJobRun`.
-- `betfront/` nu trebuie repornit ca UI activ, chiar daca unele bridge-uri sale sunt inca reutilizate.
+- `betfront/` nu trebuie repornit, montat sau folosit ca runtime al platformei active.
 
 ## 5. Experienta de produs si navigatia activa
 
@@ -406,7 +406,7 @@ Backend-ul foloseste interpreterul configurat prin `BET_ODDSHARVESTER_PYTHON` si
 - Understat;
 - WhoScored.
 
-Biblioteca gestioneaza cache local, standardizarea echipelor/ligilor, browsere Selenium si parsarea datelor in structuri pandas. In platforma curenta este invocata prin `betfront/scripts/soccerdata_bridge.py`, configurabil cu `BET_SOCCERDATA_PYTHON` si `BET_SOCCERDATA_BRIDGE`.
+Biblioteca gestioneaza cache local, standardizarea echipelor/ligilor, browsere Selenium si parsarea datelor in structuri pandas. In platforma curenta este invocata prin `backend/app/bridges/soccerdata_bridge.py`, cu interpreterul, scriptul si checkout-ul configurabile prin `BET_SOCCERDATA_PYTHON`, `BET_SOCCERDATA_BRIDGE` si `BET_SOCCERDATA_ROOT`.
 
 ### 10.3 penaltyblog
 
@@ -422,7 +422,7 @@ Biblioteca gestioneaza cache local, standardizarea echipelor/ligilor, browsere S
 - expected threat (`xT`) si vizualizari;
 - extensii Cython pentru calcule intensive.
 
-Platforma il invoca prin `betfront/scripts/penaltyblog_bridge.py`, configurabil cu `BET_PENALTYBLOG_PYTHON` si `BET_PENALTYBLOG_BRIDGE`.
+Platforma il invoca prin `backend/app/bridges/penaltyblog_bridge.py`, cu interpreterul, scriptul si checkout-ul configurabile prin `BET_PENALTYBLOG_PYTHON`, `BET_PENALTYBLOG_BRIDGE` si `BET_PENALTYBLOG_ROOT`.
 
 ### 10.4 flumine
 
@@ -587,7 +587,7 @@ Nu exista presupunerea unui singur CI universal pentru toate submodule-urile; fi
 
 ## 16. Limite si datorie tehnica vizibila
 
-1. **Bridge-uri in arhiva:** backend-ul activ depinde inca de doua scripturi aflate in `betfront/`.
+1. **Bridge-uri externalizate:** backend-ul detine entrypoint-urile, dar compatibilitatea lor ramane dependenta de interpretoarele si checkout-urile nested configurate explicit.
 2. **Doua niveluri de navigatie:** noile rute workbench (`prepare/analyze/opportunities/monitoring`) coexistă cu suprafetele detaliate mai vechi (`scrape/predict/value-bets/live`). Este o migrare controlata, nu doua produse diferite.
 3. **Flumine neintegrat:** conceptele de trading exista, dar nu exista executie reala din platforma activa.
 4. **Submodule-uri deviate:** checkout-urile locale OddsHarvester/penaltyblog/soccerdata nu coincid cu gitlink-urile parintelui.

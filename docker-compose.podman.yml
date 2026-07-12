@@ -51,16 +51,17 @@ services:
       BET_SCHEDULED_JOBS_ENABLED: "false"
       BET_ODDSHARVESTER_PYTHON: /workspace/OddsHarvester/.venv/bin/python
       BET_PENALTYBLOG_PYTHON: /workspace/penaltyblog/.venv/bin/python
-      BET_PENALTYBLOG_BRIDGE: /workspace/betfront/scripts/penaltyblog_bridge.py
+      BET_PENALTYBLOG_BRIDGE: /app/app/bridges/penaltyblog_bridge.py
+      BET_PENALTYBLOG_ROOT: /workspace/penaltyblog
       BET_SOCCERDATA_PYTHON: /workspace/soccerdata/.venv/bin/python
-      BET_SOCCERDATA_BRIDGE: /workspace/betfront/scripts/soccerdata_bridge.py
+      BET_SOCCERDATA_BRIDGE: /app/app/bridges/soccerdata_bridge.py
+      BET_SOCCERDATA_ROOT: /workspace/soccerdata
     ports:
       - "127.0.0.1:8001:8000"
     volumes:
       - ./OddsHarvester:/workspace/OddsHarvester:ro
       - ./penaltyblog:/workspace/penaltyblog:ro
       - ./soccerdata:/workspace/soccerdata:ro
-      - ./betfront:/workspace/betfront:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -86,14 +87,15 @@ services:
       BET_TASKIQ_CONSUMER_GROUP: bet-workers
       BET_ODDSHARVESTER_PYTHON: /workspace/OddsHarvester/.venv/bin/python
       BET_PENALTYBLOG_PYTHON: /workspace/penaltyblog/.venv/bin/python
-      BET_PENALTYBLOG_BRIDGE: /workspace/betfront/scripts/penaltyblog_bridge.py
+      BET_PENALTYBLOG_BRIDGE: /app/app/bridges/penaltyblog_bridge.py
+      BET_PENALTYBLOG_ROOT: /workspace/penaltyblog
       BET_SOCCERDATA_PYTHON: /workspace/soccerdata/.venv/bin/python
-      BET_SOCCERDATA_BRIDGE: /workspace/betfront/scripts/soccerdata_bridge.py
+      BET_SOCCERDATA_BRIDGE: /app/app/bridges/soccerdata_bridge.py
+      BET_SOCCERDATA_ROOT: /workspace/soccerdata
     volumes:
       - ./OddsHarvester:/workspace/OddsHarvester:ro
       - ./penaltyblog:/workspace/penaltyblog:ro
       - ./soccerdata:/workspace/soccerdata:ro
-      - ./betfront:/workspace/betfront:ro
     depends_on:
       postgres:
         condition: service_healthy

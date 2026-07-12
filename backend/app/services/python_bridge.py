@@ -23,14 +23,22 @@ def bridge_runtime_summary() -> dict[str, str]:
     return {
         "penaltyblog_python": settings.resolved_penaltyblog_python,
         "penaltyblog_bridge": settings.resolved_penaltyblog_bridge,
+        "penaltyblog_root": settings.resolved_penaltyblog_root,
         "soccerdata_python": settings.resolved_soccerdata_python,
         "soccerdata_bridge": settings.resolved_soccerdata_bridge,
+        "soccerdata_root": settings.resolved_soccerdata_root,
         "oddsharvester_python": settings.resolved_oddsharvester_python,
     }
 
 
-def validate_bridge_runtime() -> list[str]:
-    return settings.bridge_validation_issues()
+def validate_bridge_runtime(provider: str) -> list[str]:
+    return settings.provider_validation_issues(provider)
+
+
+def _require_provider_runtime(provider: str) -> None:
+    issues = validate_bridge_runtime(provider)
+    if issues:
+        raise BridgeError(f"{provider} runtime is not ready: {'; '.join(issues)}")
 
 
 async def run_bridge(
@@ -39,6 +47,7 @@ async def run_bridge(
     bridge_script: str,
     label: str = "bridge",
     timeout: int = BRIDGE_TIMEOUT,
+    extra_env: dict[str, str] | None = None,
 ) -> dict:
     if not bridge_script:
         raise BridgeError(
@@ -67,7 +76,7 @@ async def run_bridge(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env={**os.environ, "PYTHONUNBUFFERED": "1"},
+            env={**os.environ, "PYTHONUNBUFFERED": "1", **(extra_env or {})},
         )
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
@@ -97,20 +106,24 @@ async def run_bridge(
 
 
 async def run_penaltyblog(payload: dict) -> dict:
+    _require_provider_runtime("penaltyblog")
     return await run_bridge(
         payload,
         settings.resolved_penaltyblog_python,
         settings.resolved_penaltyblog_bridge,
         label="penaltyblog",
+        extra_env={"BET_PENALTYBLOG_ROOT": settings.resolved_penaltyblog_root},
     )
 
 
 async def run_soccerdata(payload: dict) -> dict:
+    _require_provider_runtime("soccerdata")
     return await run_bridge(
         payload,
         settings.resolved_soccerdata_python,
         settings.resolved_soccerdata_bridge,
         label="soccerdata",
+        extra_env={"BET_SOCCERDATA_ROOT": settings.resolved_soccerdata_root},
     )
 
 

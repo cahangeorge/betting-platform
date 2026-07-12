@@ -69,7 +69,12 @@ penaltyblog/.venv/bin/python
 soccerdata/.venv/bin/python
 ```
 
-The soccerdata bridge uses an existing Python interpreter. After `cd soccerdata && uv sync`, verify `soccerdata/.venv/bin/python` exists, then set `BET_SOCCERDATA_PYTHON` to that executable or another existing interpreter with soccerdata installed. You can override the other bridge paths in `backend/.env` with the `BET_*` variables documented in `backend/.env.example`.
+The active bridge entrypoints are owned by `backend/app/bridges/`; the archived
+`betfront/` application is not mounted or executed by the active platform. Each
+bridge receives an explicit project root through `BET_PENALTYBLOG_ROOT` or
+`BET_SOCCERDATA_ROOT`, so it does not infer dependencies from its own location.
+
+The soccerdata bridge uses an existing Python interpreter. After `cd soccerdata && uv sync`, verify `soccerdata/.venv/bin/python` exists, then set `BET_SOCCERDATA_PYTHON` to that executable or another existing interpreter with soccerdata installed. You can override bridge scripts, dependency roots, and interpreter paths in `backend/.env` with the `BET_*` variables documented in `backend/.env.example`.
 
 ## Important constraints
 

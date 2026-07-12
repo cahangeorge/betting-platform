@@ -40,8 +40,10 @@ class Settings(BaseSettings):
 
     penaltyblog_python: str = ""
     penaltyblog_bridge: str = ""
+    penaltyblog_root: str = ""
     soccerdata_python: str = ""
     soccerdata_bridge: str = ""
+    soccerdata_root: str = ""
     oddsharvester_python: str = ""
 
     @property
@@ -80,10 +82,11 @@ class Settings(BaseSettings):
     def resolved_penaltyblog_bridge(self) -> str:
         if self.penaltyblog_bridge:
             return self.penaltyblog_bridge
-        return self._first_existing(
-            self.repo_root / "frontbet" / "scripts" / "penaltyblog_bridge.py",
-            self.repo_root / "betfront" / "scripts" / "penaltyblog_bridge.py",
-        )
+        return str(self.repo_root / "backend" / "app" / "bridges" / "penaltyblog_bridge.py")
+
+    @property
+    def resolved_penaltyblog_root(self) -> str:
+        return self.penaltyblog_root or str(self.repo_root / "penaltyblog")
 
     @property
     def resolved_soccerdata_python(self) -> str:
@@ -97,10 +100,11 @@ class Settings(BaseSettings):
     def resolved_soccerdata_bridge(self) -> str:
         if self.soccerdata_bridge:
             return self.soccerdata_bridge
-        return self._first_existing(
-            self.repo_root / "frontbet" / "scripts" / "soccerdata_bridge.py",
-            self.repo_root / "betfront" / "scripts" / "soccerdata_bridge.py",
-        )
+        return str(self.repo_root / "backend" / "app" / "bridges" / "soccerdata_bridge.py")
+
+    @property
+    def resolved_soccerdata_root(self) -> str:
+        return self.soccerdata_root or str(self.repo_root / "soccerdata")
 
     @property
     def resolved_oddsharvester_python(self) -> str:
@@ -110,23 +114,41 @@ class Settings(BaseSettings):
             self.repo_root / "OddsHarvester" / ".venv" / "bin" / "python",
         )
 
-    def bridge_validation_issues(self) -> list[str]:
-        checks = [
-            ("BET_PENALTYBLOG_PYTHON", self.resolved_penaltyblog_python),
-            ("BET_PENALTYBLOG_BRIDGE", self.resolved_penaltyblog_bridge),
-            ("BET_SOCCERDATA_PYTHON", self.resolved_soccerdata_python),
-            ("BET_SOCCERDATA_BRIDGE", self.resolved_soccerdata_bridge),
-            ("BET_ODDSHARVESTER_PYTHON", self.resolved_oddsharvester_python),
-        ]
+    def provider_validation_issues(self, provider: str) -> list[str]:
+        checks_by_provider = {
+            "penaltyblog": [
+                ("BET_PENALTYBLOG_PYTHON", self.resolved_penaltyblog_python),
+                ("BET_PENALTYBLOG_BRIDGE", self.resolved_penaltyblog_bridge),
+                ("BET_PENALTYBLOG_ROOT", self.resolved_penaltyblog_root),
+            ],
+            "soccerdata": [
+                ("BET_SOCCERDATA_PYTHON", self.resolved_soccerdata_python),
+                ("BET_SOCCERDATA_BRIDGE", self.resolved_soccerdata_bridge),
+                ("BET_SOCCERDATA_ROOT", self.resolved_soccerdata_root),
+            ],
+            "oddsharvester": [
+                ("BET_ODDSHARVESTER_PYTHON", self.resolved_oddsharvester_python),
+            ],
+        }
+        if provider not in checks_by_provider:
+            raise ValueError(f"Unknown bridge provider: {provider}")
 
         issues: list[str] = []
-        for env_name, resolved in checks:
+        for env_name, resolved in checks_by_provider[provider]:
             if not resolved:
                 issues.append(f"{env_name} is unset and no default candidate could be derived")
                 continue
             if not Path(resolved).exists():
                 issues.append(f"{env_name} points to a missing path: {resolved}")
         return issues
+
+    def bridge_validation_issues(self) -> list[str]:
+        """Return all provider issues for diagnostics, not global readiness."""
+        return [
+            issue
+            for provider in ("penaltyblog", "soccerdata", "oddsharvester")
+            for issue in self.provider_validation_issues(provider)
+        ]
 
 
 @lru_cache()

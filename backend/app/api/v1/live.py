@@ -381,7 +381,7 @@ def _build_match_payload(
 
 
 def _is_bridge_ready() -> tuple[bool, list[str]]:
-    issues = get_settings().bridge_validation_issues()
+    issues = get_settings().provider_validation_issues("oddsharvester")
     return len(issues) == 0, issues
 
 

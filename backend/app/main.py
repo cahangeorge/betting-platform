@@ -65,8 +65,8 @@ async def lifespan(app: FastAPI):
     await ensure_schema()
     await ensure_dev_admin()
 
-    for issue in validate_bridge_runtime():
-        warnings.warn(f"Bridge runtime prerequisite issue: {issue}")
+    for issue in validate_bridge_runtime("oddsharvester"):
+        warnings.warn(f"OddsHarvester runtime prerequisite issue: {issue}")
 
     app.state.bridge_runtime = bridge_runtime_summary()
     if settings.scheduled_jobs_enabled and settings.task_queue_backend.strip().lower() != "taskiq":
