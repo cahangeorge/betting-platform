@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { PageData } from '../../../routes/value-bets/$types';
+	import type { ValueOpportunitiesData as PageData } from './load-value';
 	import BetslipReviewCallout from '$lib/components/BetslipReviewCallout.svelte';
 	import Card from '$lib/components/ui/Card.svelte';
 	import Button from '$lib/components/ui/Button.svelte';

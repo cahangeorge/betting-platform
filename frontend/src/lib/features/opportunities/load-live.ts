@@ -1,4 +1,3 @@
-import type { PageLoad } from './$types';
 import { matchesApi } from '$lib/api/matches';
 
 type LiveStatusFilter = 'All' | 'Live' | 'Halftime' | 'Finished';
@@ -59,7 +58,7 @@ const parseMinLiveValueEdge = (value: string | null): number => {
 	return parsed;
 };
 
-export const load: PageLoad = async ({ url, fetch }) => {
+export async function loadLiveOpportunities({ url, fetch }: { url: URL; fetch: typeof globalThis.fetch }) {
 	const statusFilter = parseStatusFilter(url.searchParams.get('status'));
 	const selectedLeague = parseLeagueFilter(url.searchParams.get('league'));
 	const minLiveValueEdge = parseMinLiveValueEdge(url.searchParams.get('min_live_value_edge'));
@@ -115,4 +114,6 @@ export const load: PageLoad = async ({ url, fetch }) => {
 			lastUpdated: new Date().toISOString()
 		};
 	}
-};
+}
+
+export type LiveOpportunitiesData = Awaited<ReturnType<typeof loadLiveOpportunities>>;

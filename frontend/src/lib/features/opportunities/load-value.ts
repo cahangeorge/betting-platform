@@ -1,7 +1,6 @@
-import type { PageLoad } from './$types';
 import { predictionsApi } from '$lib/api/predictions';
 
-export const load: PageLoad = async ({ fetch }) => {
+export async function loadValueOpportunities({ fetch }: { fetch: typeof globalThis.fetch }) {
 	try {
 		const response = await predictionsApi.getValueBets(fetch);
 		return {
@@ -26,4 +25,6 @@ export const load: PageLoad = async ({ fetch }) => {
 					: message
 		};
 	}
-};
+}
+
+export type ValueOpportunitiesData = Awaited<ReturnType<typeof loadValueOpportunities>>;

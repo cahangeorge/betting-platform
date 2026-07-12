@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { PageData } from '../../../routes/live/$types';
+	import type { LiveOpportunitiesData as PageData } from './load-live';
 	import Card from '$lib/components/ui/Card.svelte';
 	import Button from '$lib/components/ui/Button.svelte';
 	import Badge from '$lib/components/ui/Badge.svelte';
