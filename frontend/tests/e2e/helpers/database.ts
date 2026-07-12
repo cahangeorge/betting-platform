@@ -13,7 +13,6 @@ const SQLITE_SKIP_REASON =
 const PYTHON_SQL_RUNNER = String.raw`
 import asyncio
 import os
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 
@@ -52,7 +51,11 @@ async def main() -> None:
         async with engine.begin() as connection:
             outputs: list[str] = []
             for statement in split_sql(sql):
-                result = await connection.execute(text(statement))
+                # Fixture SQL is already complete SQL and may contain JSON
+                # object keys such as "schema_version": 1. Passing it
+                # through sqlalchemy.text() misreads those colons as bind
+                # parameters, so execute it at the driver boundary instead.
+                result = await connection.exec_driver_sql(statement)
                 if result.returns_rows:
                     rows = result.fetchall()
                     outputs.extend('|'.join('' if value is None else str(value) for value in row) for row in rows)
