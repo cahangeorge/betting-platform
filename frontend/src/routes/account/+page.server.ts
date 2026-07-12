@@ -1,7 +1,7 @@
 import type { PageServerLoad } from './$types';
 import { redirect } from '@sveltejs/kit';
 import { createBackendPageLoader, summarizeBackendLoad } from '$lib/server/backend-load';
-import type { Bankroll, BookmakerAccount, LedgerEntry } from '$lib/types';
+import type { Bankroll, BookmakerAccount, LedgerEntry, TradingAccount } from '$lib/types';
 
 export const load: PageServerLoad = async ({ cookies, fetch }) => {
 	const token = cookies.get('access_token');
@@ -23,11 +23,13 @@ export const load: PageServerLoad = async ({ cookies, fetch }) => {
 				{ data: [] as BookmakerAccount[], ok: true, endpointLabel: 'bookmaker accounts' },
 				{ data: [] as LedgerEntry[], ok: true, endpointLabel: 'ledger' }
 			];
+	const tradingAccountsResult = await fetchJson<TradingAccount[]>('/trading/accounts', [], 'paper trading accounts');
 
 	return {
 		bankrolls: bankrollsResult.data,
 		accounts: accountsResult.data,
 		ledger: ledgerResult.data,
-		backendStatus: summarizeBackendLoad([bankrollsResult, accountsResult, ledgerResult])
+		tradingAccounts: tradingAccountsResult.data,
+		backendStatus: summarizeBackendLoad([bankrollsResult, accountsResult, ledgerResult, tradingAccountsResult])
 	};
 };

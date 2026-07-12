@@ -15,6 +15,7 @@ from app.models.scrape import ScrapedDataset, ScrapeJob, ScrapeJobLog
 from app.models.strategy import Strategy
 from app.models.ticket import BetPlacement, Settlement, Ticket, TicketBatch, TicketLeg
 from app.models.todo import Todo
+from app.models.trading import ExecutionEvent, ExecutionIntent, ExecutionOrder, TradingAccount
 from app.models.user import Session, User
 
 __all__ = [
@@ -48,4 +49,8 @@ __all__ = [
     "Strategy",
     "Todo",
     "FootballLeagueCatalog",
+    "TradingAccount",
+    "ExecutionIntent",
+    "ExecutionOrder",
+    "ExecutionEvent",
 ]

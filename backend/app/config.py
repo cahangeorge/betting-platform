@@ -58,6 +58,14 @@ class Settings(BaseSettings):
             raise ValueError("task_queue_backend must be 'inprocess' (or legacy 'inline') or 'taskiq'")
         return backend
 
+    # Trading is paper-local only. Live execution remains a deliberately
+    # non-functional capability even if an environment accidentally enables it.
+    trading_enabled: bool = True
+    trading_paper_enabled: bool = True
+    trading_live_enabled: bool = False
+    trading_betfair_read_only_enabled: bool = False
+    trading_taskiq_queue_name: str = "bet-trading"
+
     penaltyblog_python: str = ""
     penaltyblog_bridge: str = ""
     penaltyblog_root: str = ""

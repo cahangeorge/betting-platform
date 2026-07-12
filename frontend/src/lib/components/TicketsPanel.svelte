@@ -6,6 +6,7 @@
 	import { matchesApi } from '$lib/api/matches';
 	import { cronFromInterval, describeScheduledJob, scheduledJobsForArea } from '$lib/scheduled-jobs.helpers';
 	import { ticketsApi } from '$lib/api/tickets';
+	import { tradingApi } from '$lib/api/trading';
 	import { betslip, betslipCombinedOdds, betslipPotentialReturn } from '$lib/stores/betslip';
 	import type {
 		Bankroll,
@@ -14,7 +15,9 @@
 		ScheduledJob,
 		Ticket,
 		TicketBatch,
-		TicketType
+		TicketType,
+		TradingAccount,
+		TradingExecution
 	} from '$lib/types';
 	import { onMount } from 'svelte';
 	import { countFinalScoreConflicts, finalScoreConflictPolicyMessage } from '$lib/result-refresh.helpers';
@@ -36,13 +39,15 @@
 		serverMatches,
 		serverStats,
 		serverBankrolls,
-		serverBatches
+		serverBatches,
+		serverTradingAccounts
 	}: {
 		serverTickets?: Ticket[];
 		serverMatches?: Match[];
 		serverStats?: { total: number; won: number; lost: number; profit_loss: number };
 		serverBankrolls?: Bankroll[];
 		serverBatches?: TicketBatch[];
+		serverTradingAccounts?: TradingAccount[];
 	} = $props();
 
 	let tickets = $state<Ticket[]>([]);
@@ -70,6 +75,10 @@
 	let scheduledJobsError = $state('');
 	let savingScheduledJob = $state(false);
 	let interactive = $state(false);
+	let tradingAccounts = $state<TradingAccount[]>([]);
+	let paperExecutions = $state<Record<number, TradingExecution>>({});
+	let paperExecutionMessages = $state<Record<number, string>>({});
+	let paperExecutingTicketId = $state<number | null>(null);
 
 	let betMatchId = $state('');
 	let betMarket = $state('1x2');
@@ -146,6 +155,31 @@
 			error = err instanceof ApiClientError ? err.message : 'Failed to load tickets';
 		} finally {
 			loading = false;
+		}
+	}
+
+	async function executePaperTicket(ticket: Ticket) {
+		const account = tradingAccounts.find((candidate) => candidate.enabled && candidate.mode === 'paper');
+		if (!account) {
+			paperExecutionMessages = { ...paperExecutionMessages, [ticket.id]: 'Create an enabled paper trading account on the Account page first.' };
+			return;
+		}
+		paperExecutingTicketId = ticket.id;
+		paperExecutionMessages = { ...paperExecutionMessages, [ticket.id]: '' };
+		try {
+			const execution = await tradingApi.executePaperTicket(account.id, ticket.id, `ticket-${ticket.id}-paper-v1`);
+			paperExecutions = { ...paperExecutions, [ticket.id]: execution };
+			paperExecutionMessages = {
+				...paperExecutionMessages,
+				[ticket.id]: `${execution.status}: BACK LIMIT ${execution.stake.toFixed(2)} @ ${execution.limit_price.toFixed(2)} (persisted odds)`
+			};
+		} catch (err) {
+			paperExecutionMessages = {
+				...paperExecutionMessages,
+				[ticket.id]: err instanceof ApiClientError ? err.message : 'Paper execution failed'
+			};
+		} finally {
+			paperExecutingTicketId = null;
 		}
 	}
 
@@ -610,6 +644,7 @@
 		stats = serverStats ?? { total: 0, won: 0, lost: 0, profit_loss: 0 };
 		bankrolls = serverBankrolls ?? [];
 		batches = serverBatches ?? [];
+		tradingAccounts = serverTradingAccounts ?? [];
 		if (!selectedBankrollId && serverBankrolls?.[0]) {
 			selectedBankrollId = String(serverBankrolls[0].id);
 		}
@@ -854,6 +889,20 @@
 										</div>
 									{/each}
 								</div>
+								<div class="mt-4 flex flex-wrap items-center gap-3 border-t border-border pt-3">
+									<Button
+										variant="secondary"
+										size="sm"
+										disabled={paperExecutingTicketId === ticket.id || paperExecutions[ticket.id]?.status === 'filled'}
+										onclick={() => executePaperTicket(ticket)}
+									>
+										{paperExecutingTicketId === ticket.id ? 'Executing paper...' : 'Execute paper BACK LIMIT'}
+									</Button>
+									<span class="text-xs text-muted-foreground">Local simulation only · no external order</span>
+								</div>
+								{#if paperExecutionMessages[ticket.id]}
+									<p class="mt-2 text-xs text-muted-foreground" role="status">{paperExecutionMessages[ticket.id]}</p>
+								{/if}
 						</Card>
 					{/each}
 				</div>

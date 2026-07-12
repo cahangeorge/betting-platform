@@ -1,6 +1,6 @@
 <script lang="ts">
 	import TicketsPanel from '$lib/components/TicketsPanel.svelte';
-	import type { Bankroll, Match, Ticket, TicketBatch } from '$lib/types';
+	import type { Bankroll, Match, Ticket, TicketBatch, TradingAccount } from '$lib/types';
 	import type { BackendLoadStatus } from '$lib/types/backend';
 	import { fade } from 'svelte/transition';
 
@@ -11,6 +11,7 @@
 		stats?: { total: number; won: number; lost: number; profit_loss: number };
 		bankrolls?: Bankroll[];
 		batches?: TicketBatch[];
+		tradingAccounts?: TradingAccount[];
 		backendStatus?: BackendLoadStatus;
 	};
 	const pageData = $derived(data as TicketsPageData);
@@ -39,5 +40,6 @@
 		serverStats={pageData.stats ?? { total: 0, won: 0, lost: 0, profit_loss: 0 }}
 		serverBankrolls={pageData.bankrolls ?? []}
 		serverBatches={pageData.batches ?? []}
+		serverTradingAccounts={pageData.tradingAccounts ?? []}
 	/>
 </div>

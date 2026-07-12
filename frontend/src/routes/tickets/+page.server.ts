@@ -1,7 +1,7 @@
 import type { PageServerLoad } from './$types';
 import { redirect } from '@sveltejs/kit';
 import { createBackendPageLoader, summarizeBackendLoad } from '$lib/server/backend-load';
-import type { Bankroll, TicketBatch } from '$lib/types';
+import type { Bankroll, TicketBatch, TradingAccount } from '$lib/types';
 
 export const load: PageServerLoad = async ({ cookies, fetch }) => {
 	const token = cookies.get('access_token');
@@ -12,12 +12,13 @@ export const load: PageServerLoad = async ({ cookies, fetch }) => {
 	const apiBase = process.env.BET_API_URL || 'http://localhost:8001';
 	const { fetchJson } = createBackendPageLoader(apiBase, token, fetch);
 
-	const [ticketsResult, matchesResult, statsResult, bankrollsResult, batchesResult] = await Promise.all([
+	const [ticketsResult, matchesResult, statsResult, bankrollsResult, batchesResult, tradingAccountsResult] = await Promise.all([
 		fetchJson('/tickets', [], 'tickets'),
 		fetchJson('/matches?status=scheduled', { matches: [] }, 'scheduled matches'),
 		fetchJson('/tickets/stats', { total: 0, won: 0, lost: 0, profit_loss: 0 }, 'ticket stats'),
 		fetchJson<Bankroll[]>('/bankroll', [], 'bankrolls'),
-		fetchJson<TicketBatch[]>('/tickets/batches', [], 'ticket batches')
+		fetchJson<TicketBatch[]>('/tickets/batches', [], 'ticket batches'),
+		fetchJson<TradingAccount[]>('/trading/accounts', [], 'paper trading accounts')
 	]);
 
 	return {
@@ -26,6 +27,7 @@ export const load: PageServerLoad = async ({ cookies, fetch }) => {
 		stats: statsResult.data,
 		bankrolls: bankrollsResult.data,
 		batches: batchesResult.data,
-		backendStatus: summarizeBackendLoad([ticketsResult, matchesResult, statsResult, bankrollsResult, batchesResult])
+		tradingAccounts: tradingAccountsResult.data,
+		backendStatus: summarizeBackendLoad([ticketsResult, matchesResult, statsResult, bankrollsResult, batchesResult, tradingAccountsResult])
 	};
 };

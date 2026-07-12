@@ -49,6 +49,11 @@ services:
       BET_TASKIQ_QUEUE_NAME: bet
       BET_TASKIQ_CONSUMER_GROUP: bet-workers
       BET_SCHEDULED_JOBS_ENABLED: "false"
+      BET_TRADING_ENABLED: "true"
+      BET_TRADING_PAPER_ENABLED: "true"
+      BET_TRADING_LIVE_ENABLED: "false"
+      BET_TRADING_BETFAIR_READ_ONLY_ENABLED: "false"
+      BET_TRADING_TASKIQ_QUEUE_NAME: bet-trading
       BET_ODDSHARVESTER_PYTHON: /workspace/OddsHarvester/.venv/bin/python
       BET_PENALTYBLOG_PYTHON: /workspace/penaltyblog/.venv/bin/python
       BET_PENALTYBLOG_BRIDGE: /app/app/bridges/penaltyblog_bridge.py
@@ -85,6 +90,11 @@ services:
       BET_TASKIQ_RESULT_BACKEND_URL: redis://redis:6379/1
       BET_TASKIQ_QUEUE_NAME: bet
       BET_TASKIQ_CONSUMER_GROUP: bet-workers
+      BET_TRADING_ENABLED: "true"
+      BET_TRADING_PAPER_ENABLED: "true"
+      BET_TRADING_LIVE_ENABLED: "false"
+      BET_TRADING_BETFAIR_READ_ONLY_ENABLED: "false"
+      BET_TRADING_TASKIQ_QUEUE_NAME: bet-trading
       BET_ODDSHARVESTER_PYTHON: /workspace/OddsHarvester/.venv/bin/python
       BET_PENALTYBLOG_PYTHON: /workspace/penaltyblog/.venv/bin/python
       BET_PENALTYBLOG_BRIDGE: /app/app/bridges/penaltyblog_bridge.py
@@ -102,6 +112,31 @@ services:
       redis:
         condition: service_healthy
     command: taskiq worker app.tasks.broker:broker app.tasks.jobs
+    restart: unless-stopped
+    networks:
+      - betnet
+
+  trading-runner:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      BET_DATABASE_URL: postgresql+asyncpg://betuser:${POSTGRES_PASSWORD:-betpassword_dev}@postgres:5432/betting_platform
+      BET_JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production}
+      BET_TASK_QUEUE_BACKEND: taskiq
+      BET_REDIS_URL: redis://redis:6379/0
+      BET_TASKIQ_RESULT_BACKEND_URL: redis://redis:6379/1
+      BET_TRADING_ENABLED: "true"
+      BET_TRADING_PAPER_ENABLED: "true"
+      BET_TRADING_LIVE_ENABLED: "false"
+      BET_TRADING_BETFAIR_READ_ONLY_ENABLED: "false"
+      BET_TRADING_TASKIQ_QUEUE_NAME: bet-trading
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: taskiq worker app.tasks.trading_broker:trading_broker app.tasks.trading
     restart: unless-stopped
     networks:
       - betnet

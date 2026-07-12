@@ -457,6 +457,72 @@ export interface LedgerEntry {
 	bankroll_id: number;
 }
 
+// Isolated paper-local trading domain. These accounts are intentionally
+// separate from bookmaker bookkeeping accounts and never carry credentials.
+export interface TradingAccount {
+	id: number;
+	name: string;
+	provider: 'paper-local';
+	mode: 'paper';
+	currency: string;
+	balance: number;
+	enabled: boolean;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface TradingAccountHealth {
+	account_id: number;
+	status: 'healthy' | 'disabled';
+	mode: 'paper';
+	provider: 'paper-local';
+	enabled: boolean;
+	paper_execution_enabled: boolean;
+	live_execution_enabled: false;
+	betfair_read_only_status: 'not_configured';
+	message: string;
+}
+
+export interface TradingExecution {
+	id: number;
+	trading_account_id: number;
+	ticket_id: number;
+	odds_entry_id: number;
+	idempotency_key: string;
+	mode: 'paper';
+	market: '1x2';
+	selection: 'home' | 'draw' | 'away';
+	side: 'BACK';
+	order_type: 'LIMIT';
+	stake: number;
+	limit_price: number;
+	status: 'queued' | 'accepted' | 'filled' | 'failed' | 'cancelled';
+	error: string | null;
+	created_at: string;
+	updated_at: string;
+	completed_at: string | null;
+	orders: Array<{
+		id: number;
+		provider: 'paper-local';
+		external_order_id: null;
+		status: string;
+		requested_price: number;
+		average_price: number | null;
+		requested_size: number;
+		matched_size: number;
+		created_at: string;
+	}>;
+	events: Array<{
+		id: number;
+		event_type: string;
+		from_status: string | null;
+		to_status: string;
+		message: string | null;
+		payload: Record<string, unknown> | null;
+		created_at: string;
+	}>;
+}
+
 // ─── Data / Scraping ──────────────────────────────────
 export type JobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 export type JobType = 'scrape_odds' | 'scrape_results' | 'scrape_league' | 'sync_data';

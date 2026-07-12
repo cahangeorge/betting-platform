@@ -436,7 +436,7 @@ Platforma il invoca prin `backend/app/bridges/penaltyblog_bridge.py`, cu interpr
 - paper trading si simulare istorica;
 - middleware si background workers.
 
-Nu exista o legatura activa intre backend-ul curent si `flumine`. Orice conectare viitoare trebuie tratata ca o integrare explicita de trading, cu credentiale si limite de risc separate.
+Backend-ul are acum un domeniu izolat de executie **paper-local** (conturi, intentii, ordine si evenimente persistate). Acesta nu importa si nu porneste framework-ul `flumine/`, nu incarca credentiale si nu poate trimite ordine externe. Endpoint-ul istoric `POST /tickets/{id}/place` ramane exclusiv evidenta manuala; numai `/trading/executions` reprezinta fluxul de executie paper. Limita Betfair este read-only, dezactivata separat si raporteaza `not_configured`; executia live este hard-disabled.
 
 ## 11. Aplicatiile si documentatia legacy
 

@@ -422,7 +422,15 @@ async def get_ticket(
     return ticket
 
 
-@router.post("/{ticket_id}/place", response_model=BetPlacementResponse)
+@router.post(
+    "/{ticket_id}/place",
+    response_model=BetPlacementResponse,
+    summary="Record a manual bookmaker placement",
+    description=(
+        "Manual bookkeeping only. This endpoint does not execute a paper or live order. "
+        "Use POST /api/v1/trading/executions for the isolated paper execution workflow."
+    ),
+)
 async def place_ticket(
     ticket_id: int,
     bookmaker: str,
