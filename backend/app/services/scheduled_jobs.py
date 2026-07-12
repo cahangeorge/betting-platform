@@ -71,6 +71,13 @@ def _prediction_job_status(statuses: list[str]) -> str:
     return "partial"
 
 
+def _scrape_task_run_status(job_status: str, artifacts: dict[str, Any] | None) -> str:
+    report = (artifacts or {}).get("scrape_report")
+    if job_status == "completed" and isinstance(report, dict) and report.get("health") == "degraded":
+        return "partial"
+    return job_status
+
+
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -768,7 +775,7 @@ async def execute_scrape_job_run(run_id: int) -> ScheduledJobRun:
 
         try:
             job = await execute_scrape_job(db, int(scrape_job_ids[0]))
-            status = job.status or "failed"
+            status = _scrape_task_run_status(job.status or "failed", run.artifacts)
             detail = f"scrape_job:{job.id}; status:{status}"
             if getattr(job, "error", None):
                 detail = f"{detail}; error:{job.error}"

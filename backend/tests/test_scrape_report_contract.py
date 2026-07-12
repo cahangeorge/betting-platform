@@ -6,6 +6,7 @@ import pytest
 
 from app.services import python_bridge, scraper
 from app.services.python_bridge import BridgeError, OddsHarvesterJsonResult
+from app.services.scheduled_jobs import _scrape_task_run_status
 
 
 def _report(*, status="success", successful=1, failed=0, partial=0, failures=None, warnings=None):
@@ -137,6 +138,11 @@ def test_report_health_covers_partial_and_zero_antibot_failure():
     assert failed["cli_error"] is True
     assert "match_links" not in degraded["source"]
     assert degraded["source"]["match_link_count"] == 1
+
+
+def test_degraded_scrape_report_maps_the_persisted_task_run_to_partial():
+    assert _scrape_task_run_status("completed", {"scrape_report": {"health": "degraded"}}) == "partial"
+    assert _scrape_task_run_status("completed", {"scrape_report": {"health": "healthy"}}) == "completed"
 
 
 class _ScalarRows:
