@@ -1,6 +1,8 @@
+import warnings
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -29,7 +31,10 @@ class Settings(BaseSettings):
 
     scheduled_jobs_enabled: bool = False
     scheduled_jobs_interval_seconds: int = 60
-    task_queue_backend: str = "inline"
+    task_queue_backend: str = "inprocess"
+    task_run_lease_seconds: int = 300
+    task_publish_retry_seconds: int = 15
+    task_publish_max_attempts: int = 5
     redis_url: str = "redis://localhost:6379/0"
     taskiq_broker_url: str = ""
     taskiq_result_backend_url: str = ""
@@ -37,6 +42,21 @@ class Settings(BaseSettings):
     taskiq_consumer_group: str = "bet-workers"
     taskiq_poll_interval_seconds: int = 60
     taskiq_result_ttl_seconds: int = 86400
+
+    @field_validator("task_queue_backend", mode="before")
+    @classmethod
+    def validate_task_queue_backend(cls, value: object) -> str:
+        backend = str(value or "inprocess").strip().lower()
+        if backend == "inline":
+            warnings.warn(
+                "BET_TASK_QUEUE_BACKEND=inline is deprecated; use inprocess",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            return "inprocess"
+        if backend not in {"inprocess", "taskiq"}:
+            raise ValueError("task_queue_backend must be 'inprocess' (or legacy 'inline') or 'taskiq'")
+        return backend
 
     penaltyblog_python: str = ""
     penaltyblog_bridge: str = ""

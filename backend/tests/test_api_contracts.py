@@ -274,7 +274,6 @@ async def test_scrape_background_execute_enqueues_task(monkeypatch):
         )
 
     monkeypatch.setattr(data_api, "enqueue_scrape_job_execution", fake_enqueue)
-    monkeypatch.setattr(data_api, "taskiq_queue_enabled", lambda: False)
     background_tasks = BackgroundTasks()
 
     result = await data_api.run_scrape_job_background(
@@ -288,7 +287,7 @@ async def test_scrape_background_execute_enqueues_task(monkeypatch):
     assert result.queued_run_id == 701
     assert result.queued_run is not None
     assert queued == [(fake_job.id, "api", 12)]
-    assert len(background_tasks.tasks) == 1
+    assert len(background_tasks.tasks) == 0
 
 
 @pytest.mark.asyncio

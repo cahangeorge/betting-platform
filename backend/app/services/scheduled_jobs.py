@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import async_session_factory
-from app.models.job import ScheduledJob, ScheduledJobRun
+from app.models.job import ScheduledJob, ScheduledJobRun, TaskOutbox
 from app.models.prediction import ModelPrediction, PredictionRun
 from app.models.user import User
 from app.schemas.strategy import StrategyRunFilters, StrategyRunRequest
@@ -17,10 +17,12 @@ from app.services.result_settlement import evaluate_model_prediction, settle_due
 from app.services.scraper import create_scrape_job, execute_scrape_job
 from app.services.task_runs import (
     claim_queued_task_run,
+    create_task_outbox,
     create_task_run,
     find_active_scrape_task_run,
     finish_task_run,
-    mark_task_run_enqueue_failed,
+    mark_outbox_publish_failed,
+    mark_outbox_published,
 )
 from app.services.ticket_engine import generate_tickets
 
@@ -28,6 +30,7 @@ SCHEDULED_JOB_OWNER_CONFIG_KEY = "_created_by_user_id"
 
 _scheduler_lock = asyncio.Lock()
 _scheduler_task: asyncio.Task | None = None
+_inprocess_tasks: set[asyncio.Task] = set()
 
 settings = get_settings()
 
@@ -595,7 +598,7 @@ async def dispatch_scheduled_job(db: AsyncSession, job: ScheduledJob) -> Schedul
 
 
 def taskiq_queue_enabled() -> bool:
-    return settings.task_queue_backend.strip().lower() == "taskiq"
+    return settings.task_queue_backend == "taskiq"
 
 
 async def _send_taskiq_run(run: ScheduledJobRun, *, task_name: str) -> str | None:
@@ -616,39 +619,91 @@ async def _send_taskiq_run(run: ScheduledJobRun, *, task_name: str) -> str | Non
     return getattr(task, "task_id", None)
 
 
-async def _enqueue_taskiq_run_after_commit(
-    db: AsyncSession, run: ScheduledJobRun, *, task_name: str
-) -> ScheduledJobRun:
-    """Persist a run before publishing it to Redis so workers never race the transaction."""
-    await db.commit()
+async def _send_inprocess_run(run: ScheduledJobRun, *, task_name: str) -> str:
+    del task_name  # execution routing is derived durably from the run record
+    task = asyncio.create_task(execute_task_run(run.id), name=f"task-run-{run.id}")
+    _inprocess_tasks.add(task)
+    task.add_done_callback(_inprocess_tasks.discard)
+    return f"inprocess:{run.id}"
+
+
+async def _send_outbox_run(run: ScheduledJobRun, outbox: TaskOutbox) -> str | None:
+    if outbox.transport == "taskiq":
+        return await _send_taskiq_run(run, task_name=outbox.task_name)
+    if outbox.transport == "inprocess":
+        return await _send_inprocess_run(run, task_name=outbox.task_name)
+    raise ValueError(f"Unsupported task transport: {outbox.transport}")
+
+
+async def _publish_outbox_entry(db: AsyncSession, outbox: TaskOutbox) -> ScheduledJobRun:
+    run = await db.get(ScheduledJobRun, outbox.run_id)
+    if run is None:
+        raise LookupError(f"Task outbox {outbox.id} references missing run {outbox.run_id}")
+    if outbox.status == "published":
+        return run
+    outbox.attempts += 1
     try:
-        taskiq_task_id = await _send_taskiq_run(run, task_name=task_name)
+        transport_task_id = await _send_outbox_run(run, outbox)
     except Exception as exc:
-        await mark_task_run_enqueue_failed(db, run, error=str(exc))
+        await mark_outbox_publish_failed(db, outbox, run, error=str(exc))
         await db.commit()
         raise TaskEnqueueError(run, str(exc)) from exc
-
-    run.taskiq_task_id = taskiq_task_id or run.taskiq_task_id
-    await db.flush()
+    await mark_outbox_published(db, outbox, run, transport_task_id=transport_task_id)
     await db.commit()
     return run
 
 
+async def reconcile_task_outbox(db: AsyncSession, *, limit: int = 100) -> list[ScheduledJobRun]:
+    """Retry pending task publications. Duplicate delivery is safe because claims are leased and atomic."""
+    now = utcnow()
+    stmt = (
+        select(TaskOutbox)
+        .where(TaskOutbox.status == "pending", TaskOutbox.available_at <= now)
+        .order_by(TaskOutbox.available_at.asc(), TaskOutbox.id.asc())
+        .limit(limit)
+        .with_for_update(skip_locked=True)
+    )
+    result = await db.execute(stmt)
+    outbox_entries = list(result.scalars().all())
+    published: list[ScheduledJobRun] = []
+    for outbox in outbox_entries:
+        try:
+            published.append(await _publish_outbox_entry(db, outbox))
+        except TaskEnqueueError:
+            continue
+    return published
+
+
+async def _enqueue_taskiq_run_after_commit(
+    db: AsyncSession, run: ScheduledJobRun, *, task_name: str
+) -> ScheduledJobRun:
+    """Compatibility wrapper for callers transitioning to the transactional outbox."""
+    run.transport = "taskiq"
+    outbox = await create_task_outbox(db, run, task_name=task_name, transport="taskiq", max_attempts=1)
+    await db.commit()
+    return await _publish_outbox_entry(db, outbox)
+
+
+async def _enqueue_run_after_commit(db: AsyncSession, run: ScheduledJobRun, *, task_name: str) -> ScheduledJobRun:
+    """Write run and outbox atomically, then publish only after their transaction commits."""
+    outbox = await create_task_outbox(db, run, task_name=task_name, transport=run.transport)
+    await db.commit()
+    return await _publish_outbox_entry(db, outbox)
+
+
 async def _publish_committed_taskiq_run(db: AsyncSession, run: ScheduledJobRun, *, task_name: str) -> ScheduledJobRun:
-    """Publish a run that was already committed as part of a scheduler claim batch."""
+    """Compatibility wrapper used by older callers/tests."""
+    outbox = await create_task_outbox(db, run, task_name=task_name, transport="taskiq", max_attempts=1)
+    await db.commit()
     try:
-        taskiq_task_id = await _send_taskiq_run(run, task_name=task_name)
-    except Exception as exc:
-        await mark_task_run_enqueue_failed(db, run, error=str(exc))
+        return await _publish_outbox_entry(db, outbox)
+    except TaskEnqueueError:
         if run.scheduled_job_id is not None and run.due_at is not None:
             job = await db.get(ScheduledJob, run.scheduled_job_id)
             if job is not None:
                 job.next_run = run.due_at
+                await db.commit()
         return run
-
-    run.taskiq_task_id = taskiq_task_id or run.taskiq_task_id
-    await db.flush()
-    return run
 
 
 async def execute_scheduled_job_run(run_id: int) -> ScheduledJobRun:
@@ -756,6 +811,23 @@ async def execute_world_cup_pipeline_run(run_id: int) -> ScheduledJobRun:
         return run
 
 
+async def execute_task_run(run_id: int) -> ScheduledJobRun:
+    """Canonical executor shared by in-process and Taskiq transports."""
+    async with async_session_factory() as db:
+        run = await db.get(ScheduledJobRun, run_id)
+        if run is None:
+            raise LookupError(f"Task run {run_id} not found")
+        scheduled_job_id = run.scheduled_job_id
+        task_type = run.task_type
+    if scheduled_job_id is not None:
+        return await execute_scheduled_job_run(run_id)
+    if task_type == "world_cup_pipeline":
+        return await execute_world_cup_pipeline_run(run_id)
+    if task_type == "scrape_job":
+        return await execute_scrape_job_run(run_id)
+    raise ValueError(f"Unsupported task run type: {task_type}")
+
+
 async def enqueue_scrape_job_execution(
     db: AsyncSession, *, scrape_job_id: int, triggered_by: str = "api", user_id: int | None = None
 ) -> ScheduledJobRun:
@@ -773,11 +845,9 @@ async def enqueue_scrape_job_execution(
         scrape_job_id=scrape_job_id,
         triggered_by=triggered_by,
         artifacts=artifacts,
+        transport=settings.task_queue_backend,
     )
-    if taskiq_queue_enabled():
-        return await _enqueue_taskiq_run_after_commit(db, run, task_name="scrape_job")
-    await db.commit()
-    return run
+    return await _enqueue_run_after_commit(db, run, task_name="scrape_job")
 
 
 async def enqueue_world_cup_pipeline_execution(
@@ -797,15 +867,17 @@ async def enqueue_world_cup_pipeline_execution(
         scrape_job_id=scrape_job_id,
         triggered_by=triggered_by,
         artifacts={"scrape_job_ids": [scrape_job_id], "user_id": user_id},
+        transport=settings.task_queue_backend,
     )
-    if taskiq_queue_enabled():
-        return await _enqueue_taskiq_run_after_commit(db, run, task_name="world_cup_pipeline")
-    await db.commit()
-    return run
+    return await _enqueue_run_after_commit(db, run, task_name="world_cup_pipeline")
 
 
 async def enqueue_due_scheduled_jobs(
-    db: AsyncSession, *, now: datetime | None = None, limit: int = 10
+    db: AsyncSession,
+    *,
+    now: datetime | None = None,
+    limit: int = 10,
+    transport: str = "taskiq",
 ) -> list[ScheduledJobRun]:
     current = now or utcnow()
     async with _scheduler_lock:
@@ -820,6 +892,7 @@ async def enqueue_due_scheduled_jobs(
         jobs = list(result.scalars().all())
 
         runs: list[ScheduledJobRun] = []
+        outbox_entries: list[TaskOutbox] = []
         for job in jobs:
             if job.next_run is None:
                 await initialize_next_run(db, job, now=current)
@@ -834,7 +907,9 @@ async def enqueue_due_scheduled_jobs(
                 scheduled_job=job,
                 due_at=job.next_run,
                 triggered_by="scheduler",
+                transport=transport,
             )
+            outbox_entries.append(await create_task_outbox(db, run, task_name="scheduled_job", transport=transport))
             job.last_run = current
             job.next_run = next_run_from_cron(job.cron_expression, after=current)
             await db.flush()
@@ -842,9 +917,15 @@ async def enqueue_due_scheduled_jobs(
 
         if runs:
             await db.commit()
-            for run in runs:
-                await _publish_committed_taskiq_run(db, run, task_name="scheduled_job")
-            await db.commit()
+            for run, outbox in zip(runs, outbox_entries, strict=True):
+                try:
+                    await _publish_outbox_entry(db, outbox)
+                except TaskEnqueueError:
+                    if run.scheduled_job_id is not None and run.due_at is not None:
+                        job = await db.get(ScheduledJob, run.scheduled_job_id)
+                        if job is not None:
+                            job.next_run = run.due_at
+                            await db.commit()
 
         return runs
 
@@ -853,63 +934,14 @@ async def run_due_scheduled_jobs(
     db: AsyncSession, *, now: datetime | None = None, limit: int = 10
 ) -> list[ScheduledJobRun]:
     current = now or utcnow()
-    if taskiq_queue_enabled():
-        return await enqueue_due_scheduled_jobs(db, now=current, limit=limit)
-
-    async with _scheduler_lock:
-        stmt = (
-            select(ScheduledJob)
-            .where(ScheduledJob.enabled.is_(True))
-            .order_by(ScheduledJob.next_run.asc().nulls_last())
-            .limit(limit)
-        )
-        result = await db.execute(stmt)
-        jobs = list(result.scalars().all())
-
-        runs: list[ScheduledJobRun] = []
-        for job in jobs:
-            if job.next_run is None:
-                await initialize_next_run(db, job, now=current)
-                continue
-
-            if not scheduled_job_due(job, now=current):
-                continue
-
-            run = await create_task_run(
-                db,
-                task_type=job.task_type,
-                scheduled_job=job,
-                due_at=job.next_run,
-                triggered_by="scheduler",
-                status="running",
-            )
-            try:
-                run_result = await dispatch_scheduled_job(db, job)
-            except Exception as exc:  # keep scheduler alive; surface failure in result
-                run_result = ScheduledJobRunResult(
-                    job_id=job.id, task_type=job.task_type, status="failed", detail=str(exc)
-                )
-
-            job.last_run = current
-            job.next_run = next_run_from_cron(job.cron_expression, after=current)
-            await finish_task_run(
-                db,
-                run,
-                status=run_result.status,
-                detail=run_result.detail,
-                artifacts=run_result.artifacts,
-                error=run_result.detail if run_result.status == "failed" else None,
-            )
-            await db.flush()
-            runs.append(run)
-
-        return runs
+    return await enqueue_due_scheduled_jobs(db, now=current, limit=limit, transport=settings.task_queue_backend)
 
 
 async def scheduler_loop(*, interval_seconds: int = 60) -> None:
     while True:
         async with async_session_factory() as db:
             try:
+                await reconcile_task_outbox(db)
                 await run_due_scheduled_jobs(db)
                 await db.commit()
             except Exception:

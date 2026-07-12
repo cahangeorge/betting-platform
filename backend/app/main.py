@@ -69,7 +69,7 @@ async def lifespan(app: FastAPI):
         warnings.warn(f"OddsHarvester runtime prerequisite issue: {issue}")
 
     app.state.bridge_runtime = bridge_runtime_summary()
-    if settings.scheduled_jobs_enabled and settings.task_queue_backend.strip().lower() != "taskiq":
+    if settings.scheduled_jobs_enabled and settings.task_queue_backend == "inprocess":
         start_scheduler(interval_seconds=settings.scheduled_jobs_interval_seconds)
     try:
         yield

@@ -4,9 +4,8 @@ from app.config import get_settings
 from app.database import async_session_factory
 from app.services.scheduled_jobs import (
     enqueue_due_scheduled_jobs,
-    execute_scheduled_job_run,
-    execute_scrape_job_run,
-    execute_world_cup_pipeline_run,
+    execute_task_run,
+    reconcile_task_outbox,
 )
 from app.tasks.broker import broker
 
@@ -15,22 +14,23 @@ settings = get_settings()
 
 @broker.task
 async def execute_scheduled_job_run_task(run_id: int) -> None:
-    await execute_scheduled_job_run(run_id)
+    await execute_task_run(run_id)
 
 
 @broker.task
 async def execute_scrape_job_task(run_id: int) -> None:
-    await execute_scrape_job_run(run_id)
+    await execute_task_run(run_id)
 
 
 @broker.task
 async def execute_world_cup_pipeline_task(run_id: int) -> None:
-    await execute_world_cup_pipeline_run(run_id)
+    await execute_task_run(run_id)
 
 
 @broker.task
 async def poll_due_scheduled_jobs_task(limit: int = 10) -> int:
     async with async_session_factory() as db:
+        await reconcile_task_outbox(db, limit=limit)
         runs = await enqueue_due_scheduled_jobs(db, limit=limit)
         await db.commit()
         return len(runs)

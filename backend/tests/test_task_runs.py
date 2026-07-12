@@ -4,7 +4,13 @@ from types import SimpleNamespace
 import pytest
 
 from app.services import scheduled_jobs
-from app.services.task_runs import claim_queued_task_run, create_task_run, duration_ms, finish_task_run
+from app.services.task_runs import (
+    claim_queued_task_run,
+    create_task_outbox,
+    create_task_run,
+    duration_ms,
+    finish_task_run,
+)
 
 
 class _FakeDb:
@@ -70,6 +76,34 @@ async def test_claim_queued_task_run_is_idempotent():
     assert claimed.status == "running"
     assert claimed.started_at is not None
     assert claimed.error is None
+    assert duplicate is None
+
+
+@pytest.mark.asyncio
+async def test_claim_recovers_a_stale_lease_without_allowing_a_live_duplicate():
+    now = datetime(2026, 7, 12, 10, 0, tzinfo=timezone.utc)
+    run = SimpleNamespace(
+        id=1,
+        task_type="scrape_job",
+        status="running",
+        started_at=now - timedelta(minutes=10),
+        heartbeat_at=now - timedelta(minutes=10),
+        lease_expires_at=now - timedelta(seconds=1),
+        next_attempt_at=None,
+        attempt=1,
+        max_attempts=3,
+        error="worker lost",
+    )
+    db = _FakeDb(rows=[run])
+
+    recovered = await claim_queued_task_run(db, run.id, now=now, lease_seconds=30)
+    duplicate = await claim_queued_task_run(db, run.id, now=now + timedelta(seconds=1), lease_seconds=30)
+
+    assert recovered is run
+    assert run.status == "running"
+    assert run.attempt == 2
+    assert run.heartbeat_at == now
+    assert run.lease_expires_at == now + timedelta(seconds=30)
     assert duplicate is None
 
 
@@ -181,6 +215,66 @@ async def test_taskiq_enqueue_failure_is_reported_to_api_caller(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_outbox_enqueue_failure_remains_retryable_then_publishes(monkeypatch):
+    db = _FakeDb()
+    run = await create_task_run(db, task_type="scrape_job", scrape_job_id=44, transport="taskiq")
+    outbox = await create_task_outbox(db, run, task_name="scrape_job", transport="taskiq", max_attempts=2)
+    await db.commit()
+    sends = 0
+
+    async def flaky_send(_run, _outbox):
+        nonlocal sends
+        sends += 1
+        if sends == 1:
+            raise RuntimeError("redis down")
+        return "task-retry-2"
+
+    monkeypatch.setattr(scheduled_jobs, "_send_outbox_run", flaky_send)
+
+    with pytest.raises(scheduled_jobs.TaskEnqueueError):
+        await scheduled_jobs._publish_outbox_entry(db, outbox)
+
+    assert run.status == "queued"
+    assert run.detail == "enqueue_retry_pending"
+    assert outbox.status == "pending"
+    assert outbox.attempts == 1
+
+    published = await scheduled_jobs._publish_outbox_entry(db, outbox)
+
+    assert published is run
+    assert outbox.status == "published"
+    assert run.transport_task_id == "task-retry-2"
+    assert run.taskiq_task_id == "task-retry-2"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transport", ["inprocess", "taskiq"])
+async def test_common_executor_routes_both_transports_through_same_run_path(monkeypatch, transport):
+    run = SimpleNamespace(id=77, scheduled_job_id=None, task_type="scrape_job", transport=transport)
+
+    class _SessionManager:
+        async def __aenter__(self):
+            return _FakeDb(rows=[run])
+
+        async def __aexit__(self, *_args):
+            return None
+
+    calls = []
+
+    async def fake_execute(run_id):
+        calls.append(run_id)
+        return run
+
+    monkeypatch.setattr(scheduled_jobs, "async_session_factory", _SessionManager)
+    monkeypatch.setattr(scheduled_jobs, "execute_scrape_job_run", fake_execute)
+
+    result = await scheduled_jobs.execute_task_run(run.id)
+
+    assert result is run
+    assert calls == [run.id]
+
+
+@pytest.mark.asyncio
 async def test_enqueue_scrape_job_execution_reuses_active_run(monkeypatch):
     existing_run = SimpleNamespace(
         id=31,
@@ -228,7 +322,7 @@ async def test_publish_failure_keeps_scheduled_job_due_for_retry(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_run_due_scheduled_jobs_inline_records_failure_without_stopping(monkeypatch):
+async def test_run_due_scheduled_jobs_inprocess_uses_queued_transport_semantics(monkeypatch):
     now = datetime(2026, 7, 8, 10, 0, tzinfo=timezone.utc)
     job = SimpleNamespace(
         id=8,
@@ -239,17 +333,18 @@ async def test_run_due_scheduled_jobs_inline_records_failure_without_stopping(mo
     )
     db = _FakeDb(rows=[job])
 
-    async def fake_dispatch(_db, _job):
-        raise RuntimeError("bridge failed")
+    async def fake_send(run, outbox):
+        assert outbox.transport == "inprocess"
+        return f"inprocess:{run.id}"
 
-    monkeypatch.setattr(scheduled_jobs, "taskiq_queue_enabled", lambda: False)
-    monkeypatch.setattr(scheduled_jobs, "dispatch_scheduled_job", fake_dispatch)
+    monkeypatch.setattr(scheduled_jobs.settings, "task_queue_backend", "inprocess")
+    monkeypatch.setattr(scheduled_jobs, "_send_outbox_run", fake_send)
 
     runs = await scheduled_jobs.run_due_scheduled_jobs(db, now=now, limit=10)
 
     assert len(runs) == 1
-    assert runs[0].status == "failed"
-    assert runs[0].detail == "bridge failed"
-    assert runs[0].error == "bridge failed"
+    assert runs[0].status == "queued"
+    assert runs[0].transport == "inprocess"
+    assert runs[0].transport_task_id == f"inprocess:{runs[0].id}"
     assert job.last_run == now
     assert job.next_run == now + timedelta(hours=6)

@@ -146,8 +146,6 @@ async def test_result_refresh_endpoint_queues_but_does_not_execute_inline(monkey
 
     monkeypatch.setattr(data_api, "create_result_refresh_job", fake_create)
     monkeypatch.setattr(data_api, "enqueue_scrape_job_execution", fake_enqueue)
-    monkeypatch.setattr(data_api, "taskiq_queue_enabled", lambda: True)
-
     response = await data_api.refresh_match_results(
         ResultRefreshRequest(match_ids=[8]),
         BackgroundTasks(),

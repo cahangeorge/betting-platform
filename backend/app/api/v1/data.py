@@ -26,9 +26,6 @@ from app.services.scheduled_jobs import (
     TaskEnqueueError,
     enqueue_scrape_job_execution,
     enqueue_world_cup_pipeline_execution,
-    execute_scrape_job_run,
-    execute_world_cup_pipeline_run,
-    taskiq_queue_enabled,
 )
 from app.services.scraper import create_result_refresh_job, create_scrape_job, execute_scrape_job
 
@@ -89,8 +86,6 @@ async def refresh_match_results(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"message": "Task queue publish failed", "run_id": exc.run.id},
         ) from exc
-    if not taskiq_queue_enabled():
-        background_tasks.add_task(execute_scrape_job_run, run.id)
     return _scrape_job_queued_response(job, run)
 
 
@@ -173,8 +168,6 @@ async def run_scrape_job_background(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"message": "Task queue publish failed", "run_id": exc.run.id},
         ) from exc
-    if not taskiq_queue_enabled():
-        background_tasks.add_task(execute_scrape_job_run, run.id)
     return _scrape_job_queued_response(job, run)
 
 
@@ -199,8 +192,6 @@ async def start_world_cup_pipeline(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"message": "Task queue publish failed", "run_id": exc.run.id},
         ) from exc
-    if not taskiq_queue_enabled():
-        background_tasks.add_task(execute_world_cup_pipeline_run, run.id)
     return _scrape_job_queued_response(job, run)
 
 

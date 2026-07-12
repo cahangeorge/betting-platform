@@ -36,7 +36,14 @@ class ScheduledJobRunResponse(BaseModel):
     detail: str | None = None
     artifacts: dict | None = None
     taskiq_task_id: str | None = None
+    transport: str | None = None
+    transport_task_id: str | None = None
+    idempotency_key: str | None = None
     attempt: int | None = None
+    max_attempts: int | None = None
+    next_attempt_at: datetime | None = None
+    heartbeat_at: datetime | None = None
+    lease_expires_at: datetime | None = None
     queued_at: datetime | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
