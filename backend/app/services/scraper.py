@@ -1164,6 +1164,7 @@ async def execute_scrape_job(db: AsyncSession, job_id: int) -> ScrapeJob:
                     metadata=report_summary,
                 )
                 if report_summary["health"] == "failed":
+                    job.output = json.dumps({"scrape_report": report_summary})
                     raise BridgeError("OddsHarvester scrape report classified the run as failed")
 
             ingestion_result = await _ingest_scraped_payload(db, job, payload)

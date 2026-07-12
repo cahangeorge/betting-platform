@@ -10,6 +10,7 @@ from app.services.task_runs import (
     create_task_run,
     duration_ms,
     finish_task_run,
+    heartbeat_task_run_by_id,
 )
 
 
@@ -41,6 +42,52 @@ class _FakeDb:
         return None
 
     async def execute(self, _stmt):
+        if getattr(_stmt, "is_update", False):
+            params = _stmt.compile().params
+            row_id = next((value for key, value in params.items() if key.startswith("id_")), None)
+            row = next((item for item in self.rows if getattr(item, "id", None) == row_id), None)
+            updated = None
+            if row is not None and params.get("status") == "timed_out":
+                stale = (
+                    row.status == "running"
+                    and getattr(row, "lease_expires_at", None) is not None
+                    and row.lease_expires_at <= params["lease_expires_at_1"]
+                )
+                if stale and getattr(row, "attempt", 1) >= getattr(row, "max_attempts", 3):
+                    row.status = "timed_out"
+                    row.finished_at = params["finished_at"]
+                    row.heartbeat_at = params["heartbeat_at"]
+                    row.lease_expires_at = None
+                    row.error = params["error"]
+                    updated = row.id
+            elif row is not None and params.get("status") == "running":
+                claimed_at = params["started_at"]
+                queued_ready = row.status == "queued" and (
+                    getattr(row, "next_attempt_at", None) is None or row.next_attempt_at <= claimed_at
+                )
+                stale = (
+                    row.status == "running"
+                    and getattr(row, "lease_expires_at", None) is not None
+                    and row.lease_expires_at <= claimed_at
+                    and getattr(row, "attempt", 1) < getattr(row, "max_attempts", 3)
+                )
+                if queued_ready or stale:
+                    if stale:
+                        row.attempt = getattr(row, "attempt", 1) + 1
+                    row.status = "running"
+                    row.started_at = claimed_at
+                    row.heartbeat_at = params["heartbeat_at"]
+                    row.lease_expires_at = params["lease_expires_at"]
+                    row.next_attempt_at = None
+                    row.error = None
+                    updated = row.id
+
+            class _UpdateResult:
+                def scalar_one_or_none(self):
+                    return updated
+
+            return _UpdateResult()
+
         rows = self.rows
 
         class _Scalars:
@@ -105,6 +152,136 @@ async def test_claim_recovers_a_stale_lease_without_allowing_a_live_duplicate():
     assert run.heartbeat_at == now
     assert run.lease_expires_at == now + timedelta(seconds=30)
     assert duplicate is None
+
+
+@pytest.mark.asyncio
+async def test_claim_terminalizes_an_exhausted_stale_lease_on_sqlite():
+    now = datetime(2026, 7, 12, 10, 0, tzinfo=timezone.utc)
+    run = SimpleNamespace(
+        id=1,
+        task_type="scrape_job",
+        status="running",
+        started_at=now - timedelta(minutes=10),
+        heartbeat_at=now - timedelta(minutes=10),
+        lease_expires_at=now - timedelta(seconds=1),
+        next_attempt_at=None,
+        attempt=3,
+        max_attempts=3,
+        finished_at=None,
+        duration_ms=None,
+        error=None,
+    )
+    db = _FakeDb(rows=[run])
+
+    claimed = await claim_queued_task_run(db, run.id, now=now, lease_seconds=30)
+
+    assert claimed is None
+    assert run.status == "timed_out"
+    assert run.attempt == 3
+    assert run.finished_at == now
+    assert run.duration_ms == 600_000
+    assert run.heartbeat_at == now
+    assert run.lease_expires_at is None
+    assert run.error == "task lease expired and retry limit was exhausted"
+
+
+@pytest.mark.asyncio
+async def test_postgres_claim_terminalizes_an_exhausted_stale_lease_before_retry():
+    class _PostgresDb(_FakeDb):
+        def __init__(self):
+            super().__init__()
+            self.statements = []
+
+        def get_bind(self):
+            return SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
+
+        async def execute(self, stmt):
+            self.statements.append(stmt)
+            updated_id = 91 if len(self.statements) == 2 else None
+
+            class _Result:
+                def scalar_one_or_none(self):
+                    return updated_id
+
+            return _Result()
+
+    now = datetime(2026, 7, 12, 10, 0, tzinfo=timezone.utc)
+    db = _PostgresDb()
+
+    claimed = await claim_queued_task_run(db, 91, now=now, lease_seconds=30)
+
+    assert claimed is None
+    assert len(db.statements) == 2
+    compiled = str(db.statements[1].compile(compile_kwargs={"literal_binds": True}))
+    assert "scheduled_job_runs.attempt >= scheduled_job_runs.max_attempts" in compiled
+    assert "status='timed_out'" in compiled.replace(" ", "")
+
+
+@pytest.mark.asyncio
+async def test_atomic_heartbeat_only_renews_a_running_run():
+    class _HeartbeatDb(_FakeDb):
+        def __init__(self, updated_id):
+            super().__init__()
+            self.updated_id = updated_id
+            self.statement = None
+
+        def get_bind(self):
+            return SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
+
+        async def execute(self, stmt):
+            self.statement = stmt
+            updated_id = self.updated_id
+
+            class _Result:
+                def scalar_one_or_none(self):
+                    return updated_id
+
+            return _Result()
+
+    now = datetime(2026, 7, 12, 10, 0, tzinfo=timezone.utc)
+    running_db = _HeartbeatDb(updated_id=7)
+    terminal_db = _HeartbeatDb(updated_id=None)
+
+    assert await heartbeat_task_run_by_id(running_db, 7, now=now, lease_seconds=30) is True
+    assert await heartbeat_task_run_by_id(terminal_db, 7, now=now, lease_seconds=30) is False
+    compiled = str(running_db.statement.compile(compile_kwargs={"literal_binds": True}))
+    assert "scheduled_job_runs.status = 'running'" in compiled
+    assert "2026-07-12 10:00:30" in compiled
+
+
+@pytest.mark.asyncio
+async def test_long_running_task_heartbeat_uses_a_separate_committed_session(monkeypatch):
+    stopped = scheduled_jobs.asyncio.Event()
+    heartbeat_db = _FakeDb()
+    heartbeat_calls = []
+
+    class _SessionManager:
+        async def __aenter__(self):
+            return heartbeat_db
+
+        async def __aexit__(self, *_args):
+            return None
+
+    async def fake_heartbeat(db, run_id, *, lease_seconds):
+        heartbeat_calls.append((db, run_id, lease_seconds))
+        stopped.set()
+        return True
+
+    async def immediate_timeout(awaitable, *, timeout):
+        del timeout
+        if stopped.is_set():
+            return await awaitable
+        awaitable.close()
+        raise TimeoutError
+
+    monkeypatch.setattr(scheduled_jobs, "async_session_factory", _SessionManager)
+    monkeypatch.setattr(scheduled_jobs, "heartbeat_task_run_by_id", fake_heartbeat)
+    monkeypatch.setattr(scheduled_jobs.asyncio, "wait_for", immediate_timeout)
+
+    await scheduled_jobs._maintain_task_run_heartbeat(12, stopped, lease_seconds=600)
+
+    assert heartbeat_calls == [(heartbeat_db, 12, 600)]
+    assert heartbeat_db.commits == 1
 
 
 @pytest.mark.asyncio

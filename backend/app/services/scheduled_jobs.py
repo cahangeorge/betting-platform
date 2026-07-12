@@ -1,5 +1,7 @@
 import asyncio
 import contextlib
+import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -21,6 +23,7 @@ from app.services.task_runs import (
     create_task_run,
     find_active_scrape_task_run,
     finish_task_run,
+    heartbeat_task_run_by_id,
     mark_outbox_publish_failed,
     mark_outbox_published,
 )
@@ -33,6 +36,69 @@ _scheduler_task: asyncio.Task | None = None
 _inprocess_tasks: set[asyncio.Task] = set()
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
+
+
+def _task_run_lease_seconds(run: ScheduledJobRun) -> int:
+    configured_lease = settings.task_run_lease_seconds
+    task_type = (run.task_type or "").lower()
+    if task_type == "world_cup_pipeline" or any(token in task_type for token in ("scrape", "odds")):
+        # A healthy OddsHarvester subprocess may legitimately use its entire
+        # timeout. The margin prevents a duplicate claim between timeout and
+        # exception/final-state persistence, including SQLite dev mode where a
+        # long write transaction may temporarily block the heartbeat session.
+        return max(configured_lease, settings.oddsharvester_timeout_seconds + 60)
+    return configured_lease
+
+
+async def _maintain_task_run_heartbeat(
+    run_id: int,
+    stopped: asyncio.Event,
+    *,
+    lease_seconds: int | None = None,
+) -> None:
+    """Renew a running task lease until execution finishes.
+
+    The heartbeat owns its own short-lived session so a long scraper or model
+    transaction cannot prevent lease renewal. A worker that genuinely dies
+    stops heartbeating and remains recoverable after the lease expires.
+    """
+    effective_lease_seconds = lease_seconds or settings.task_run_lease_seconds
+    interval_seconds = max(1, min(30, effective_lease_seconds // 3))
+    while True:
+        try:
+            await asyncio.wait_for(stopped.wait(), timeout=interval_seconds)
+            return
+        except TimeoutError:
+            pass
+
+        try:
+            async with async_session_factory() as heartbeat_db:
+                renewed = await heartbeat_task_run_by_id(
+                    heartbeat_db,
+                    run_id,
+                    lease_seconds=effective_lease_seconds,
+                )
+                await heartbeat_db.commit()
+        except Exception:
+            logger.warning("Task run %s heartbeat renewal failed", run_id, exc_info=True)
+            continue
+        if not renewed:
+            return
+
+
+@contextlib.asynccontextmanager
+async def _task_run_heartbeat(run_id: int, *, lease_seconds: int | None = None):
+    stopped = asyncio.Event()
+    task = asyncio.create_task(
+        _maintain_task_run_heartbeat(run_id, stopped, lease_seconds=lease_seconds),
+        name=f"task-run-heartbeat-{run_id}",
+    )
+    try:
+        yield
+    finally:
+        stopped.set()
+        await task
 
 
 class TaskEnqueueError(RuntimeError):
@@ -76,6 +142,21 @@ def _scrape_task_run_status(job_status: str, artifacts: dict[str, Any] | None) -
     if job_status == "completed" and isinstance(report, dict) and report.get("health") == "degraded":
         return "partial"
     return job_status
+
+
+def _scrape_job_artifacts(job: Any) -> dict[str, Any]:
+    artifacts: dict[str, Any] = {"scrape_job_ids": [job.id]}
+    output = getattr(job, "output", None)
+    if not isinstance(output, str) or not output:
+        return artifacts
+    try:
+        summary = json.loads(output)
+    except (TypeError, ValueError):
+        return artifacts
+    report = summary.get("scrape_report") if isinstance(summary, dict) else None
+    if isinstance(report, dict):
+        artifacts["scrape_report"] = report
+    return artifacts
 
 
 def utcnow() -> datetime:
@@ -206,6 +287,8 @@ async def _run_scrape_job(db: AsyncSession, job: ScheduledJob) -> ScheduledJobRu
 
     created = await create_scrape_job(db, task_type, league, params)
     executed = await execute_scrape_job(db, created.id)
+    artifacts = _scrape_job_artifacts(executed)
+    status = _scrape_task_run_status(executed.status or "failed", artifacts)
     if executed.status != "completed":
         detail_parts = [f"scrape_job:{created.id}", f"status:{executed.status}"]
         if getattr(executed, "error", None):
@@ -213,11 +296,16 @@ async def _run_scrape_job(db: AsyncSession, job: ScheduledJob) -> ScheduledJobRu
         return ScheduledJobRunResult(
             job_id=job.id,
             task_type=job.task_type,
-            status=executed.status or "failed",
+            status=status,
             detail="; ".join(detail_parts),
+            artifacts=artifacts,
         )
     return ScheduledJobRunResult(
-        job_id=job.id, task_type=job.task_type, status="completed", detail=f"scrape_job:{created.id}"
+        job_id=job.id,
+        task_type=job.task_type,
+        status=status,
+        detail=f"scrape_job:{created.id}",
+        artifacts=artifacts,
     )
 
 
@@ -716,7 +804,8 @@ async def _publish_committed_taskiq_run(db: AsyncSession, run: ScheduledJobRun, 
 async def execute_scheduled_job_run(run_id: int) -> ScheduledJobRun:
     async with async_session_factory() as db:
         existing_run = await db.get(ScheduledJobRun, run_id)
-        run = await claim_queued_task_run(db, run_id)
+        lease_seconds = _task_run_lease_seconds(existing_run) if existing_run is not None else None
+        run = await claim_queued_task_run(db, run_id, lease_seconds=lease_seconds)
         if run is None:
             if existing_run is None:
                 raise LookupError(f"Scheduled job run {run_id} not found")
@@ -741,7 +830,8 @@ async def execute_scheduled_job_run(run_id: int) -> ScheduledJobRun:
             return run
 
         try:
-            result = await dispatch_scheduled_job(db, job)
+            async with _task_run_heartbeat(run.id, lease_seconds=lease_seconds):
+                result = await dispatch_scheduled_job(db, job)
             await finish_task_run(
                 db,
                 run,
@@ -759,7 +849,8 @@ async def execute_scheduled_job_run(run_id: int) -> ScheduledJobRun:
 async def execute_scrape_job_run(run_id: int) -> ScheduledJobRun:
     async with async_session_factory() as db:
         existing_run = await db.get(ScheduledJobRun, run_id)
-        run = await claim_queued_task_run(db, run_id)
+        lease_seconds = _task_run_lease_seconds(existing_run) if existing_run is not None else None
+        run = await claim_queued_task_run(db, run_id, lease_seconds=lease_seconds)
         if run is None:
             if existing_run is None:
                 raise LookupError(f"Scrape job run {run_id} not found")
@@ -774,12 +865,14 @@ async def execute_scrape_job_run(run_id: int) -> ScheduledJobRun:
             return run
 
         try:
-            job = await execute_scrape_job(db, int(scrape_job_ids[0]))
-            status = _scrape_task_run_status(job.status or "failed", run.artifacts)
+            async with _task_run_heartbeat(run.id, lease_seconds=lease_seconds):
+                job = await execute_scrape_job(db, int(scrape_job_ids[0]))
+            artifacts = _scrape_job_artifacts(job)
+            status = _scrape_task_run_status(job.status or "failed", artifacts)
             detail = f"scrape_job:{job.id}; status:{status}"
             if getattr(job, "error", None):
                 detail = f"{detail}; error:{job.error}"
-            await finish_task_run(db, run, status=status, detail=detail)
+            await finish_task_run(db, run, status=status, detail=detail, artifacts=artifacts)
             await db.commit()
         except Exception as exc:
             await finish_task_run(db, run, status="failed", detail=str(exc), error=str(exc))
@@ -792,7 +885,8 @@ async def execute_world_cup_pipeline_run(run_id: int) -> ScheduledJobRun:
 
     async with async_session_factory() as db:
         existing_run = await db.get(ScheduledJobRun, run_id)
-        run = await claim_queued_task_run(db, run_id)
+        lease_seconds = _task_run_lease_seconds(existing_run) if existing_run is not None else None
+        run = await claim_queued_task_run(db, run_id, lease_seconds=lease_seconds)
         if run is None:
             if existing_run is None:
                 raise LookupError(f"World Cup pipeline run {run_id} not found")
@@ -809,7 +903,8 @@ async def execute_world_cup_pipeline_run(run_id: int) -> ScheduledJobRun:
             return run
 
         try:
-            await execute_world_cup_pipeline_job(int(scrape_job_ids[0]), int(user_id))
+            async with _task_run_heartbeat(run.id, lease_seconds=lease_seconds):
+                await execute_world_cup_pipeline_job(int(scrape_job_ids[0]), int(user_id))
             await finish_task_run(db, run, status="completed", detail=f"world_cup_pipeline:{scrape_job_ids[0]}")
             await db.commit()
         except Exception as exc:

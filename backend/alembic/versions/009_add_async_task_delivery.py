@@ -28,7 +28,14 @@ def upgrade() -> None:
     op.add_column("scheduled_job_runs", sa.Column("next_attempt_at", sa.DateTime(timezone=True), nullable=True))
     op.add_column("scheduled_job_runs", sa.Column("heartbeat_at", sa.DateTime(timezone=True), nullable=True))
     op.add_column("scheduled_job_runs", sa.Column("lease_expires_at", sa.DateTime(timezone=True), nullable=True))
-    op.create_unique_constraint("uq_scheduled_job_runs_idempotency_key", "scheduled_job_runs", ["idempotency_key"])
+    # SQLite cannot add a UNIQUE constraint to an existing table without
+    # rebuilding it. A unique index provides the same cross-database guarantee.
+    op.create_index(
+        "uq_scheduled_job_runs_idempotency_key",
+        "scheduled_job_runs",
+        ["idempotency_key"],
+        unique=True,
+    )
     op.execute(
         "UPDATE scheduled_job_runs SET transport = 'taskiq', transport_task_id = taskiq_task_id "
         "WHERE taskiq_task_id IS NOT NULL"
@@ -63,7 +70,7 @@ def downgrade() -> None:
     op.drop_index("ix_task_outbox_status", table_name="task_outbox")
     op.drop_index("ix_task_outbox_run_id", table_name="task_outbox")
     op.drop_table("task_outbox")
-    op.drop_constraint("uq_scheduled_job_runs_idempotency_key", "scheduled_job_runs", type_="unique")
+    op.drop_index("uq_scheduled_job_runs_idempotency_key", table_name="scheduled_job_runs")
     op.drop_column("scheduled_job_runs", "lease_expires_at")
     op.drop_column("scheduled_job_runs", "heartbeat_at")
     op.drop_column("scheduled_job_runs", "next_attempt_at")

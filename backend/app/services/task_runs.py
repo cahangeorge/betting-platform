@@ -134,37 +134,6 @@ async def claim_queued_task_run(
     """
     claimed_at = now or utcnow()
     lease_expires_at = claimed_at + timedelta(seconds=lease_seconds or settings.task_run_lease_seconds)
-    bind = db.get_bind()
-    dialect_name = bind.dialect.name if bind is not None else ""
-    if dialect_name == "sqlite":
-        run = await db.get(ScheduledJobRun, run_id)
-        if run is None:
-            return None
-        queued_ready = run.status == "queued" and (
-            getattr(run, "next_attempt_at", None) is None or run.next_attempt_at <= claimed_at
-        )
-        stale_running = run.status == "running" and (
-            getattr(run, "lease_expires_at", None) is not None and run.lease_expires_at <= claimed_at
-        )
-        if not queued_ready and not stale_running:
-            return None
-        if stale_running:
-            run.attempt = getattr(run, "attempt", 1) + 1
-            if run.attempt > getattr(run, "max_attempts", 3):
-                run.status = "timed_out"
-                run.finished_at = claimed_at
-                run.error = "task lease expired and retry limit was exhausted"
-                await db.flush()
-                return None
-        run.status = "running"
-        run.started_at = claimed_at
-        run.heartbeat_at = claimed_at
-        run.lease_expires_at = lease_expires_at
-        run.next_attempt_at = None
-        run.error = None
-        await db.flush()
-        return run
-
     stmt = (
         update(ScheduledJobRun)
         .where(
@@ -195,9 +164,35 @@ async def claim_queued_task_run(
     )
     result = await db.execute(stmt)
     claimed_id = result.scalar_one_or_none()
-    if claimed_id is None:
-        return None
-    return await db.get(ScheduledJobRun, claimed_id)
+    if claimed_id is not None:
+        return await db.get(ScheduledJobRun, claimed_id)
+
+    exhausted_stmt = (
+        update(ScheduledJobRun)
+        .where(
+            ScheduledJobRun.id == run_id,
+            ScheduledJobRun.status == "running",
+            ScheduledJobRun.lease_expires_at.is_not(None),
+            ScheduledJobRun.lease_expires_at <= claimed_at,
+            ScheduledJobRun.attempt >= ScheduledJobRun.max_attempts,
+        )
+        .values(
+            status="timed_out",
+            finished_at=claimed_at,
+            heartbeat_at=claimed_at,
+            lease_expires_at=None,
+            error="task lease expired and retry limit was exhausted",
+        )
+        .returning(ScheduledJobRun.id)
+    )
+    exhausted_result = await db.execute(exhausted_stmt)
+    exhausted_id = exhausted_result.scalar_one_or_none()
+    if exhausted_id is not None:
+        exhausted_run = await db.get(ScheduledJobRun, exhausted_id)
+        if exhausted_run is not None:
+            exhausted_run.duration_ms = duration_ms(exhausted_run.started_at, claimed_at)
+            await db.flush()
+    return None
 
 
 async def finish_task_run(
@@ -244,6 +239,31 @@ async def heartbeat_task_run(
     run.lease_expires_at = now + timedelta(seconds=lease_seconds or settings.task_run_lease_seconds)
     await db.flush()
     return run
+
+
+async def heartbeat_task_run_by_id(
+    db: AsyncSession,
+    run_id: int,
+    *,
+    now: datetime | None = None,
+    lease_seconds: int | None = None,
+) -> bool:
+    """Renew a live task lease without resurrecting a terminal run.
+
+    Long-running work uses a separate database session for heartbeats. The
+    status predicate makes a late heartbeat harmless when the execution
+    session has already completed or failed the run.
+    """
+    heartbeat_at = now or utcnow()
+    lease_expires_at = heartbeat_at + timedelta(seconds=lease_seconds or settings.task_run_lease_seconds)
+    stmt = (
+        update(ScheduledJobRun)
+        .where(ScheduledJobRun.id == run_id, ScheduledJobRun.status == "running")
+        .values(heartbeat_at=heartbeat_at, lease_expires_at=lease_expires_at)
+        .returning(ScheduledJobRun.id)
+    )
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none() is not None
 
 
 async def create_task_outbox(

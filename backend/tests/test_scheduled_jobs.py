@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.models.job import ScheduledJob, ScheduledJobRun
 from app.services import scheduled_jobs
 from app.services.result_settlement import SettlementRunSummary
 from app.services.scheduled_jobs import (
@@ -84,6 +85,90 @@ async def test_dispatch_scrape_job_propagates_failed_execution(monkeypatch):
 
     assert result.status == "failed"
     assert result.detail == "scrape_job:45; status:failed; error:bridge timeout"
+
+
+@pytest.mark.asyncio
+async def test_scheduled_scrape_persists_degraded_report_and_finishes_partial(monkeypatch):
+    job = SimpleNamespace(
+        id=7,
+        task_type="scrape_odds",
+        config={"league": "romania", "params": {"command": "upcoming"}},
+    )
+    run = SimpleNamespace(
+        id=73,
+        scheduled_job_id=job.id,
+        task_type="scrape_odds",
+        status="queued",
+        started_at=None,
+        finished_at=None,
+        heartbeat_at=None,
+        lease_expires_at=None,
+        next_attempt_at=None,
+        attempt=1,
+        max_attempts=3,
+        error=None,
+        detail=None,
+        duration_ms=None,
+        artifacts=None,
+    )
+
+    class ServiceDb:
+        def get_bind(self):
+            return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+
+        async def get(self, model, row_id):
+            if model is ScheduledJobRun and row_id == run.id:
+                return run
+            if model is ScheduledJob and row_id == job.id:
+                return job
+            return None
+
+        async def flush(self):
+            return None
+
+        async def commit(self):
+            return None
+
+    db = ServiceDb()
+
+    class SessionManager:
+        async def __aenter__(self):
+            return db
+
+        async def __aexit__(self, *_args):
+            return None
+
+    async def fake_create_scrape_job(_db, _job_type, _league, _params):
+        return SimpleNamespace(id=81)
+
+    async def fake_execute_scrape_job(_db, job_id):
+        return SimpleNamespace(
+            id=job_id,
+            status="completed",
+            output='{"scrape_report":{"health":"degraded","failure_count":1}}',
+            error=None,
+        )
+
+    async def fake_claim(_db, run_id, *, lease_seconds=None):
+        assert run_id == run.id
+        assert lease_seconds is not None
+        run.status = "running"
+        run.started_at = datetime.now(timezone.utc)
+        return run
+
+    monkeypatch.setattr(scheduled_jobs, "async_session_factory", SessionManager)
+    monkeypatch.setattr(scheduled_jobs, "claim_queued_task_run", fake_claim)
+    monkeypatch.setattr(scheduled_jobs, "create_scrape_job", fake_create_scrape_job)
+    monkeypatch.setattr(scheduled_jobs, "execute_scrape_job", fake_execute_scrape_job)
+
+    result = await scheduled_jobs.execute_scheduled_job_run(run.id)
+
+    assert result.status == "partial"
+    assert result.artifacts == {
+        "scrape_job_ids": [81],
+        "scrape_report": {"health": "degraded", "failure_count": 1},
+    }
+    assert run.finished_at is not None
 
 
 @pytest.mark.asyncio
