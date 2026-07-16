@@ -1,9 +1,13 @@
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models import Base
+
+if TYPE_CHECKING:
+    from app.models.model_governance import ModelEvaluation
 
 
 class ScheduledJob(Base):
@@ -40,6 +44,11 @@ class ScheduledJobRun(Base):
         nullable=True,
         index=True,
     )
+    model_evaluation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("model_evaluations.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     task_type: Mapped[str] = mapped_column(String(100), nullable=False)
     status: Mapped[str] = mapped_column(String(50), default="queued", nullable=False, index=True)
     taskiq_task_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -63,6 +72,7 @@ class ScheduledJobRun(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     scheduled_job: Mapped["ScheduledJob | None"] = relationship("ScheduledJob", back_populates="runs")
+    model_evaluation: Mapped["ModelEvaluation | None"] = relationship("ModelEvaluation")
 
     @property
     def job_id(self) -> int | None:

@@ -1,9 +1,11 @@
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 import bcrypt
 from jose import JWTError, jwt
 
 from app.config import get_settings
+from app.models.user import Session
 
 settings = get_settings()
 
@@ -27,9 +29,24 @@ def create_access_token(user_id: int) -> str:
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
-def create_refresh_token(user_id: int) -> str:
+def create_refresh_session(user_id: int) -> Session:
+    return Session(
+        session_id=uuid4().hex,
+        user_id=user_id,
+        expires_at=datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days),
+    )
+
+
+def create_refresh_token(user_id: int, session_id: str | None = None) -> str:
     expire = datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days)
-    payload = {"sub": str(user_id), "exp": expire, "type": "refresh"}
+    token_id = session_id or uuid4().hex
+    payload = {
+        "sub": str(user_id),
+        "exp": expire,
+        "type": "refresh",
+        "sid": token_id,
+        "jti": token_id,
+    }
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 

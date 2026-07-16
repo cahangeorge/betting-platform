@@ -4,11 +4,15 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, Request, Response
+from fastapi.responses import JSONResponse
+from sqlalchemy import select, text
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.v1.router import v1_router
 from app.config import get_settings
-from app.database import ensure_dev_admin, ensure_schema
+from app.database import engine, ensure_dev_admin, ensure_schema
+from app.models.user import User
 from app.services.python_bridge import bridge_runtime_summary, validate_bridge_runtime
 from app.services.scheduled_jobs import start_scheduler, stop_scheduler
 
@@ -96,6 +100,28 @@ app.include_router(v1_router)
 @app.get("/health")
 async def health():
     return {"status": "ok", "app": settings.app_name}
+
+
+@app.get("/api/v1/ready", include_in_schema=False)
+@app.get("/ready")
+async def readiness():
+    try:
+        async with engine.connect() as connection:
+            await connection.execute(text("SELECT 1"))
+            try:
+                await connection.execute(select(User.id).limit(1))
+            except SQLAlchemyError:
+                return JSONResponse(
+                    status_code=503,
+                    content={"status": "unavailable", "database": "ready", "schema": "unavailable"},
+                )
+    except (OSError, SQLAlchemyError):
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unavailable", "database": "unavailable"},
+        )
+
+    return {"status": "ready", "database": "ready", "schema": "ready"}
 
 
 @app.get("/api/v1/health")

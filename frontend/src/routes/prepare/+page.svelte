@@ -26,6 +26,7 @@
 		formatCatalogRefreshTime,
 		getLeagueCatalogAvailability,
 		getLargeScrapeScopeWarning,
+		historicRangeMetadata,
 		isLeagueScrapeSelectable,
 		parseScrapeCatalog,
 		type CatalogAvailability
@@ -111,6 +112,14 @@
 		errors: { type: string; id: number; error: string }[];
 	};
 
+	type FootballCatalogValidationResponse = {
+		requested: number;
+		checked: number;
+		results_page_ok: number;
+		unavailable: number;
+		pending: number;
+	};
+
 	function localDateString(date: Date): string {
 		const year = date.getFullYear();
 		const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -137,6 +146,9 @@ function tomorrowLocalDate(): string {
 	let catalogSource = $state<string | null>(null);
 	let catalogStatus = $state<CatalogAvailability>(null);
 	let catalogLastRefreshedAt = $state<string | null>(null);
+	let validatingCatalog = $state(false);
+	let catalogValidationMessage = $state('');
+	let catalogValidationError = $state('');
 
 	// Past History
 	let pastEnabled = $state(true);
@@ -228,6 +240,18 @@ function tomorrowLocalDate(): string {
 			label: c
 		}))
 	);
+	const selectedCountryPendingCandidates = $derived.by(() => {
+		if (selectedCountries.length !== 1) return 0;
+		return (
+			countries
+				.find((country) => country.country === selectedCountries[0])
+				?.leagues.filter((league) => {
+					const availability = getLeagueCatalogAvailability(league);
+					return availability === 'discovered' || availability === 'validated_url';
+				}).length ?? 0
+		);
+	});
+	const catalogValidationBatchSize = $derived(Math.min(selectedCountryPendingCandidates, 25));
 
 	const selectedLeagueBadges = $derived(
 		selectedLeagues.map((id) => {
@@ -354,6 +378,32 @@ function tomorrowLocalDate(): string {
 			// silently handle — catalog may not be available yet
 		} finally {
 			loadingCatalog = false;
+		}
+	}
+
+	async function validatePendingCatalogCandidates() {
+		if (selectedCountries.length !== 1 || catalogValidationBatchSize === 0) return;
+		validatingCatalog = true;
+		catalogValidationError = '';
+		catalogValidationMessage = '';
+		try {
+			const res = await fetch(`${BASE_URL}/api/v1/catalog/football/validate`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				credentials: 'include',
+				body: JSON.stringify({ country: selectedCountries[0], limit: 25 })
+			});
+			if (!res.ok) {
+				const err = await res.json().catch(() => ({ detail: 'Catalog validation failed' }));
+				throw new Error(err.detail || `HTTP ${res.status}`);
+			}
+			const result = (await res.json()) as FootballCatalogValidationResponse;
+			catalogValidationMessage = `Checked ${result.checked}: ${result.results_page_ok} results pages verified, ${result.unavailable} unavailable, ${result.pending} deferred for retry.`;
+			await fetchCatalog();
+		} catch (err) {
+			catalogValidationError = err instanceof Error ? err.message : 'Catalog validation failed';
+		} finally {
+			validatingCatalog = false;
 		}
 	}
 
@@ -625,6 +675,7 @@ function tomorrowLocalDate(): string {
 
 			if (pastEnabled && pastFrom && pastTo) {
 				const seasons = buildHistoricSeasons(pastFrom, pastTo, scrapeLeagueSlugs);
+				const historicMetadata = historicRangeMetadata(pastFrom, pastTo, historicIntervalDays);
 				if (seasons.length === 0) {
 					throw new Error('No historical seasons found for the selected range');
 				}
@@ -639,8 +690,8 @@ function tomorrowLocalDate(): string {
 							season,
 							past_from: pastFrom,
 							past_to: pastTo,
-							historic_range_days: historicIntervalDays || undefined,
-							history_years: Number.parseInt(historyPresetYears, 10) || undefined,
+							historic_range_days: historicMetadata.days || undefined,
+							history_years: historicMetadata.years || undefined,
 							max_pages: isWorldCupOnly ? Math.max(maxPages, 3) : maxPages,
 							timeout_seconds: isWorldCupOnly ? 2400 : undefined
 						},
@@ -897,7 +948,12 @@ function tomorrowLocalDate(): string {
 	<title>Prepare match data · Betfront</title>
 </svelte:head>
 
-<div class="mx-auto flex min-w-0 max-w-6xl flex-col gap-6 overflow-hidden pb-8" transition:fade={{ duration: 200 }}>
+<div
+	class="mx-auto flex min-w-0 max-w-6xl flex-col gap-6 overflow-hidden pb-8"
+	data-testid="prepare-panel"
+	data-interactive={interactive ? 'true' : 'false'}
+	transition:fade={{ duration: 200 }}
+>
 	<header class="order-1 space-y-5">
 		<div class="max-w-3xl">
 			<p class="text-xs font-semibold uppercase tracking-[0.16em] text-football-blue">Data preparation</p>
@@ -1489,6 +1545,25 @@ function tomorrowLocalDate(): string {
 							{/each}
 						</div>
 					{/if}
+					{#if selectedCountries.length === 1 && catalogValidationBatchSize > 0}
+						<div class="mt-3 flex flex-wrap items-center gap-2 border border-dashed border-football-blue/40 bg-football-blue/5 p-3">
+							<div class="min-w-0 flex-1">
+								<p class="text-xs font-semibold text-foreground">Validate pending league pages</p>
+								<p class="mt-0.5 text-xs text-muted-foreground">
+									Checks up to {catalogValidationBatchSize} rendered OddsPortal Results pages for {selectedCountries[0]}; it does not scrape odds or auto-enable the leagues.
+								</p>
+							</div>
+							<Button variant="secondary" size="sm" disabled={validatingCatalog} onclick={validatePendingCatalogCandidates}>
+								{validatingCatalog ? 'Validating…' : `Validate ${catalogValidationBatchSize} pending`}
+							</Button>
+						</div>
+					{/if}
+					{#if catalogValidationMessage}
+						<p class="mt-2 text-xs text-football-green" role="status">{catalogValidationMessage}</p>
+					{/if}
+					{#if catalogValidationError}
+						<p class="mt-2 text-xs text-destructive" role="alert">{catalogValidationError}</p>
+					{/if}
 				{/if}
 			</div>
 
@@ -1565,9 +1640,9 @@ function tomorrowLocalDate(): string {
 													class="h-4 w-4 shrink-0 accent-[hsl(var(--football-green))]"
 											/>
 											<span class="min-w-0 text-sm text-foreground">{league.name}</span>
-											{#if availability}
-												<Badge variant={availability === 'validated' ? 'success' : availability === 'discovered' ? 'warning' : 'danger'} class="shrink-0 px-1.5 py-0 text-[10px]">
-													{catalogAvailabilityLabel(availability)}
+													{#if availability}
+														<Badge variant={availability === 'validated' ? 'success' : availability === 'unavailable' ? 'danger' : 'warning'} class="shrink-0 px-1.5 py-0 text-[10px]">
+															{catalogAvailabilityLabel(availability)}
 												</Badge>
 											{:else if !selectable}
 												<span class="text-[10px] uppercase tracking-wide text-muted-foreground">Unavailable</span>

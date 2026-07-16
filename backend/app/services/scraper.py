@@ -2,19 +2,27 @@ import asyncio
 import json
 import logging
 import re
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlparse, urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import event, select
+from sqlalchemy import event, inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.live import broadcast_match_update, broadcast_odds_update
+from app.models.football_catalog import FootballLeagueCatalog
 from app.models.job import ScheduledJobRun
 from app.models.match import Match, MatchSource, OddsEntry
+from app.models.odds_lineage import OddsSnapshot
 from app.models.scrape import ScrapedDataset, ScrapeJob, ScrapeJobLog
-from app.services.python_bridge import BridgeError, OddsHarvesterJsonResult, run_oddsharvester_json
+from app.services.python_bridge import (
+    BridgeError,
+    OddsHarvesterJsonResult,
+    run_oddsharvester_json,
+    validate_oddsharvester_football_catalog,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +129,13 @@ SENSITIVE_ARG_FLAGS = {
 }
 
 
+@dataclass(frozen=True)
+class RuntimeCatalogResolution:
+    env: dict[str, str]
+    league_override: list[str] | None = None
+    skipped_historic_leagues: list[str] | None = None
+
+
 def _normalize_scrape_value(value):
     if isinstance(value, dict):
         return {
@@ -176,18 +191,23 @@ def _is_live_relevant_market(market_name: str) -> bool:
 
 
 def _build_match_update_payload(match: Match) -> dict[str, Any]:
+    # Server-generated/on-update columns can be expired by a flush. Reading an
+    # expired ORM descriptor from AsyncSession code attempts implicit sync IO
+    # and raises MissingGreenlet. Broadcasts are best-effort snapshots, so use
+    # only values already loaded on the instance and never trigger a refresh.
+    loaded = inspect(match).dict
     return {
-        "id": match.id,
-        "external_id": match.external_id,
-        "sport": match.sport,
-        "competition": match.competition,
-        "home_team": match.home_team,
-        "away_team": match.away_team,
-        "home_score": match.home_score,
-        "away_score": match.away_score,
-        "status": match.status,
-        "match_date": _safe_iso(match.match_date),
-        "updated_at": _safe_iso(getattr(match, "updated_at", None)),
+        "id": loaded.get("id"),
+        "external_id": loaded.get("external_id"),
+        "sport": loaded.get("sport"),
+        "competition": loaded.get("competition"),
+        "home_team": loaded.get("home_team"),
+        "away_team": loaded.get("away_team"),
+        "home_score": loaded.get("home_score"),
+        "away_score": loaded.get("away_score"),
+        "status": loaded.get("status"),
+        "match_date": _safe_iso(loaded.get("match_date")),
+        "updated_at": _safe_iso(loaded.get("updated_at")),
     }
 
 
@@ -518,9 +538,17 @@ def _market_key_to_odds(
 
     if key == "btts":
         return (
-            _coerce_float(bookmaker_market.get("Yes") or bookmaker_market.get("odds_yes")),
+            _coerce_float(
+                bookmaker_market.get("Yes")
+                or bookmaker_market.get("odds_yes")
+                or bookmaker_market.get("btts_yes")
+            ),
             None,
-            _coerce_float(bookmaker_market.get("No") or bookmaker_market.get("odds_no")),
+            _coerce_float(
+                bookmaker_market.get("No")
+                or bookmaker_market.get("odds_no")
+                or bookmaker_market.get("btts_no")
+            ),
         )
 
     if key.startswith("over_under"):
@@ -619,12 +647,12 @@ def _redact_sensitive_args(args: list[str]) -> list[str]:
     return redacted
 
 
-def _build_oddsharvester_args(job: ScrapeJob) -> list[str]:
+def _build_oddsharvester_args(job: ScrapeJob, *, league_override: list[str] | None = None) -> list[str]:
     params = job.params or {}
     command = params.get("command", "upcoming")
     sport = str(params.get("sport", "football"))
     markets = params.get("markets")
-    leagues = params.get("leagues")
+    leagues = league_override if league_override is not None else params.get("leagues")
     date = params.get("date")
     season = params.get("season")
     max_pages = params.get("max_pages")
@@ -720,6 +748,17 @@ def _job_oddsharvester_timeout(job: ScrapeJob) -> int | None:
     return _coerce_int(params.get("timeout_seconds") or params.get("oddsharvester_timeout_seconds"))
 
 
+def _effective_oddsharvester_timeout(job: ScrapeJob, league_count: int) -> int | None:
+    configured = _job_oddsharvester_timeout(job)
+    if str((job.params or {}).get("command", "upcoming")) != "historic":
+        return configured
+    # Multi-league historic jobs include pagination and may legitimately exceed
+    # the generic 600s bridge default. Keep an upper bound while scaling with
+    # the validated league batch.
+    adaptive = min(3600, 600 + max(1, league_count) * 300)
+    return max(configured or 0, adaptive)
+
+
 def _scrape_report_summary(report: dict, records: list[dict], *, cli_error: str | None = None) -> dict[str, Any]:
     if report.get("schema_version") != "1.0":
         raise BridgeError("Unsupported OddsHarvester scrape report schema_version")
@@ -740,18 +779,30 @@ def _scrape_report_summary(report: dict, records: list[dict], *, cli_error: str 
         raise BridgeError("OddsHarvester scrape report is missing engines, source, or timing")
 
     failure_types = sorted(
-        {
-            str(item.get("error_type"))
-            for item in failures
-            if isinstance(item, dict) and item.get("error_type")
-        }
+        {str(item.get("error_type")) for item in failures if isinstance(item, dict) and item.get("error_type")}
     )
     diagnostic_text = json.dumps({"failures": failures, "warnings": warnings}, default=str).lower()
     anti_bot_detected = any(marker in diagnostic_text for marker in ANTI_BOT_MARKERS)
     failure_count = max(_coerce_int(stats.get("failed")) or 0, len(failures))
     partial_count = _coerce_int(stats.get("partial")) or 0
 
-    if scraper_status == "failed" or (not records and (failure_count or anti_bot_detected or cli_error)):
+    source_command = source.get("command") or report.get("command")
+    empty_upcoming = (
+        source_command == "upcoming"
+        and not records
+        and not failure_count
+        and not partial_count
+        and not anti_bot_detected
+        and (stats.get("total_urls") or 0) == 0
+        and cli_error is not None
+    )
+
+    if empty_upcoming:
+        # OddsHarvester exits non-zero when a date has no match links. That is
+        # a valid, auditable outcome for a targeted upcoming-day scrape, not a
+        # bridge outage or anti-bot failure.
+        health = "no_fixtures"
+    elif scraper_status == "failed" or (not records and (failure_count or anti_bot_detected or cli_error)):
         health = "failed"
     elif scraper_status == "partial" or failure_count or partial_count:
         health = "degraded"
@@ -796,12 +847,11 @@ def _scrape_report_summary(report: dict, records: list[dict], *, cli_error: str 
             "duration_seconds": _coerce_float(timing.get("duration_seconds")) or 0.0,
         },
         "cli_error": bool(cli_error),
+        "no_fixtures": empty_upcoming,
     }
 
 
-async def _persist_scrape_report_artifact(
-    db: AsyncSession, scrape_job_id: int, report_summary: dict[str, Any]
-) -> None:
+async def _persist_scrape_report_artifact(db: AsyncSession, scrape_job_id: int, report_summary: dict[str, Any]) -> None:
     result = await db.execute(select(ScheduledJobRun).where(ScheduledJobRun.scrape_job_id == scrape_job_id))
     for run in result.scalars().all():
         artifacts = dict(run.artifacts or {})
@@ -810,16 +860,89 @@ async def _persist_scrape_report_artifact(
 
 
 async def _run_oddsharvester_with_report(
-    args: list[str], *, label: str, timeout: int | None
+    args: list[str], *, label: str, timeout: int | None, extra_env: dict[str, str] | None = None
 ) -> list[dict] | OddsHarvesterJsonResult:
+    kwargs: dict[str, Any] = {"label": label, "timeout": timeout, "include_report": True}
+    if extra_env:
+        kwargs["extra_env"] = extra_env
     try:
-        return await run_oddsharvester_json(args, label=label, timeout=timeout, include_report=True)
+        return await run_oddsharvester_json(args, **kwargs)
     except TypeError as exc:
         # Test doubles and older in-process callers may still expose the original
         # list-only bridge signature. The external CLI fallback lives in python_bridge.
         if "include_report" not in str(exc):
             raise
-        return await run_oddsharvester_json(args, label=label, timeout=timeout)
+        fallback_kwargs: dict[str, Any] = {"label": label, "timeout": timeout}
+        if extra_env:
+            fallback_kwargs["extra_env"] = extra_env
+        return await run_oddsharvester_json(args, **fallback_kwargs)
+
+
+def _requested_scrape_league_slugs(job: ScrapeJob) -> set[str]:
+    params = job.params or {}
+    raw_leagues = params.get("leagues")
+    if isinstance(raw_leagues, list):
+        return {str(slug) for slug in raw_leagues if slug}
+    if isinstance(raw_leagues, str):
+        return {slug.strip() for slug in raw_leagues.split(",") if slug.strip()}
+    return {job.league} if job.league else set()
+
+
+async def _runtime_catalog_league_env(db: AsyncSession, job: ScrapeJob) -> RuntimeCatalogResolution:
+    """Inject only Results-page-validated dynamic leagues into this CLI process."""
+    params = job.params or {}
+    if str(params.get("sport", "football")) != "football":
+        return RuntimeCatalogResolution({})
+    slugs = _requested_scrape_league_slugs(job)
+    if not slugs:
+        return RuntimeCatalogResolution({})
+    result = await db.execute(
+        select(FootballLeagueCatalog).where(
+            FootballLeagueCatalog.scrape_slug.in_(slugs),
+            FootballLeagueCatalog.status == "available",
+        )
+    )
+    rows = [row for row in result.scalars().all() if isinstance(row, FootballLeagueCatalog)]
+    mapping = {row.scrape_slug: row.source_url for row in rows}
+    if not mapping:
+        return RuntimeCatalogResolution({})
+
+    env = {"ODDSHARVESTER_RUNTIME_FOOTBALL_LEAGUES": json.dumps(mapping)}
+    if str(params.get("command", "upcoming")) != "historic":
+        return RuntimeCatalogResolution(env)
+
+    season = str(params.get("season") or "").strip()
+    if not season:
+        raise ValueError("Historic scraping requires a season for runtime-validated leagues")
+    results = await validate_oddsharvester_football_catalog(
+        [{"scrape_slug": slug, "source_url": url} for slug, url in mapping.items()],
+        season=season,
+    )
+    by_slug = {str(result.get("scrape_slug")): result for result in results}
+    unavailable = sorted(slug for slug in mapping if by_slug.get(slug, {}).get("status") != "available")
+    validated_dynamic_slugs = sorted(set(mapping) - set(unavailable))
+    passthrough_slugs = sorted(slugs - set(mapping))
+    validated_slugs = [*passthrough_slugs, *validated_dynamic_slugs]
+    if not validated_slugs:
+        raise ValueError("No selected league passed historic Results-page validation")
+    mapping = {slug: mapping[slug] for slug in validated_dynamic_slugs}
+    env["ODDSHARVESTER_RUNTIME_FOOTBALL_LEAGUES"] = json.dumps(mapping)
+    historic_urls = {
+        slug: {season: historic_url}
+        for slug, result in by_slug.items()
+        if slug in validated_dynamic_slugs
+        and isinstance(historic_url := result.get("historic_url"), str)
+        and historic_url
+    }
+    if len(historic_urls) != len(validated_dynamic_slugs):
+        missing = sorted(set(validated_dynamic_slugs) - set(historic_urls))
+        raise ValueError("Historic validator returned no exact Results URL for: " + ", ".join(missing))
+    env["ODDSHARVESTER_RUNTIME_FOOTBALL_HISTORIC_URLS"] = json.dumps(historic_urls)
+    return RuntimeCatalogResolution(
+        env,
+        league_override=validated_slugs,
+        skipped_historic_leagues=unavailable,
+    )
 
 
 async def _upsert_match_from_record(db: AsyncSession, record: dict, sport: str) -> tuple[Match, bool, bool]:
@@ -890,7 +1013,9 @@ async def _ingest_match_odds(db: AsyncSession, match: Match, record: dict) -> di
     written = 0
     changed = 0
     broadcast_payload: dict[str, Any] | None = None
-    scrape_timestamp = _coerce_datetime(record.get("scraped_date"))
+    scrape_timestamp = _coerce_datetime(record.get("scraped_date")) or datetime.now(timezone.utc)
+    snapshot: OddsSnapshot | None = None
+    snapshot_source_key = f"match:{match.id}:observed:{scrape_timestamp.isoformat()}"
 
     for market_key, market_rows in record.items():
         if not market_key.endswith("_market") or not isinstance(market_rows, list):
@@ -907,6 +1032,26 @@ async def _ingest_match_odds(db: AsyncSession, match: Match, record: dict) -> di
             market_name = _normalize_market_name(market_key, bookmaker_market)
             bookmaker = str(bookmaker_market.get("bookmaker_name", "Unknown"))
 
+            if snapshot is None:
+                snapshot_result = await db.execute(
+                    select(OddsSnapshot).where(
+                        OddsSnapshot.source == ODDS_SOURCE,
+                        OddsSnapshot.source_key == snapshot_source_key,
+                    )
+                )
+                snapshot = snapshot_result.scalar_one_or_none()
+                if snapshot is None:
+                    snapshot = OddsSnapshot(
+                        match_id=match.id,
+                        source=ODDS_SOURCE,
+                        source_key=snapshot_source_key,
+                        observed_at=scrape_timestamp,
+                        quality="complete",
+                        metadata_json={"match_link": record.get("match_link")},
+                    )
+                    db.add(snapshot)
+                    await db.flush()
+
             existing_stmt = select(OddsEntry).where(
                 OddsEntry.match_id == match.id,
                 OddsEntry.bookmaker == bookmaker,
@@ -920,6 +1065,7 @@ async def _ingest_match_odds(db: AsyncSession, match: Match, record: dict) -> di
                 db.add(
                     OddsEntry(
                         match_id=match.id,
+                        odds_snapshot_id=snapshot.id,
                         bookmaker=bookmaker,
                         market=market_name,
                         home_odds=home_odds,
@@ -941,7 +1087,7 @@ async def _ingest_match_odds(db: AsyncSession, match: Match, record: dict) -> di
                         timestamp=scrape_timestamp,
                     )
             else:
-                entry_changed = any(
+                entry_changed = existing.odds_snapshot_id != snapshot.id or any(
                     (
                         existing.home_odds != home_odds,
                         existing.draw_odds != draw_odds,
@@ -949,6 +1095,7 @@ async def _ingest_match_odds(db: AsyncSession, match: Match, record: dict) -> di
                         existing.timestamp != scrape_timestamp,
                     )
                 )
+                existing.odds_snapshot_id = snapshot.id
                 existing.home_odds = home_odds
                 existing.draw_odds = draw_odds
                 existing.away_odds = away_odds
@@ -1080,6 +1227,7 @@ async def execute_scrape_job(db: AsyncSession, job_id: int) -> ScrapeJob:
         raise LookupError(f"ScrapeJob {job_id} not found")
 
     job.status = "running"
+    job.error = None
     job.started_at = datetime.now(timezone.utc)
     await db.flush()
     await append_scrape_job_log(
@@ -1115,9 +1263,24 @@ async def execute_scrape_job(db: AsyncSession, job_id: int) -> ScrapeJob:
         if job.job_type in {"oddsportal", "scrape_odds", "refresh_results"}:
             if job.job_type == "refresh_results" and not (job.params or {}).get("match_links"):
                 raise ValueError("Result refresh job is missing source match links")
-            args = _build_oddsharvester_args(job)
-            timeout_seconds = _job_oddsharvester_timeout(job)
             scraper_engine = (job.params or {}).get("scraper_engine") or "playwright"
+            runtime_catalog = await _runtime_catalog_league_env(db, job)
+            runtime_catalog_env = runtime_catalog.env
+            args = _build_oddsharvester_args(job, league_override=runtime_catalog.league_override)
+            effective_leagues = runtime_catalog.league_override or sorted(_requested_scrape_league_slugs(job))
+            timeout_seconds = _effective_oddsharvester_timeout(job, len(effective_leagues))
+            runtime_catalog_league_count = len(
+                json.loads(runtime_catalog_env.get("ODDSHARVESTER_RUNTIME_FOOTBALL_LEAGUES", "{}"))
+            )
+            if runtime_catalog.skipped_historic_leagues:
+                await append_scrape_job_log(
+                    db,
+                    job.id,
+                    action="historic_leagues_skipped",
+                    message="Skipped leagues without a validated Results page for this season",
+                    level="warning",
+                    metadata={"leagues": runtime_catalog.skipped_historic_leagues},
+                )
             await append_scrape_job_log(
                 db,
                 job.id,
@@ -1135,13 +1298,30 @@ async def execute_scrape_job(db: AsyncSession, job_id: int) -> ScrapeJob:
                     "timeout_seconds": timeout_seconds,
                     "scraper_engine": scraper_engine,
                     "report_requested": True,
+                    "runtime_catalog_league_count": runtime_catalog_league_count,
                 },
             )
-            bridge_result = await _run_oddsharvester_with_report(
-                args,
-                label=f"scrape_job_{job.id}",
-                timeout=timeout_seconds,
-            )
+            # Do not hold one database transaction/connection while a live
+            # OddsHarvester subprocess runs for tens of minutes. Persist the
+            # running state and reopen a fresh transaction for ingestion.
+            commit = getattr(db, "commit", None)
+            if commit is not None:
+                await commit()
+            try:
+                bridge_result = await _run_oddsharvester_with_report(
+                    args,
+                    label=f"scrape_job_{job_id}",
+                    timeout=timeout_seconds,
+                    extra_env=runtime_catalog_env,
+                )
+            finally:
+                # Some worker/session factories expire ORM instances on commit.
+                # Reload explicitly after the long subprocess so later logging
+                # and ingestion never trigger implicit async IO from attributes.
+                refreshed_job = await db.get(ScrapeJob, job_id)
+                if refreshed_job is None:
+                    raise ValueError(f"Scrape job {job_id} disappeared during bridge execution")
+                job = refreshed_job
             if isinstance(bridge_result, OddsHarvesterJsonResult):
                 payload = bridge_result.records
                 report = bridge_result.report
@@ -1176,6 +1356,15 @@ async def execute_scrape_job(db: AsyncSession, job_id: int) -> ScrapeJob:
                 odds_updates = {}
             if report_summary is not None:
                 summary = {**summary, "scrape_report": report_summary}
+                if report_summary["health"] == "no_fixtures":
+                    await append_scrape_job_log(
+                        db,
+                        job.id,
+                        action="no_fixtures",
+                        message="No fixtures were published for the requested upcoming date",
+                        level="warning",
+                        metadata=report_summary,
+                    )
             job.status = "completed"
             job.output = json.dumps(summary)
             _schedule_post_commit_live_broadcasts(

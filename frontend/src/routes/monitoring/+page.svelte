@@ -1,12 +1,13 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { Activity, CalendarClock, RefreshCw } from 'lucide-svelte';
+	import { Activity, CalendarClock, RefreshCw, TrendingUp } from 'lucide-svelte';
 	import Button from '$lib/components/ui/Button.svelte';
 	import Card from '$lib/components/ui/Card.svelte';
 	import ScheduledJobRunTable from '$lib/components/jobs/ScheduledJobRunTable.svelte';
 	import WorkflowHeader from '$lib/components/WorkflowHeader.svelte';
 	import { jobsApi } from '$lib/api/jobs';
 	import { dataApi } from '$lib/api/data';
+	import { analyticsApi, type ClvReport } from '$lib/api/analytics';
 	import { countFinalScoreConflicts, finalScoreConflictPolicyMessage } from '$lib/result-refresh.helpers';
 	import type { JobStatus, ScheduledJob } from '$lib/types';
 
@@ -16,6 +17,22 @@
 	let togglingId = $state<number | null>(null);
 	let resultRefreshPolicies = $state<{ jobId: number; status: JobStatus; message: string }[]>([]);
 	let resultRefreshPoliciesError = $state('');
+	let clvReport = $state<ClvReport | null>(null);
+	let clvError = $state('');
+
+	function formatMetric(value: number | null, suffix = '%'): string {
+		return value === null ? '—' : `${value >= 0 ? '+' : ''}${value.toFixed(2)}${suffix}`;
+	}
+
+	async function loadClv() {
+		clvError = '';
+		try {
+			clvReport = await analyticsApi.getClv();
+		} catch (cause) {
+			clvReport = null;
+			clvError = cause instanceof Error ? cause.message : 'Could not load CLV evidence.';
+		}
+	}
 
 	async function loadResultRefreshPolicies() {
 		resultRefreshPoliciesError = '';
@@ -59,7 +76,7 @@
 	async function loadJobs() {
 		loading = true;
 		error = null;
-		try { jobs = await jobsApi.getScheduledJobs(); await loadResultRefreshPolicies(); } catch (cause) { error = cause instanceof Error ? cause.message : 'Could not load monitoring data.'; } finally { loading = false; }
+		try { jobs = await jobsApi.getScheduledJobs(); await Promise.all([loadResultRefreshPolicies(), loadClv()]); } catch (cause) { error = cause instanceof Error ? cause.message : 'Could not load monitoring data.'; } finally { loading = false; }
 	}
 
 	async function toggle(job: ScheduledJob) {
@@ -86,6 +103,24 @@
 			</div>
 			<a class="text-sm font-medium text-primary hover:underline" href="/tickets">Open Tickets</a>
 		</div>
+	</Card>
+	<Card class="workbench-surface">
+		<div class="flex items-start gap-3">
+			<TrendingUp class="mt-0.5 size-5 text-primary" />
+			<div class="min-w-0 flex-1">
+				<h2 class="font-semibold text-foreground">Closing line value</h2>
+				<p class="mt-1 text-sm text-muted-foreground">Cota lipsă rămâne lipsă. Coverage-ul arată cât din istoric are dovadă reală la închidere.</p>
+			</div>
+		</div>
+		{#if clvError}
+			<p class="mt-4 text-sm text-muted-foreground">{clvError}</p>
+		{:else if clvReport}
+			<div class="mt-4 grid gap-3 sm:grid-cols-3">
+				<div class="border border-border p-3"><p class="text-xs text-muted-foreground">Same-book average</p><p class="mt-1 font-mono text-lg">{formatMetric(clvReport.summary.average_same_book_clv_pct)}</p><p class="text-xs text-muted-foreground">Coverage {clvReport.summary.same_book_coverage_pct.toFixed(1)}%</p></div>
+				<div class="border border-border p-3"><p class="text-xs text-muted-foreground">Market-best average</p><p class="mt-1 font-mono text-lg">{formatMetric(clvReport.summary.average_market_best_clv_pct)}</p><p class="text-xs text-muted-foreground">Coverage {clvReport.summary.market_best_coverage_pct.toFixed(1)}%</p></div>
+				<div class="border border-border p-3"><p class="text-xs text-muted-foreground">Consensus shift</p><p class="mt-1 font-mono text-lg">{formatMetric(clvReport.summary.average_consensus_clv_pp, ' pp')}</p><p class="text-xs text-muted-foreground">Coverage {clvReport.summary.consensus_coverage_pct.toFixed(1)}%</p></div>
+			</div>
+		{/if}
 	</Card>
 	<Card class="workbench-surface">
 		<h2 class="font-semibold text-foreground">Final-score conflict policy</h2>

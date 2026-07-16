@@ -89,6 +89,7 @@ async def run_ensemble_prediction(
     target_mode: str = "future",
     max_goals: int = 10,
     user_id: int | None = None,
+    training_history_days: int = 365,
 ) -> dict:
     if markets is None:
         markets = ["1x2"]
@@ -124,6 +125,7 @@ async def run_ensemble_prediction(
                 target_limit,
                 target_mode,
                 max_goals,
+                training_history_days=training_history_days,
             )
             member_summaries[mk] = summary
 
@@ -174,6 +176,16 @@ async def run_ensemble_prediction(
         run.status = "completed"
         run.completed_at = datetime.now(timezone.utc)
         run.matches_count = target_limit
+        run.input_context = {
+            "training_history_days": training_history_days,
+            "member_training": {
+                model_key: {
+                    "training_matches": summary.get("training_matches", 0),
+                    "training_window": summary.get("training_window"),
+                }
+                for model_key, summary in member_summaries.items()
+            },
+        }
         await db.flush()
 
         return {

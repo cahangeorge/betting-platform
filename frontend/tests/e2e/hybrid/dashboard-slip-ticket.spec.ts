@@ -11,7 +11,7 @@ test('dashboard can add a seeded match to the slip and place a ticket', async ({
 		const fixtures = await seedHybridFixtures(session);
 
 		await page.goto('/tickets');
-		const clearSlipButton = page.getByRole('button', { name: 'Clear Slip' });
+		const clearSlipButton = page.getByRole('button', { name: 'Golește selecțiile' });
 		if (await clearSlipButton.isVisible().catch(() => false)) {
 			await clearSlipButton.click();
 		}
@@ -20,7 +20,7 @@ test('dashboard can add a seeded match to the slip and place a ticket', async ({
 		await page.waitForLoadState('networkidle');
 		const futureTab = page.getByRole('tab', { name: /^Today\b/ });
 		await futureTab.click();
-		await expect(page.getByRole('heading', { name: 'Upcoming matches and predictions' })).toBeVisible();
+		await expect(page.getByRole('heading', { name: 'Meciuri și predicții viitoare' })).toBeVisible();
 		await expect(page.getByText(fixtures.scheduledMatchLabel).first()).toBeVisible();
 
 		await page.getByRole('button', { name: /1\s+1\.91/ }).first().click();
@@ -28,12 +28,14 @@ test('dashboard can add a seeded match to the slip and place a ticket', async ({
 
 		await page.getByRole('button', { name: 'Review Ticket' }).first().click();
 		await expect(page).toHaveURL(/\/tickets$/);
-		await expect(page.getByRole('heading', { name: 'TICKETS', exact: true })).toBeVisible();
-		const placeBetTab = page.getByRole('tab', { name: 'Place bet' });
+		await expect(page.getByRole('heading', { name: 'Bilete', exact: true })).toBeVisible();
+		await expect(page.getByTestId('tickets-panel')).toHaveAttribute('data-interactive', 'true');
+		const placeBetTab = page.getByRole('tab', { name: 'Generează bilete' });
 		await expect(placeBetTab).toBeVisible();
 		await expect(placeBetTab).toContainText('1');
+		await page.getByLabel('Miză', { exact: true }).fill('9.90');
 
-		await page.getByRole('button', { name: 'Place Ticket' }).click();
+		await page.getByRole('button', { name: 'Înregistrează biletul în platformă' }).click();
 		const activeTab = page.getByRole('tab', { name: 'Active' });
 		await expect(activeTab).toBeVisible();
 		await expect(activeTab).toHaveAttribute('data-state', 'active');

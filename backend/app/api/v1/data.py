@@ -39,6 +39,21 @@ def _require_scrape_job_access(job: ScrapeJob, user: User) -> None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Scrape job is not owned by the current user")
 
 
+def _dataset_scrape_job_id(dataset: ScrapedDataset) -> int | None:
+    data = dataset.data if isinstance(dataset.data, dict) else {}
+    raw_job_id = data.get("job_id")
+    return raw_job_id if isinstance(raw_job_id, int) and raw_job_id > 0 else None
+
+
+async def _require_dataset_access(db: AsyncSession, dataset: ScrapedDataset, user: User) -> None:
+    if getattr(user, "is_admin", False):
+        return
+    scrape_job_id = _dataset_scrape_job_id(dataset)
+    scrape_job = await db.get(ScrapeJob, scrape_job_id) if scrape_job_id is not None else None
+    if scrape_job is None or not can_read_scrape_job(scrape_job, user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Dataset is not owned by the current user")
+
+
 @router.post("/scrape", response_model=ScrapeJobResponse, status_code=201)
 async def start_scrape_job(
     body: ScrapeJobCreateRequest,
@@ -302,11 +317,31 @@ async def list_datasets(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    stmt = (
-        select(ScrapedDataset).order_by(ScrapedDataset.created_at.desc()).offset((page - 1) * per_page).limit(per_page)
-    )
+    stmt = select(ScrapedDataset).order_by(ScrapedDataset.created_at.desc())
     result = await db.execute(stmt)
-    return result.scalars().all()
+    datasets = list(result.scalars().all())
+    if not getattr(user, "is_admin", False):
+        job_ids = list(
+            dict.fromkeys(
+                job_id
+                for dataset in datasets
+                if (job_id := _dataset_scrape_job_id(dataset)) is not None
+            )
+        )
+        jobs_result = await db.execute(select(ScrapeJob).where(ScrapeJob.id.in_(job_ids))) if job_ids else None
+        jobs_by_id = {
+            job.id: job
+            for job in (jobs_result.scalars().all() if jobs_result is not None else [])
+        }
+        datasets = [
+            dataset
+            for dataset in datasets
+            if (job_id := _dataset_scrape_job_id(dataset)) is not None
+            and job_id in jobs_by_id
+            and can_read_scrape_job(jobs_by_id[job_id], user)
+        ]
+    offset = (page - 1) * per_page
+    return datasets[offset : offset + per_page]
 
 
 @router.get("/datasets/{dataset_id}", response_model=ScrapedDatasetResponse)
@@ -318,4 +353,5 @@ async def get_dataset(
     dataset = await db.get(ScrapedDataset, dataset_id)
     if not dataset:
         raise HTTPException(status_code=404, detail="Dataset not found")
+    await _require_dataset_access(db, dataset, user)
     return dataset

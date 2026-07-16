@@ -1,83 +1,105 @@
 <script lang="ts">
-	import Card from '$lib/components/ui/Card.svelte';
+	import {
+		ArrowRight,
+		ChartNoAxesCombined,
+		Database,
+		ListChecks,
+		ShieldCheck
+	} from 'lucide-svelte';
+	import PublicFooter from '$lib/components/PublicFooter.svelte';
 
-	const techStack = [
-		{ name: 'SvelteKit 2', description: 'Full-stack framework' },
-		{ name: 'Svelte 5', description: 'UI framework with runes' },
-		{ name: 'Tailwind CSS v4', description: 'Utility-first styling' },
-		{ name: 'FastAPI', description: 'Python API layer' },
-		{ name: 'SQLAlchemy', description: 'Async ORM and query layer' },
-		{ name: 'PostgreSQL', description: 'Primary application database' }
+	const capabilities = [
+		{
+			icon: Database,
+			title: 'Date pregătite cu context',
+			description:
+				'Competițiile, intervalele și sursele selectate rămân vizibile de la colectare până la analiză.'
+		},
+		{
+			icon: ChartNoAxesCombined,
+			title: 'Analiză comparabilă',
+			description:
+				'Rezultatele modelelor sunt prezentate cu probabilități, cote disponibile și semnale de fiabilitate.'
+		},
+		{
+			icon: ListChecks,
+			title: 'Revizuire înainte de acțiune',
+			description:
+				'Candidații și biletele sunt inspectați înainte de activare sau de orice acțiune externă; platforma nu ascunde pașii intermediari.'
+		}
 	];
 </script>
 
-<div class="max-w-3xl mx-auto space-y-8">
-	<div class="text-center py-8">
-		<div class="w-20 h-20 flex items-center justify-center mx-auto mb-4 bg-muted border border-football-green">
-			<span class="text-3xl font-extrabold text-football-green font-sport">SI</span>
+<article class="mx-auto max-w-5xl space-y-12 pb-12 pt-6 sm:pt-10">
+	<header class="border-b border-border pb-10">
+		<p class="text-xs font-semibold uppercase tracking-[0.2em] text-football-green">Despre Betfront</p>
+		<h1 class="mt-4 max-w-3xl font-sport text-3xl font-extrabold leading-tight text-foreground sm:text-5xl">
+			Un flux mai clar pentru analiza pariurilor sportive
+		</h1>
+		<p class="mt-5 max-w-3xl text-base leading-7 text-muted-foreground sm:text-lg">
+			Betfront reunește pregătirea datelor, modelele statistice, evaluarea oportunităților și
+			revizuirea biletelor într-un spațiu de lucru trasabil. Scopul este să susțină o decizie
+			informată, nu să promită un rezultat.
+		</p>
+		<div class="mt-7 flex flex-col gap-3 sm:flex-row">
+			<a
+				href="/signup"
+				class="inline-flex min-h-11 items-center justify-center gap-2 bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+			>
+				Creează un cont <ArrowRight class="size-4" aria-hidden="true" />
+			</a>
+			<a
+				href="/methodology"
+				class="inline-flex min-h-11 items-center justify-center border border-border px-5 py-3 text-sm font-semibold text-foreground transition-colors hover:bg-muted"
+			>
+				Vezi metodologia
+			</a>
 		</div>
-		<h1 class="text-3xl font-extrabold font-sport text-foreground">Betfront</h1>
-		<p class="mt-2 text-muted-foreground">Sports Betting Analytics Platform</p>
-	</div>
+	</header>
 
-	<Card title="About">
-		<div class="space-y-4 text-sm text-muted-foreground">
-			<p>
-				Betfront is a comprehensive sports betting intelligence platform that combines real-time odds data,
-				AI-powered prediction models, and portfolio tracking tools for data-driven sports bettors.
-			</p>
-			<p>
-				Built with modern web technologies and a Python FastAPI backend, the platform provides
-				live odds comparison across multiple bookmakers, statistical prediction models
-				(Poisson, Bivariate Poisson, Elo, XGBoost), and full portfolio management with
-				bankrolls and betting history.
-			</p>
+	<section aria-labelledby="capabilities-heading">
+		<div class="max-w-2xl">
+			<p class="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Cum ajută</p>
+			<h2 id="capabilities-heading" class="mt-2 font-sport text-2xl font-bold text-foreground sm:text-3xl">
+				Contextul rămâne vizibil de la date la bilet
+			</h2>
 		</div>
-	</Card>
-
-	<Card title="Tech Stack">
-		<div class="grid grid-cols-2 md:grid-cols-3 gap-4">
-			{#each techStack as tech (tech.name)}
-				<div class="p-3 bg-background border border-border">
-					<h4 class="font-medium text-foreground">{tech.name}</h4>
-					<p class="text-xs mt-1 text-muted-foreground/60">{tech.description}</p>
-				</div>
+		<div class="mt-6 grid gap-4 md:grid-cols-3">
+			{#each capabilities as capability (capability.title)}
+				<section class="border border-border bg-card p-5">
+					<capability.icon class="size-5 text-football-green" aria-hidden="true" />
+					<h3 class="mt-4 font-semibold text-foreground">{capability.title}</h3>
+					<p class="mt-2 text-sm leading-6 text-muted-foreground">{capability.description}</p>
+				</section>
 			{/each}
 		</div>
-	</Card>
+	</section>
 
-	<Card title="Version">
-		<div class="space-y-2 text-sm">
-			<div class="flex justify-between">
-				<span class="text-muted-foreground/60">Platform</span>
-				<span class="font-mono text-foreground">0.1.0</span>
-			</div>
-			<div class="flex justify-between">
-				<span class="text-muted-foreground/60">API</span>
-				<span class="font-mono text-foreground">0.1.0</span>
-			</div>
-			<div class="flex justify-between">
-				<span class="text-muted-foreground/60">Frontend</span>
-				<span class="font-mono text-foreground">SvelteKit 2 + Svelte 5</span>
-			</div>
-			<div class="flex justify-between">
-				<span class="text-muted-foreground/60">Backend</span>
-				<span class="font-mono text-foreground">FastAPI + PostgreSQL via /api proxy</span>
-			</div>
+	<section class="grid gap-5 border border-border bg-card p-5 sm:p-7 lg:grid-cols-[1fr_1.4fr]" aria-labelledby="trust-heading">
+		<div>
+			<ShieldCheck class="size-7 text-football-green" aria-hidden="true" />
+			<h2 id="trust-heading" class="mt-4 font-sport text-2xl font-bold text-foreground">
+				Încredere prin transparență
+			</h2>
 		</div>
-	</Card>
+		<ul class="space-y-3 text-sm leading-6 text-muted-foreground">
+			<li>Rulările păstrează datasetul sursă, momentul creării și starea persistată.</li>
+			<li>Rezultatele parțiale, eșecurile și strategiile indisponibile sunt semnalate explicit.</li>
+			<li>Execuția paper este diferențiată vizibil de orice plasare externă.</li>
+			<li>Nicio probabilitate sau cotă nu reprezintă o garanție de câștig.</li>
+		</ul>
+	</section>
 
-	<div class="text-center pb-8">
-		<a
-			href="https://github.com/gion/bet"
-			target="_blank"
-			rel="noopener noreferrer"
-			class="inline-flex items-center space-x-2 text-sm transition-colors duration-200 text-muted-foreground hover:text-muted-foreground"
-		>
-			<svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-				<path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
-			</svg>
-			<span>View on GitHub</span>
+	<nav class="grid gap-3 border-t border-border pt-7 sm:grid-cols-2" aria-label="Informații publice Betfront">
+		<a class="border border-border p-4 transition-colors hover:bg-muted" href="/methodology">
+			<span class="font-semibold text-foreground">Metodologie și limite</span>
+			<span class="mt-1 block text-sm text-muted-foreground">Cum sunt pregătite și interpretate datele.</span>
 		</a>
-	</div>
-</div>
+		<a class="border border-border p-4 transition-colors hover:bg-muted" href="/responsible-gambling">
+			<span class="font-semibold text-foreground">Utilizare responsabilă</span>
+			<span class="mt-1 block text-sm text-muted-foreground">Principii pentru control, limite și pauze.</span>
+		</a>
+	</nav>
+</article>
+
+<PublicFooter />

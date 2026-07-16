@@ -1,11 +1,17 @@
 import { ApiClient } from './client';
 import type {
 	TicketBatch,
+	TicketBatchActivateResponse,
+	TicketBatchActivateRequest,
+	TicketBatchRefreshResponse,
 	Ticket,
 	PlaceBetRequest,
 	SettleRequest,
 	TicketGenerateRequest,
 	TicketGenerateResponse,
+	TicketPreflightRequest,
+	TicketPreflightResponse,
+	TicketBatchLineage,
 	TicketSettlementRun,
 	TicketSwapLegsRequest,
 	TicketSwapLegsResponse,
@@ -15,6 +21,7 @@ import type {
 class TicketsApi extends ApiClient {
 	async getTickets(status?: string): Promise<Ticket[]> {
 		const sp = new URLSearchParams();
+		sp.set('per_page', '100');
 		if (status) sp.set('status', status);
 		const qs = sp.toString();
 		return this.get<Ticket[]>(`/api/v1/tickets${qs ? `?${qs}` : ''}`);
@@ -22,6 +29,10 @@ class TicketsApi extends ApiClient {
 
 	async getBatchTickets(batchId: number): Promise<Ticket[]> {
 		return this.get<Ticket[]>(`/api/v1/tickets/batches/${batchId}/tickets?per_page=300`);
+	}
+
+	async getBatchLineage(batchId: number): Promise<TicketBatchLineage> {
+		return this.get<TicketBatchLineage>(`/api/v1/tickets/batches/${batchId}/lineage`);
 	}
 
 	async getBatches(): Promise<TicketBatch[]> {
@@ -61,6 +72,35 @@ class TicketsApi extends ApiClient {
 
 	async generate(data: TicketGenerateRequest): Promise<TicketGenerateResponse> {
 		return this.post<TicketGenerateResponse>('/api/v1/tickets/generate', data as unknown as Record<string, unknown>);
+	}
+
+	async preflight(data: TicketPreflightRequest): Promise<TicketPreflightResponse> {
+		return this.post<TicketPreflightResponse>(
+			'/api/v1/tickets/preflight',
+			data as unknown as Record<string, unknown>
+		);
+	}
+
+	async activateBatch(batchId: number, data: TicketBatchActivateRequest): Promise<TicketBatchActivateResponse> {
+		return this.post<TicketBatchActivateResponse>(
+			`/api/v1/tickets/batches/${batchId}/activate`,
+			data as unknown as Record<string, unknown>
+		);
+	}
+
+	async refreshBatch(batchId: number, expectedRevision: number): Promise<TicketBatchRefreshResponse> {
+		return this.post<TicketBatchRefreshResponse>(
+			`/api/v1/tickets/batches/${batchId}/refresh`,
+			{ expected_revision: expectedRevision }
+		);
+	}
+
+	async discardDraftBatch(batchId: number): Promise<{
+		batch_id: number;
+		status: 'discarded';
+		discarded_tickets: number;
+	}> {
+		return this.del(`/api/v1/tickets/batches/${batchId}`);
 	}
 
 	async swapLegs(batchId: number, data: TicketSwapLegsRequest): Promise<TicketSwapLegsResponse> {

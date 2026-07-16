@@ -233,7 +233,9 @@ async def test_dispatch_prediction_job_reports_no_matches_truthfully(monkeypatch
 
     result = await dispatch_scheduled_job(
         FakeDb(),
-        SimpleNamespace(id=15, task_type="run_predictions", config={SCHEDULED_JOB_OWNER_CONFIG_KEY: 12, "strategy_ids": [5]}),
+        SimpleNamespace(
+            id=15, task_type="run_predictions", config={SCHEDULED_JOB_OWNER_CONFIG_KEY: 12, "strategy_ids": [5]}
+        ),
     )
 
     assert result.status == "skipped"
@@ -260,7 +262,9 @@ async def test_dispatch_scrape_predict_tickets_job_stops_before_tickets_when_pre
 
     async def fake_tickets(db, job, *, config_override=None):
         calls.append(("tickets", job.id, config_override))
-        return SimpleNamespace(job_id=job.id, task_type=job.task_type, status="completed", detail="ticket_batch:12; tickets:2")
+        return SimpleNamespace(
+            job_id=job.id, task_type=job.task_type, status="completed", detail="ticket_batch:12; tickets:2"
+        )
 
     monkeypatch.setattr(scheduled_jobs, "_run_scrape_job", fake_scrape)
     monkeypatch.setattr(scheduled_jobs, "_run_prediction_job", fake_predict)
@@ -280,7 +284,9 @@ async def test_dispatch_scrape_predict_tickets_job_stops_before_tickets_when_pre
     )
 
     assert result.status == "partial"
-    assert result.detail == "scrape_job:90; predictions:summary[completed:1, no_matches:1]; 4:completed:91, 5:no_matches:0"
+    assert (
+        result.detail == "scrape_job:90; predictions:summary[completed:1, no_matches:1]; 4:completed:91, 5:no_matches:0"
+    )
     assert calls == [
         ("scrape", 16),
         ("predict", 16, {"strategy_ids": [4, 5], SCHEDULED_JOB_OWNER_CONFIG_KEY: 42, "user_id": 42}),
@@ -351,8 +357,7 @@ async def test_dispatch_verification_and_settlement_job_runs_both_paths(monkeypa
 
     assert result.status == "completed"
     assert (
-        result.detail
-        == "predictions=3 checked, 1 won, 1 lost, 1 pending, 0 void, 0 unsupported; "
+        result.detail == "predictions=3 checked, 1 won, 1 lost, 1 pending, 0 void, 0 unsupported; "
         "tickets=4 checked, 3 settled, 1 pending, 5 legs_updated"
     )
 
@@ -433,21 +438,29 @@ async def test_dispatch_ticket_generation_job_uses_ticket_engine(monkeypatch):
         bankroll_id,
         ticket_count,
         difficulty,
+        ticket_format,
+        accumulator_risk_acknowledged,
+        automated,
         market_types,
         min_odds,
         max_odds,
-        stake,
         run_id,
+        run_ids,
+        prediction_ids,
     ):
         assert user_id == 21
         assert bankroll_id == 9
         assert ticket_count == 3
         assert difficulty == "balanced"
+        assert ticket_format is None
+        assert accumulator_risk_acknowledged is False
+        assert automated is True
         assert market_types == ["1x2", "btts"]
         assert min_odds == 1.2
         assert max_odds == 4.5
-        assert stake == 12.0
         assert run_id is None
+        assert run_ids is None
+        assert prediction_ids == [701, 702]
         return SimpleNamespace(id=55), [SimpleNamespace(id=1), SimpleNamespace(id=2), SimpleNamespace(id=3)]
 
     monkeypatch.setattr(scheduled_jobs, "generate_tickets", fake_generate_tickets)
@@ -465,7 +478,7 @@ async def test_dispatch_ticket_generation_job_uses_ticket_engine(monkeypatch):
                 "market_types": ["1x2", "btts"],
                 "min_odds": 1.2,
                 "max_odds": 4.5,
-                "stake": 12.0,
+                "prediction_ids": [701, 702],
             },
         ),
     )
@@ -494,7 +507,9 @@ async def test_dispatch_scrape_predict_tickets_job_runs_full_chain(monkeypatch):
 
     async def fake_tickets(db, job, *, config_override=None):
         calls.append(("tickets", job.id, config_override))
-        return SimpleNamespace(job_id=job.id, task_type=job.task_type, status="completed", detail="ticket_batch:12; tickets:2")
+        return SimpleNamespace(
+            job_id=job.id, task_type=job.task_type, status="completed", detail="ticket_batch:12; tickets:2"
+        )
 
     monkeypatch.setattr(scheduled_jobs, "_run_scrape_job", fake_scrape)
     monkeypatch.setattr(scheduled_jobs, "_run_prediction_job", fake_predict)
@@ -514,11 +529,17 @@ async def test_dispatch_scrape_predict_tickets_job_runs_full_chain(monkeypatch):
     )
 
     assert result.status == "completed"
-    assert result.detail == "scrape_job:88; predictions:summary[completed:1]; 4:completed:91; ticket_batch:12; tickets:2"
+    assert (
+        result.detail == "scrape_job:88; predictions:summary[completed:1]; 4:completed:91; ticket_batch:12; tickets:2"
+    )
     assert calls == [
         ("scrape", 14),
         ("predict", 14, {"strategy_ids": [4], SCHEDULED_JOB_OWNER_CONFIG_KEY: 42, "user_id": 42}),
-        ("tickets", 14, {"ticket_count": 2, "difficulty": "safe", SCHEDULED_JOB_OWNER_CONFIG_KEY: 42, "user_id": 42, "run_id": 91}),
+        (
+            "tickets",
+            14,
+            {"ticket_count": 2, "difficulty": "safe", SCHEDULED_JOB_OWNER_CONFIG_KEY: 42, "user_id": 42, "run_id": 91},
+        ),
     ]
 
 
@@ -542,7 +563,9 @@ async def test_dispatch_scrape_predict_tickets_job_stops_when_prediction_run_is_
 
     async def fake_tickets(db, job, *, config_override=None):
         calls.append(("tickets", job.id, config_override))
-        return SimpleNamespace(job_id=job.id, task_type=job.task_type, status="completed", detail="ticket_batch:12; tickets:2")
+        return SimpleNamespace(
+            job_id=job.id, task_type=job.task_type, status="completed", detail="ticket_batch:12; tickets:2"
+        )
 
     monkeypatch.setattr(scheduled_jobs, "_run_scrape_job", fake_scrape)
     monkeypatch.setattr(scheduled_jobs, "_run_prediction_job", fake_predict)
@@ -563,8 +586,7 @@ async def test_dispatch_scrape_predict_tickets_job_stops_when_prediction_run_is_
 
     assert result.status == "partial"
     assert (
-        result.detail
-        == "scrape_job:88; predictions:summary[completed:2]; 4:completed:91, 5:completed:92; "
+        result.detail == "scrape_job:88; predictions:summary[completed:2]; 4:completed:91, 5:completed:92; "
         "tickets:missing_or_ambiguous_prediction_run_id"
     )
     assert calls == [

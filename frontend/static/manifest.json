@@ -1,14 +1,14 @@
 {
-	"name": "Betfront - Sports Betting Intelligence",
+	"name": "Betfront — analiză sportivă trasabilă",
 	"short_name": "Betfront",
-	"description": "AI-powered football betting analytics with real-time odds, predictions, and portfolio tracking",
+	"description": "Analiză pentru pariuri sportive cu date trasabile, modele statistice și revizuirea biletelor",
 	"start_url": "/",
 	"display": "standalone",
 	"background_color": "#020617",
 	"theme_color": "#060B14",
 	"orientation": "portrait-primary",
 	"categories": ["sports", "utilities"],
-	"lang": "en",
+	"lang": "ro",
 	"scope": "/",
 	"icons": [
 		{

@@ -1,4 +1,6 @@
+import math
 import re
+from collections import defaultdict
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -13,10 +15,16 @@ from app.models.match import Match, OddsEntry
 from app.models.prediction import ModelPrediction, PredictionRun
 from app.models.user import User
 from app.schemas.prediction import (
+    PredictionCalibrationBucket,
+    PredictionCalibrationGroup,
+    PredictionCalibrationResponse,
     PredictionCatalogResponse,
     PredictionRunDetailResponse,
     PredictionRunPageResponse,
     PredictionRunResponse,
+    PredictionScoreGridCell,
+    PredictionScoreGridItem,
+    PredictionScoreGridResponse,
     PredictionVerificationItem,
     PredictionVerificationResponse,
     RunEnsembleRequest,
@@ -25,6 +33,7 @@ from app.schemas.prediction import (
     ValueBetResponse,
 )
 from app.services.ensemble import run_ensemble_prediction
+from app.services.odds_quotes import select_quote_set
 from app.services.prediction_engine import PREDICT_MODELS, run_single_prediction
 from app.services.result_settlement import evaluate_model_prediction
 
@@ -147,17 +156,35 @@ def _resolve_market_odds(
         "under": "away_odds",
     }.get(outcome, "home_odds")
 
-    best = None
+    priced_candidates: list[tuple[OddsEntry, float, datetime | None]] = []
     for odds in candidates:
         value = getattr(odds, outcome_field, None)
         if value is None or value <= 1:
             continue
-        if best is None or value > getattr(best, outcome_field):
-            best = odds
+        observed_at = odds.timestamp or getattr(odds, "created_at", None)
+        priced_candidates.append((odds, float(value), observed_at))
 
-    if best is None:
+    if not priced_candidates:
         return None, outcome_field, None
-    return getattr(best, outcome_field), best.bookmaker, best.timestamp or getattr(best, "created_at", None)
+
+    # Never let a stale but historically larger quote represent the current market.
+    # OddsHarvester gives every bookmaker row in one scrape the same timestamp, so
+    # first select the newest snapshot and only then shop for its best bookmaker.
+    timestamped_candidates = [candidate for candidate in priced_candidates if candidate[2] is not None]
+    current_snapshot = priced_candidates
+    if timestamped_candidates:
+        latest_observed_at = max(candidate[2] for candidate in timestamped_candidates)
+        current_snapshot = [candidate for candidate in timestamped_candidates if candidate[2] == latest_observed_at]
+
+    best, value, observed_at = max(
+        current_snapshot,
+        key=lambda candidate: (
+            candidate[1],
+            str(candidate[0].bookmaker),
+            getattr(candidate[0], "id", 0) or 0,
+        ),
+    )
+    return value, best.bookmaker, observed_at
 
 
 def _prediction_quality_details(prediction: ModelPrediction) -> tuple[bool, str | None, list[str]]:
@@ -210,6 +237,7 @@ def _build_value_candidates(
             continue
 
         odds_entries = match.odds
+        quote_set = select_quote_set(odds_entries, market=prediction.market, as_of=now)
         match_status = _normalize_match_status(getattr(match, "status", None))
         kickoff = getattr(match, "match_date", None)
         match_started = bool(kickoff and kickoff <= now)
@@ -230,12 +258,17 @@ def _build_value_candidates(
         for selection, model_prob in outcomes:
             if model_prob is None or model_prob <= 0:
                 continue
-            odds_value, bookmaker, odds_timestamp = _resolve_market_odds(prediction, selection, odds_entries)
-            if odds_value is None:
+            quote = quote_set.quote_for(selection)
+            if quote is None:
                 continue
+            odds_value = quote.price
+            bookmaker = quote.bookmaker
+            odds_timestamp = quote.observed_at
 
-            implied = 1 / odds_value
-            edge_pct = (model_prob - implied) * 100
+            market_probability = quote_set.consensus_probabilities.get(selection)
+            if market_probability is None:
+                continue
+            edge_pct = (model_prob - market_probability) * 100
             if edge_pct < min_edge:
                 continue
 
@@ -243,7 +276,7 @@ def _build_value_candidates(
             odds_freshness_seconds = _age_seconds(odds_timestamp, now)
             known_ages = [age for age in (prediction_age_seconds, odds_freshness_seconds) if age is not None]
             data_age_seconds = max(known_ages) if known_ages else None
-            source_ok = bool(bookmaker) and odds_timestamp is not None
+            source_ok = quote_set.is_ticket_eligible
             model_drift_flag = prediction_age_seconds is None or (
                 odds_freshness_seconds is not None
                 and prediction_age_seconds > odds_freshness_seconds + VALUE_BET_MODEL_ODDS_SKEW_SECONDS
@@ -254,6 +287,7 @@ def _build_value_candidates(
                 block_reasons.append("prediction_untrusted")
             if not source_ok:
                 block_reasons.append("odds_untrusted")
+                block_reasons.extend(quote_set.reason_codes)
             if odds_timestamp is None:
                 block_reasons.append("odds_missing_timestamp")
             if prediction_age_seconds is None:
@@ -336,6 +370,7 @@ async def create_prediction_run(
         markets=body.markets,
         sport=body.sport,
         training_limit=body.training_limit,
+        training_history_days=body.training_history_days,
         target_limit=body.target_limit,
         target_mode=body.target_mode,
         target_match_ids=body.target_match_ids,
@@ -362,6 +397,7 @@ async def create_ensemble_run(
         weighting=body.weighting,
         sport=body.sport,
         training_limit=body.training_limit,
+        training_history_days=body.training_history_days,
         target_limit=body.target_limit,
         target_mode=body.target_mode,
         max_goals=body.max_goals,
@@ -395,9 +431,7 @@ async def list_prediction_runs_page(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    count_result = await db.execute(
-        select(func.count(PredictionRun.id)).where(PredictionRun.user_id == user.id)
-    )
+    count_result = await db.execute(select(func.count(PredictionRun.id)).where(PredictionRun.user_id == user.id))
     total = count_result.scalar() or 0
     stmt = (
         select(PredictionRun)
@@ -488,6 +522,241 @@ async def verify_predictions(
     )
 
 
+def _calibration_outcomes(prediction: ModelPrediction) -> list[tuple[str, float]]:
+    market = (prediction.market or "").lower()
+    if market == "1x2":
+        return [
+            ("home", float(prediction.home_prob or 0)),
+            ("draw", float(prediction.draw_prob or 0)),
+            ("away", float(prediction.away_prob or 0)),
+        ]
+    if market in {"btts", "both_teams_to_score"}:
+        return [("yes", float(prediction.home_prob or 0)), ("no", float(prediction.away_prob or 0))]
+    if market in {"ou_2_5", "over_under", "overunder", "totals"}:
+        return [("over", float(prediction.home_prob or 0)), ("under", float(prediction.away_prob or 0))]
+    return []
+
+
+def _build_calibration_summary(predictions: list[ModelPrediction], *, bin_count: int) -> PredictionCalibrationResponse:
+    grouped: dict[tuple[str, str], list[tuple[list[tuple[str, float]], str]]] = defaultdict(list)
+    for prediction in predictions:
+        evaluation = evaluate_model_prediction(prediction)
+        outcomes = _calibration_outcomes(prediction)
+        if evaluation.actual_selection not in {name for name, _ in outcomes}:
+            continue
+        grouped[(prediction.model_type, prediction.market)].append((outcomes, evaluation.actual_selection))
+
+    groups: list[PredictionCalibrationGroup] = []
+    total_resolved = 0
+    for (model_type, market), rows in sorted(grouped.items()):
+        total_resolved += len(rows)
+        correct = 0
+        brier_total = 0.0
+        log_loss_total = 0.0
+        bins: list[list[tuple[float, float]]] = [[] for _ in range(bin_count)]
+
+        for outcomes, actual in rows:
+            predicted = max(outcomes, key=lambda item: item[1])[0]
+            correct += int(predicted == actual)
+            actual_probability = 0.0
+            for outcome, raw_probability in outcomes:
+                probability = min(1.0, max(0.0, raw_probability))
+                observed = 1.0 if outcome == actual else 0.0
+                brier_total += (probability - observed) ** 2
+                bucket_index = min(int(probability * bin_count), bin_count - 1)
+                bins[bucket_index].append((probability, observed))
+                if outcome == actual:
+                    actual_probability = probability
+            log_loss_total += -math.log(max(actual_probability, 1e-15))
+
+        calibration_buckets: list[PredictionCalibrationBucket] = []
+        ece = 0.0
+        outcome_samples = sum(len(bucket) for bucket in bins)
+        for index, bucket in enumerate(bins):
+            if not bucket:
+                continue
+            mean_probability = sum(value[0] for value in bucket) / len(bucket)
+            observed_frequency = sum(value[1] for value in bucket) / len(bucket)
+            gap = abs(mean_probability - observed_frequency)
+            ece += gap * len(bucket) / outcome_samples
+            calibration_buckets.append(
+                PredictionCalibrationBucket(
+                    lower_bound=round(index / bin_count, 4),
+                    upper_bound=round((index + 1) / bin_count, 4),
+                    mean_predicted_probability=round(mean_probability, 6),
+                    observed_frequency=round(observed_frequency, 6),
+                    calibration_gap=round(gap, 6),
+                    samples=len(bucket),
+                )
+            )
+
+        groups.append(
+            PredictionCalibrationGroup(
+                model_type=model_type,
+                market=market,
+                resolved_predictions=len(rows),
+                accuracy=round(correct / len(rows), 6),
+                brier_score=round(brier_total / len(rows), 6),
+                log_loss=round(log_loss_total / len(rows), 6),
+                expected_calibration_error=round(ece, 6),
+                buckets=calibration_buckets,
+            )
+        )
+
+    return PredictionCalibrationResponse(resolved_predictions=total_resolved, groups=groups)
+
+
+def _build_score_grid_item(predictions: list[ModelPrediction]) -> PredictionScoreGridItem:
+    exemplar = predictions[0]
+    match = exemplar.match
+    stored_grid: dict | None = None
+    for prediction in predictions:
+        report = prediction.quality_report if isinstance(prediction.quality_report, dict) else {}
+        analysis_only = report.get("analysis_only") if isinstance(report.get("analysis_only"), dict) else {}
+        candidate = analysis_only.get("score_grid")
+        if isinstance(candidate, dict):
+            stored_grid = candidate
+            break
+
+    base = {
+        "match_id": exemplar.match_id,
+        "home_team": match.home_team if match else "",
+        "away_team": match.away_team if match else "",
+        "kickoff": match.match_date if match else None,
+        "league": match.competition if match else None,
+        "model_type": exemplar.model_type,
+        "prediction_ids": sorted({prediction.id for prediction in predictions}),
+        "source_markets": sorted({prediction.market for prediction in predictions}),
+    }
+    if stored_grid is None:
+        return PredictionScoreGridItem(
+            **base,
+            available=False,
+            unavailable_reason="score_grid_not_persisted_for_prediction",
+        )
+
+    probabilities = stored_grid.get("probabilities")
+    if not isinstance(probabilities, list):
+        return PredictionScoreGridItem(
+            **base,
+            available=False,
+            unavailable_reason="score_grid_payload_invalid",
+        )
+
+    home_expected_goals = stored_grid.get("home_expected_goals")
+    away_expected_goals = stored_grid.get("away_expected_goals")
+    if home_expected_goals is None or away_expected_goals is None:
+        return PredictionScoreGridItem(
+            **base,
+            available=False,
+            unavailable_reason="score_grid_payload_invalid",
+        )
+    try:
+        parsed_home_expected_goals = float(home_expected_goals)
+        parsed_away_expected_goals = float(away_expected_goals)
+        parsed_max_displayed_goals = int(stored_grid.get("max_displayed_goals", 5))
+    except (TypeError, ValueError):
+        return PredictionScoreGridItem(
+            **base,
+            available=False,
+            unavailable_reason="score_grid_payload_invalid",
+        )
+
+    cells: list[PredictionScoreGridCell] = []
+    try:
+        for home_goals, row in enumerate(probabilities):
+            if not isinstance(row, list):
+                raise ValueError("invalid score-grid row")
+            for away_goals, raw_probability in enumerate(row):
+                probability = min(1.0, max(0.0, float(raw_probability)))
+                cells.append(
+                    PredictionScoreGridCell(
+                        home_goals=home_goals,
+                        away_goals=away_goals,
+                        probability=probability,
+                    )
+                )
+    except (TypeError, ValueError):
+        return PredictionScoreGridItem(
+            **base,
+            available=False,
+            unavailable_reason="score_grid_payload_invalid",
+        )
+
+    top_scores = sorted(cells, key=lambda cell: cell.probability, reverse=True)[:5]
+    try:
+        displayed_probability_mass = float(
+            stored_grid.get("displayed_probability_mass", sum(cell.probability for cell in cells))
+        )
+    except (TypeError, ValueError):
+        return PredictionScoreGridItem(
+            **base,
+            available=False,
+            unavailable_reason="score_grid_payload_invalid",
+        )
+    return PredictionScoreGridItem(
+        **base,
+        available=True,
+        home_expected_goals=parsed_home_expected_goals,
+        away_expected_goals=parsed_away_expected_goals,
+        max_displayed_goals=parsed_max_displayed_goals,
+        displayed_probability_mass=displayed_probability_mass,
+        cells=cells,
+        top_scores=top_scores,
+        usage="analysis_only",
+        ticket_generation_eligible=False,
+    )
+
+
+@router.get("/calibration", response_model=PredictionCalibrationResponse)
+async def get_prediction_calibration(
+    run_id: int | None = None,
+    max_results: int = Query(1000, ge=1, le=10000),
+    bin_count: int = Query(10, ge=2, le=20),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    stmt = (
+        select(ModelPrediction)
+        .join(PredictionRun, ModelPrediction.run_id == PredictionRun.id)
+        .options(selectinload(ModelPrediction.match))
+        .where(PredictionRun.user_id == user.id)
+        .order_by(ModelPrediction.created_at.desc())
+        .limit(max_results)
+    )
+    if run_id is not None:
+        stmt = stmt.where(PredictionRun.id == run_id)
+    result = await db.execute(stmt)
+    return _build_calibration_summary(list(result.scalars().all()), bin_count=bin_count)
+
+
+@router.get("/runs/{run_id}/score-grids", response_model=PredictionScoreGridResponse)
+async def get_prediction_score_grids(
+    run_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    stmt = (
+        select(PredictionRun)
+        .options(selectinload(PredictionRun.model_predictions).selectinload(ModelPrediction.match))
+        .where(PredictionRun.id == run_id, PredictionRun.user_id == user.id)
+    )
+    result = await db.execute(stmt)
+    run = result.scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Prediction run not found")
+
+    grouped: dict[tuple[int, str], list[ModelPrediction]] = defaultdict(list)
+    for prediction in run.model_predictions:
+        grouped[(prediction.match_id, prediction.model_type)].append(prediction)
+
+    return PredictionScoreGridResponse(
+        run_id=run.id,
+        source_dataset_id=run.source_dataset_id,
+        items=[_build_score_grid_item(predictions) for _, predictions in sorted(grouped.items())],
+    )
+
+
 @router.get("/runs/{run_id}", response_model=PredictionRunDetailResponse)
 async def get_prediction_run(
     run_id: int,
@@ -522,7 +791,10 @@ async def list_value_bets(
         select(PredictionRun)
         .where(PredictionRun.user_id == user.id, PredictionRun.status == "completed")
         .options(
-            selectinload(PredictionRun.model_predictions).selectinload(ModelPrediction.match).selectinload(Match.odds),
+            selectinload(PredictionRun.model_predictions)
+            .selectinload(ModelPrediction.match)
+            .selectinload(Match.odds)
+            .selectinload(OddsEntry.odds_snapshot),
         )
         .order_by(PredictionRun.created_at.desc())
         .limit(1)

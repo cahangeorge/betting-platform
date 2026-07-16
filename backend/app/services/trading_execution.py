@@ -8,12 +8,43 @@ from sqlalchemy.orm import selectinload
 from app.adapters.flumine_paper import FluminePaperAdapter
 from app.config import Settings, get_settings
 from app.models.match import Match, OddsEntry
+from app.models.prediction import ModelPrediction, PredictionRun
 from app.models.ticket import Ticket, TicketLeg
 from app.models.trading import ExecutionEvent, ExecutionIntent, ExecutionOrder, TradingAccount
+from app.services.model_governance import assess_prediction_runs_governance
+from app.services.odds_quotes import load_odds_entries, select_quote_set
 
 SUPPORTED_MARKET = "1x2"
 SUPPORTED_SELECTIONS = {"home", "draw", "away"}
 TERMINAL_STATUSES = {"filled", "failed", "cancelled"}
+
+
+async def _ticket_governance_assessment(
+    db: AsyncSession,
+    *,
+    ticket_id: int,
+    user_id: int,
+    now: datetime,
+) -> dict | None:
+    result = await db.execute(
+        select(PredictionRun)
+        .join(ModelPrediction, ModelPrediction.run_id == PredictionRun.id)
+        .join(TicketLeg, TicketLeg.model_prediction_id == ModelPrediction.id)
+        .where(TicketLeg.ticket_id == ticket_id, PredictionRun.user_id == user_id)
+    )
+    runs = list(result.scalars().unique().all())
+    if not runs:
+        return None
+    assessment = await assess_prediction_runs_governance(
+        db,
+        user_id=user_id,
+        runs=runs,
+        automated=False,
+        now=now,
+    )
+    if not assessment["allowed"]:
+        raise ValueError("Paper execution is blocked by current model governance")
+    return assessment
 
 
 def _persisted_price(odds: OddsEntry, selection: str) -> float | None:
@@ -80,6 +111,12 @@ async def create_execution_intent(
             raise ValueError("Idempotency key is already used for a different execution")
         return existing, False
 
+    ticket_execution_result = await db.execute(
+        select(ExecutionIntent).where(ExecutionIntent.user_id == user_id, ExecutionIntent.ticket_id == ticket_id)
+    )
+    if ticket_execution_result.scalar_one_or_none() is not None:
+        raise ValueError("A paper execution already exists for this ticket")
+
     normalized_side = side.strip().upper()
     normalized_order_type = order_type.strip().upper()
     if normalized_side != "BACK" or normalized_order_type != "LIMIT":
@@ -114,6 +151,14 @@ async def create_execution_intent(
         raise ValueError("Insufficient paper trading balance")
 
     leg = ticket.legs[0]
+    governance_assessment = None
+    if getattr(leg, "model_prediction_id", None) is not None:
+        governance_assessment = await _ticket_governance_assessment(
+            db,
+            ticket_id=ticket.id,
+            user_id=user_id,
+            now=datetime.now(timezone.utc),
+        )
     market = leg.market.strip().lower()
     selection = leg.selection.strip().lower()
     if market != SUPPORTED_MARKET or selection not in SUPPORTED_SELECTIONS:
@@ -129,18 +174,21 @@ async def create_execution_intent(
         if match_date <= now:
             raise ValueError("Paper execution supports pre-match tickets only")
 
-    odds_result = await db.execute(
-        select(OddsEntry)
-        .where(OddsEntry.match_id == match.id, OddsEntry.market == SUPPORTED_MARKET)
-        .order_by(OddsEntry.timestamp.desc().nullslast(), OddsEntry.created_at.desc(), OddsEntry.id.desc())
-        .limit(1)
-    )
-    odds_entry = odds_result.scalar_one_or_none()
-    if odds_entry is None:
+    odds_entries = await load_odds_entries(db, match_ids=[match.id])
+    quote_set = select_quote_set(odds_entries, market=SUPPORTED_MARKET, as_of=now)
+    quote = quote_set.quote_for(selection)
+    if quote is None or quote.entry_id is None:
         raise ValueError("No persisted 1x2 odds are available for this match")
+    if not quote_set.is_ticket_eligible:
+        raise ValueError(f"Current quote is not ticket eligible: {', '.join(quote_set.reason_codes)}")
+    odds_entry = next((entry for entry in odds_entries if entry.id == quote.entry_id), None)
+    if odds_entry is None:
+        raise ValueError("Selected quote lineage is unavailable")
     persisted_price = _persisted_price(odds_entry, selection)
     if persisted_price is None or persisted_price <= 1:
         raise ValueError(f"No persisted {selection} price is available for this match")
+    if persisted_price < leg.odds:
+        raise ValueError("Current quote is worse than the reviewed ticket quote")
     price = Decimal(str(persisted_price)).quantize(Decimal("0.0001"))
 
     intent = ExecutionIntent(
@@ -148,6 +196,7 @@ async def create_execution_intent(
         trading_account_id=account.id,
         ticket_id=ticket.id,
         odds_entry_id=odds_entry.id,
+        odds_snapshot_id=quote.snapshot_id if isinstance(quote.snapshot_id, int) else None,
         idempotency_key=normalized_key,
         mode="paper",
         market=SUPPORTED_MARKET,
@@ -159,6 +208,12 @@ async def create_execution_intent(
         status="queued",
         transport=settings.task_queue_backend,
         delivery_status="pending",
+        model_evaluation_id=(
+            governance_assessment["model_evaluation_ids"][0]
+            if governance_assessment is not None
+            and len(governance_assessment["model_evaluation_ids"]) == 1
+            else None
+        ),
     )
     db.add(intent)
     await db.flush()
@@ -168,7 +223,11 @@ async def create_execution_intent(
             "execution.queued",
             "queued",
             message="Paper execution accepted for deterministic local processing.",
-            payload={"odds_entry_id": odds_entry.id, "persisted_price": str(price)},
+            payload={
+                "odds_entry_id": odds_entry.id,
+                "persisted_price": str(price),
+                "governance_assessment": governance_assessment,
+            },
         )
     )
     await db.flush()
@@ -189,6 +248,23 @@ async def execute_paper_intent(db: AsyncSession, execution_id: int) -> Execution
         return intent
     if intent.mode != "paper":
         raise PermissionError("Live execution is not implemented")
+
+    if intent.model_evaluation_id is not None:
+        try:
+            await _ticket_governance_assessment(
+                db,
+                ticket_id=intent.ticket_id,
+                user_id=intent.user_id,
+                now=datetime.now(timezone.utc),
+            )
+        except ValueError as exc:
+            intent.status = "failed"
+            intent.delivery_status = "completed"
+            intent.error = str(exc)
+            intent.completed_at = datetime.now(timezone.utc)
+            db.add(_event(intent, "execution.failed", "failed", from_status="queued", message=intent.error))
+            await db.flush()
+            return intent
 
     try:
         instruction = FluminePaperAdapter().build_back_limit(price=float(intent.limit_price), size=float(intent.stake))

@@ -3,7 +3,10 @@ from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import inspect
+from sqlalchemy.orm import make_transient_to_detached
 
+from app.models.match import Match
 from app.services import scraper
 from app.services.python_bridge import BridgeError
 
@@ -14,6 +17,8 @@ class _FakeSession:
         self.duplicate_jobs = duplicate_jobs or []
         self.added = []
         self.flush_calls = 0
+        self.get_calls = 0
+        self.commit_calls = 0
 
     def add(self, obj):
         if getattr(obj, "id", None) is None:
@@ -21,9 +26,13 @@ class _FakeSession:
         self.added.append(obj)
 
     async def get(self, model, pk):
+        self.get_calls += 1
         if self.job is not None and pk == getattr(self.job, "id", None):
             return self.job
         return None
+
+    async def commit(self):
+        self.commit_calls += 1
 
     async def flush(self):
         self.flush_calls += 1
@@ -46,6 +55,40 @@ class _FakeScalarResult:
 
     def all(self):
         return self.rows
+
+
+def test_build_match_update_payload_does_not_refresh_unloaded_updated_at():
+    match_date = datetime(2026, 7, 13, 18, 30)
+    match = Match(
+        id=44,
+        external_id="argentina-44",
+        sport="football",
+        competition="Primera Nacional",
+        home_team="Home",
+        away_team="Away",
+        home_score=1,
+        away_score=0,
+        status="finished",
+        match_date=match_date,
+    )
+    make_transient_to_detached(match)
+    assert "updated_at" in inspect(match).unloaded
+
+    payload = scraper._build_match_update_payload(match)
+
+    assert payload == {
+        "id": 44,
+        "external_id": "argentina-44",
+        "sport": "football",
+        "competition": "Primera Nacional",
+        "home_team": "Home",
+        "away_team": "Away",
+        "home_score": 1,
+        "away_score": 0,
+        "status": "finished",
+        "match_date": "2026-07-13T18:30:00",
+        "updated_at": None,
+    }
 
 
 @pytest.mark.asyncio
@@ -92,6 +135,8 @@ async def test_execute_scrape_job_completes_and_persists_ingestion_summary(monke
     assert isinstance(job.completed_at, datetime)
     assert job.error is None
     assert db.flush_calls >= 2
+    assert db.commit_calls == 1
+    assert db.get_calls >= 2
     log_actions = [obj.action for obj in db.added if obj.__class__.__name__ == "ScrapeJobLog"]
     assert log_actions == ["job_started", "engine_selected", "bridge_invocation", "job_completed"]
 

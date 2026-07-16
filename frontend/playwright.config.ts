@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { defineConfig } from '@playwright/test';
@@ -9,9 +9,25 @@ const backendURL = process.env.E2E_BACKEND_URL ?? 'http://127.0.0.1:8001';
 const backendTarget = new URL(backendURL);
 const backendHost = backendTarget.hostname;
 const backendPort = backendTarget.port || (backendTarget.protocol === 'https:' ? '443' : '80');
-const backendHealthURL = new URL('/api/v1/health', backendURL).toString();
+const backendReadyURL = new URL('/ready', backendURL).toString();
 const backendCwd = process.env.E2E_BACKEND_CWD ?? '../backend';
 const backendCwdAbsolute = resolve(process.cwd(), backendCwd);
+
+function readBackendEnvValue(name: string): string {
+	const envPath = resolve(backendCwdAbsolute, '.env');
+	if (!existsSync(envPath)) return '';
+	const prefix = `${name}=`;
+	const line = readFileSync(envPath, 'utf8')
+		.split(/\r?\n/)
+		.find((entry) => entry.trimStart().startsWith(prefix));
+	if (!line) return '';
+	const value = line.trimStart().slice(prefix.length).trim();
+	const quote = value[0];
+	return (quote === '"' || quote === "'") && value.endsWith(quote)
+		? value.slice(1, -1)
+		: value;
+}
+
 const defaultBackendPythonCommand = existsSync(resolve(backendCwdAbsolute, '.venv/bin/python'))
 	? '.venv/bin/python'
 	: 'python';
@@ -21,10 +37,11 @@ const backendAlembicCommand =
 	(existsSync(resolve(backendCwdAbsolute, '.venv/bin/alembic'))
 		? '.venv/bin/alembic'
 		: `${backendPythonCommand} -m alembic`);
-const backendDatabaseURL = process.env.BET_DATABASE_URL ?? '';
+const backendDatabaseURL =
+	process.env.BET_DATABASE_URL?.trim() || readBackendEnvValue('BET_DATABASE_URL');
 const runBackendMigrations =
 	process.env.E2E_BACKEND_RUN_MIGRATIONS === '1' ||
-	(backendDatabaseURL.length > 0 && !backendDatabaseURL.startsWith('sqlite+'));
+	(backendDatabaseURL.length > 0 && !backendDatabaseURL.startsWith('sqlite'));
 const backendCommand =
 	process.env.E2E_BACKEND_COMMAND ??
 	`${runBackendMigrations ? `${backendAlembicCommand} upgrade head && ` : ''}${backendPythonCommand} -m uvicorn app.main:app --host ${backendHost} --port ${backendPort}`;
@@ -47,6 +64,7 @@ export default defineConfig({
 	},
 	use: {
 		baseURL: frontendURL,
+		actionTimeout: 15_000,
 		screenshot: 'only-on-failure',
 		trace: 'retain-on-failure',
 		video: 'off'
@@ -58,12 +76,13 @@ export default defineConfig({
 					{
 						command: backendCommand,
 						cwd: backendCwd,
-						url: backendHealthURL,
+						url: backendReadyURL,
 						name: 'backend',
 						timeout: 120_000,
 						reuseExistingServer: !process.env.CI,
 						env: {
-							...process.env
+							...process.env,
+							...(backendDatabaseURL ? { BET_DATABASE_URL: backendDatabaseURL } : {})
 						}
 					},
 					{

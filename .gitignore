@@ -40,6 +40,9 @@ flumine/
 
 # Large binary assets
 *.png
+!frontend/static/favicon.png
+!frontend/static/apple-touch-icon.png
+!frontend/static/social/betfront-platform.png
 *.jpg
 *.jpeg
 *.gif

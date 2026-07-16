@@ -8,17 +8,49 @@ from app.api.deps import get_current_user
 from app.database import get_db
 from app.models.bankroll import Bankroll, LedgerEntry
 from app.models.match import Match
+from app.models.odds_lineage import TicketLegQuoteSnapshot
 from app.models.prediction import ModelPrediction
 from app.models.ticket import Ticket, TicketLeg
 from app.models.user import User
 from app.schemas.analytics import (
+    ClvReport,
     EquityCurvePoint,
     PnlByLeague,
     PnlByModel,
     PnlTimeSeriesPoint,
 )
+from app.services.clv_tracking import build_clv_report
 
 router = APIRouter()
+
+
+@router.get("/clv", response_model=ClvReport)
+async def get_clv(
+    limit: int = Query(500, ge=1, le=5000),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    owned_leg_ids = (
+        select(TicketLeg.id)
+        .join(Ticket, TicketLeg.ticket_id == Ticket.id)
+        .where(Ticket.user_id == user.id)
+        .order_by(TicketLeg.id.desc())
+        .limit(limit)
+    )
+    stmt = (
+        select(Ticket.id, TicketLeg.id, TicketLegQuoteSnapshot)
+        .join(TicketLeg, TicketLeg.ticket_id == Ticket.id)
+        .join(TicketLegQuoteSnapshot, TicketLegQuoteSnapshot.ticket_leg_id == TicketLeg.id)
+        .where(Ticket.user_id == user.id, TicketLeg.id.in_(owned_leg_ids))
+        .order_by(
+            TicketLeg.id.desc(),
+            TicketLegQuoteSnapshot.stage.asc(),
+            TicketLegQuoteSnapshot.revision.desc(),
+            TicketLegQuoteSnapshot.recorded_at.desc(),
+        )
+    )
+    result = await db.execute(stmt)
+    return build_clv_report(result.all())
 
 
 def _parse_period(period: str) -> timedelta:

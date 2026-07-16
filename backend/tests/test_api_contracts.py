@@ -30,6 +30,17 @@ class _FakeScalarResult:
         return self._value
 
 
+class _FakeListResult:
+    def __init__(self, values):
+        self._values = list(values)
+
+    def scalars(self):
+        return self
+
+    def all(self):
+        return self._values
+
+
 class _FakeAuthDb:
     def __init__(self, existing_user=None):
         self.user = existing_user
@@ -44,11 +55,70 @@ class _FakeAuthDb:
     async def flush(self):
         return None
 
+    async def commit(self):
+        return None
+
 
 def _set_cookie_header_values(response: Response) -> list[str]:
     return [
         value.decode("latin-1") for key, value in response.raw_headers if key.decode("latin-1").lower() == "set-cookie"
     ]
+
+
+@pytest.mark.asyncio
+async def test_dataset_list_filters_by_originating_scrape_job_before_pagination():
+    own = SimpleNamespace(id=1, data={"job_id": 11})
+    foreign = SimpleNamespace(id=2, data={"job_id": 22})
+    orphan = SimpleNamespace(id=3, data={})
+    own_job = SimpleNamespace(id=11, params={"_created_by_user_id": 7})
+    foreign_job = SimpleNamespace(id=22, params={"_created_by_user_id": 8})
+
+    class _Db:
+        def __init__(self):
+            self.results = [_FakeListResult([foreign, orphan, own]), _FakeListResult([own_job, foreign_job])]
+
+        async def execute(self, _stmt):
+            return self.results.pop(0)
+
+    visible = await data_api.list_datasets(
+        page=1,
+        per_page=20,
+        db=_Db(),
+        user=SimpleNamespace(id=7, is_admin=False),
+    )
+
+    assert [dataset.id for dataset in visible] == [1]
+
+
+@pytest.mark.asyncio
+async def test_dataset_get_rejects_foreign_owner_but_allows_admin():
+    dataset = SimpleNamespace(id=2, data={"job_id": 22})
+    foreign_job = SimpleNamespace(id=22, params={"_created_by_user_id": 8})
+
+    class _Db:
+        async def get(self, model, object_id):
+            if model.__name__ == "ScrapedDataset":
+                return dataset if object_id == dataset.id else None
+            if model.__name__ == "ScrapeJob":
+                return foreign_job if object_id == foreign_job.id else None
+            raise AssertionError(model)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await data_api.get_dataset(
+            dataset_id=2,
+            db=_Db(),
+            user=SimpleNamespace(id=7, is_admin=False),
+        )
+    assert exc_info.value.status_code == 403
+
+    assert (
+        await data_api.get_dataset(
+            dataset_id=2,
+            db=_Db(),
+            user=SimpleNamespace(id=1, is_admin=True),
+        )
+        is dataset
+    )
 
 
 @pytest.mark.asyncio
@@ -110,10 +180,13 @@ async def test_get_current_user_optional_returns_none_without_token():
 
 @pytest.mark.asyncio
 async def test_ticket_creation_maps_domain_validation_errors(monkeypatch):
-    async def fake_create_ticket(**kwargs):
+    captured = {}
+
+    async def fake_create_manual_ticket(**kwargs):
+        captured.update(kwargs)
         raise ValueError("Insufficient bankroll balance")
 
-    monkeypatch.setattr(tickets_api, "create_ticket", fake_create_ticket)
+    monkeypatch.setattr(tickets_api, "create_manual_ticket", fake_create_manual_ticket)
 
     with pytest.raises(HTTPException) as exc_info:
         await tickets_api.create_new_ticket(
@@ -129,14 +202,16 @@ async def test_ticket_creation_maps_domain_validation_errors(monkeypatch):
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail == "Insufficient bankroll balance"
+    assert captured["accumulator_risk_acknowledged"] is False
+    assert captured["legs_data"] == [{"match_id": 1, "selection": "home", "market": "1x2", "odds": 2.0}]
 
 
 @pytest.mark.asyncio
 async def test_ticket_creation_maps_domain_permission_errors(monkeypatch):
-    async def fake_create_ticket(**kwargs):
+    async def fake_create_manual_ticket(**kwargs):
         raise PermissionError("Bankroll 5 does not belong to the current user")
 
-    monkeypatch.setattr(tickets_api, "create_ticket", fake_create_ticket)
+    monkeypatch.setattr(tickets_api, "create_manual_ticket", fake_create_manual_ticket)
 
     with pytest.raises(HTTPException) as exc_info:
         await tickets_api.create_new_ticket(
@@ -155,6 +230,121 @@ async def test_ticket_creation_maps_domain_permission_errors(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_manual_ticket_creation_requires_explicit_risk_policy(monkeypatch):
+    report = {
+        "risk_assessment": {
+            "allowed": False,
+            "blockers": [{"code": "risk_policy_required", "scope": "policy"}],
+        }
+    }
+
+    async def fake_create_manual_ticket(**_kwargs):
+        raise tickets_api.TicketRiskPolicyRequiredError("An explicit risk policy is required", report)
+
+    monkeypatch.setattr(tickets_api, "create_manual_ticket", fake_create_manual_ticket)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await tickets_api.create_new_ticket(
+            body=TicketCreateRequest(
+                ticket_type="single",
+                stake=1,
+                bankroll_id=5,
+                legs=[{"match_id": 1, "market": "1x2", "selection": "home", "odds": 2.0}],
+            ),
+            db=object(),
+            user=SimpleNamespace(id=12),
+        )
+
+    assert exc_info.value.status_code == 428
+    assert exc_info.value.detail == {
+        "code": "risk_policy_required",
+        "message": "An explicit risk policy is required",
+        "report": report,
+    }
+
+
+@pytest.mark.asyncio
+async def test_manual_ticket_creation_returns_conflict_for_current_risk_blocker(monkeypatch):
+    report = {
+        "risk_assessment": {
+            "allowed": False,
+            "blockers": [{"code": "responsible_gambling_pause_active", "scope": "policy"}],
+        }
+    }
+
+    async def fake_create_manual_ticket(**_kwargs):
+        raise tickets_api.TicketManualRiskConflictError("Manual ticket is blocked", report)
+
+    monkeypatch.setattr(tickets_api, "create_manual_ticket", fake_create_manual_ticket)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await tickets_api.create_new_ticket(
+            body=TicketCreateRequest(
+                ticket_type="single",
+                stake=1,
+                bankroll_id=5,
+                legs=[{"match_id": 1, "market": "1x2", "selection": "home", "odds": 2.0}],
+            ),
+            db=object(),
+            user=SimpleNamespace(id=12),
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == {
+        "code": "risk_policy_blocked",
+        "message": "Manual ticket is blocked",
+        "report": report,
+    }
+
+
+@pytest.mark.asyncio
+async def test_ticket_batch_discard_returns_explicit_cleanup_receipt(monkeypatch):
+    async def fake_discard_generated_ticket_batch(**kwargs):
+        assert kwargs["user_id"] == 12
+        assert kwargs["batch_id"] == 77
+        return 77, 5
+
+    monkeypatch.setattr(tickets_api, "discard_generated_ticket_batch", fake_discard_generated_ticket_batch)
+
+    response = await tickets_api.discard_generated_batch(
+        batch_id=77,
+        db=object(),
+        user=SimpleNamespace(id=12),
+    )
+
+    assert response.model_dump() == {
+        "batch_id": 77,
+        "status": "discarded",
+        "discarded_tickets": 5,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "expected_status"),
+    [
+        (LookupError("Ticket batch not found"), 404),
+        (tickets_api.TicketBatchDiscardConflictError("Only generated drafts can be discarded"), 409),
+    ],
+)
+async def test_ticket_batch_discard_maps_not_found_and_conflict_errors(monkeypatch, error, expected_status):
+    async def fake_discard_generated_ticket_batch(**_kwargs):
+        raise error
+
+    monkeypatch.setattr(tickets_api, "discard_generated_ticket_batch", fake_discard_generated_ticket_batch)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await tickets_api.discard_generated_batch(
+            batch_id=77,
+            db=object(),
+            user=SimpleNamespace(id=12),
+        )
+
+    assert exc_info.value.status_code == expected_status
+    assert exc_info.value.detail == str(error)
+
+
+@pytest.mark.asyncio
 async def test_ticket_generation_passes_explicit_prediction_run_id(monkeypatch):
     captured = {}
 
@@ -168,12 +358,12 @@ async def test_ticket_generation_passes_explicit_prediction_run_id(monkeypatch):
         body=TicketGenerateRequest(
             bankroll_id=5,
             run_id=31,
+            prediction_ids=[401, 402],
             ticket_count=1,
             difficulty="safe",
             market_types=["1x2"],
             min_odds=1.2,
             max_odds=3.0,
-            stake=10.0,
         ),
         db=object(),
         user=SimpleNamespace(id=12),
@@ -182,6 +372,126 @@ async def test_ticket_generation_passes_explicit_prediction_run_id(monkeypatch):
     assert result.batch_id == 77
     assert captured["user_id"] == 12
     assert captured["run_id"] == 31
+    assert captured["prediction_ids"] == [401, 402]
+    assert captured["ticket_format"] == "single"
+    assert "stake" not in captured
+
+
+def test_ticket_generation_request_bounds_ticket_count():
+    with pytest.raises(ValueError):
+        TicketGenerateRequest(ticket_count=0)
+    with pytest.raises(ValueError):
+        TicketGenerateRequest(ticket_count=51)
+
+
+def test_ticket_generation_request_rejects_ambiguous_or_invalid_configuration():
+    with pytest.raises(ValueError, match="bankroll_id"):
+        TicketGenerateRequest()
+    with pytest.raises(ValueError, match="explicit prediction lineage"):
+        TicketGenerateRequest(bankroll_id=5)
+    with pytest.raises(ValueError, match="either run_id or run_ids"):
+        TicketGenerateRequest(bankroll_id=5, run_id=31, run_ids=[31])
+    with pytest.raises(ValueError):
+        TicketGenerateRequest(bankroll_id=5, run_id=31, market_types=[])
+    with pytest.raises(ValueError):
+        TicketGenerateRequest(bankroll_id=5, run_id=31, market_types=["unsupported"])
+    with pytest.raises(ValueError, match="min_odds"):
+        TicketGenerateRequest(bankroll_id=5, run_id=31, min_odds=3.0, max_odds=2.0)
+
+
+@pytest.mark.asyncio
+async def test_ticket_batch_activation_returns_transitioned_tickets(monkeypatch):
+    batch = SimpleNamespace(id=77)
+    tickets = [SimpleNamespace(id=1), SimpleNamespace(id=2)]
+
+    async def fake_activate(**kwargs):
+        assert kwargs["user_id"] == 12
+        assert kwargs["batch_id"] == 77
+        return batch, tickets, 25.0
+
+    async def fake_load(_db, ticket_ids, user_id):
+        assert user_id == 12
+        return [
+            tickets_api.TicketResponse(
+                id=ticket_id,
+                stake=10.0,
+                total_odds=2.0,
+                potential_return=20.0,
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+            )
+            for ticket_id in ticket_ids
+        ]
+
+    monkeypatch.setattr(tickets_api, "activate_ticket_batch", fake_activate)
+    monkeypatch.setattr(tickets_api, "_load_ticket_summaries", fake_load)
+
+    response = await tickets_api.activate_generated_ticket_batch(
+        batch_id=77,
+        body=tickets_api.TicketBatchActivateRequest(expected_revision=1, review_acknowledged=True),
+        db=object(),
+        user=SimpleNamespace(id=12),
+    )
+
+    assert response.batch_id == 77
+    assert response.status == "activated"
+    assert response.debited_amount == 25.0
+    assert [ticket.id for ticket in response.tickets] == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_ticket_batch_activation_maps_repeat_to_conflict(monkeypatch):
+    async def fake_activate(**_kwargs):
+        raise tickets_api.TicketActivationConflictError("Ticket batch can only be activated once")
+
+    monkeypatch.setattr(tickets_api, "activate_ticket_batch", fake_activate)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await tickets_api.activate_generated_ticket_batch(
+            batch_id=77,
+            body=tickets_api.TicketBatchActivateRequest(expected_revision=1, review_acknowledged=True),
+            db=object(),
+            user=SimpleNamespace(id=12),
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == "Ticket batch can only be activated once"
+
+
+@pytest.mark.asyncio
+async def test_ticket_generation_returns_truthful_candidate_exclusion_report(monkeypatch):
+    report = {
+        "prediction_run_id": 31,
+        "scanned_predictions": 2,
+        "eligible_candidates": 0,
+        "excluded_predictions": 2,
+        "excluded_by_reason": {"match_started_or_finished": 2},
+    }
+
+    async def fake_generate_tickets(**_kwargs):
+        raise tickets_api.TicketGenerationError("No safe prediction candidates are eligible", report)
+
+    monkeypatch.setattr(tickets_api, "generate_tickets", fake_generate_tickets)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await tickets_api.generate_ticket_batch(
+            body=TicketGenerateRequest(
+                bankroll_id=5,
+                run_id=31,
+                ticket_count=1,
+                difficulty="safe",
+                market_types=["1x2"],
+                min_odds=1.2,
+                max_odds=3.0,
+            ),
+            db=object(),
+            user=SimpleNamespace(id=12),
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == (
+        "No safe prediction candidates are eligible. Excluded 2/2 predictions: match_started_or_finished=2."
+    )
 
 
 @pytest.mark.asyncio
@@ -715,6 +1025,29 @@ def test_compute_ticket_stats_summarizes_history():
     assert stats == {"total": 4, "won": 2, "lost": 1, "profit_loss": 11.5}
 
 
+@pytest.mark.asyncio
+async def test_ticket_stats_uses_one_sql_aggregate_with_latest_settlement_semantics():
+    class _AggregateResult:
+        def one(self):
+            return SimpleNamespace(total=4, won=2, lost=1, profit_loss=11.5)
+
+    class _Db:
+        def __init__(self):
+            self.statements = []
+
+        async def execute(self, stmt):
+            self.statements.append(str(stmt.compile(compile_kwargs={"literal_binds": True})))
+            return _AggregateResult()
+
+    db = _Db()
+    response = await tickets_api.get_ticket_stats(db=db, user=SimpleNamespace(id=7))
+
+    assert response.model_dump() == {"total": 4, "won": 2, "lost": 1, "profit_loss": 11.5}
+    assert len(db.statements) == 1
+    assert "row_number() OVER (PARTITION BY settlements.ticket_id" in db.statements[0]
+    assert "tickets.user_id = 7" in db.statements[0]
+
+
 def test_dashboard_date_parser_returns_timezone_aware_bounds():
     start = dashboard_api._parse_dashboard_datetime("2026-06-13")
     end = dashboard_api._parse_dashboard_datetime("2026-06-13", end_of_day=True)
@@ -832,7 +1165,8 @@ class _ScalarOneResult:
 
 @pytest.mark.asyncio
 async def test_manual_ticket_settlement_endpoint_returns_declared_schema(monkeypatch):
-    async def fake_settle_ticket(db, ticket_id, outcome, return_amount):
+    async def fake_settle_ticket(db, ticket_id, outcome, return_amount, *, user_id=None):
+        assert user_id == 12
         return SimpleNamespace(
             id=77,
             bet_placement_id=None,
@@ -845,7 +1179,7 @@ async def test_manual_ticket_settlement_endpoint_returns_declared_schema(monkeyp
 
     class _FakeDb:
         async def execute(self, stmt):
-            return _ScalarOneResult(SimpleNamespace(id=18, user_id=12))
+            return _ScalarOneResult(SimpleNamespace(id=18, user_id=12, status="open"))
 
     monkeypatch.setattr(tickets_api, "settle_ticket", fake_settle_ticket)
 
@@ -867,3 +1201,22 @@ async def test_manual_ticket_settlement_endpoint_returns_declared_schema(monkeyp
         "return_amount": 19.5,
         "pnl": 9.5,
     }
+
+
+@pytest.mark.asyncio
+async def test_generated_draft_cannot_be_settled_before_activation():
+    class _FakeDb:
+        async def execute(self, stmt):
+            return _ScalarOneResult(SimpleNamespace(id=18, user_id=12, status="generated"))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await tickets_api.settle_ticket_endpoint(
+            ticket_id=18,
+            outcome="won",
+            return_amount=19.5,
+            db=_FakeDb(),
+            user=SimpleNamespace(id=12),
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == "Only active open tickets can be settled"

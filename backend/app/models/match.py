@@ -7,6 +7,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models import Base
 
 if TYPE_CHECKING:
+    from app.models.odds_lineage import OddsSnapshot, TicketLegQuoteSnapshot
     from app.models.prediction import EnsemblePrediction, ModelPrediction
     from app.models.ticket import TicketLeg
 
@@ -31,6 +32,7 @@ class Match(Base):
     )
 
     odds: Mapped[list["OddsEntry"]] = relationship("OddsEntry", back_populates="match", cascade="all, delete-orphan")
+    odds_snapshots: Mapped[list["OddsSnapshot"]] = relationship("OddsSnapshot", cascade="all, delete-orphan")
     stats: Mapped[list["MatchStat"]] = relationship("MatchStat", back_populates="match", cascade="all, delete-orphan")
     sources: Mapped[list["MatchSource"]] = relationship(
         "MatchSource", back_populates="match", cascade="all, delete-orphan"
@@ -77,6 +79,9 @@ class OddsEntry(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     match_id: Mapped[int] = mapped_column(ForeignKey("matches.id", ondelete="CASCADE"), nullable=False)
+    odds_snapshot_id: Mapped[int | None] = mapped_column(
+        ForeignKey("odds_snapshots.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     bookmaker: Mapped[str] = mapped_column(String(100), nullable=False)
     market: Mapped[str] = mapped_column(String(50), nullable=False)
     home_odds: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -86,6 +91,8 @@ class OddsEntry(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     match: Mapped["Match"] = relationship("Match", back_populates="odds")
+    odds_snapshot: Mapped["OddsSnapshot | None"] = relationship("OddsSnapshot")
+    quote_snapshots: Mapped[list["TicketLegQuoteSnapshot"]] = relationship("TicketLegQuoteSnapshot")
 
 
 class MatchStat(Base):

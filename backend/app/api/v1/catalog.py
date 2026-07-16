@@ -1,13 +1,28 @@
 from collections import defaultdict
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_admin, get_current_user
 from app.database import get_db
 from app.models.user import User
-from app.schemas.catalog import CountryInfo, FootballCatalogRefreshRequest, FootballCatalogRefreshResponse, LeagueInfo
-from app.services.football_catalog import load_football_catalog, refresh_football_catalog
+from app.schemas.catalog import (
+    CountryInfo,
+    FootballCatalogDiscoveryValidationRequest,
+    FootballCatalogDiscoveryValidationResponse,
+    FootballCatalogRefreshRequest,
+    FootballCatalogRefreshResponse,
+    FootballCatalogValidationRequest,
+    FootballCatalogValidationResponse,
+    LeagueInfo,
+)
+from app.services.football_catalog import (
+    discover_and_validate_football_catalog,
+    load_football_catalog,
+    refresh_football_catalog,
+    validate_pending_football_catalog,
+)
+from app.services.python_bridge import BridgeError
 
 router = APIRouter()
 
@@ -244,3 +259,32 @@ async def refresh_football_catalog_cache(
 ):
     """Persist an already validated discovery payload; this endpoint never contacts OddsPortal."""
     return await refresh_football_catalog(db, body)
+
+
+@router.post("/football/validate", response_model=FootballCatalogValidationResponse)
+async def validate_pending_football_catalog_candidates(
+    body: FootballCatalogValidationRequest,
+    db: AsyncSession = Depends(get_db),
+    _admin: User = Depends(get_current_admin),
+):
+    """Validate a small, rate-limited pending batch against rendered Results pages."""
+    try:
+        return await validate_pending_football_catalog(db, country=body.country, limit=body.limit)
+    except BridgeError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+
+
+@router.post(
+    "/football/discover-validate",
+    response_model=FootballCatalogDiscoveryValidationResponse,
+)
+async def discover_and_validate_football_catalog_candidates(
+    body: FootballCatalogDiscoveryValidationRequest,
+    db: AsyncSession = Depends(get_db),
+    _admin: User = Depends(get_current_admin),
+):
+    """Discover selected countries and retry validation within the requested attempt limit."""
+    try:
+        return await discover_and_validate_football_catalog(db, body)
+    except BridgeError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc

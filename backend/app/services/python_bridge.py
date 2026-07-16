@@ -135,7 +135,9 @@ async def run_soccerdata(payload: dict) -> dict:
     )
 
 
-async def run_oddsharvester(args: list[str], *, timeout: int | None = None) -> str:
+async def run_oddsharvester(
+    args: list[str], *, timeout: int | None = None, extra_env: dict[str, str] | None = None
+) -> str:
     python_bin = settings.resolved_oddsharvester_python
     if not python_bin or not Path(python_bin).exists():
         raise BridgeError(
@@ -149,7 +151,7 @@ async def run_oddsharvester(args: list[str], *, timeout: int | None = None) -> s
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env={**os.environ, "PYTHONUNBUFFERED": "1"},
+            env={**os.environ, "PYTHONUNBUFFERED": "1", **(extra_env or {})},
         )
         effective_timeout = timeout or ODDSHARVESTER_TIMEOUT
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=effective_timeout)
@@ -161,12 +163,108 @@ async def run_oddsharvester(args: list[str], *, timeout: int | None = None) -> s
         raise BridgeError(f"OddsHarvester request timed out after {timeout or ODDSHARVESTER_TIMEOUT}s")
 
 
+async def validate_oddsharvester_football_catalog(
+    candidates: list[dict], *, timeout: int | None = None, season: str | None = None
+) -> list[dict]:
+    """Run the bounded Results-page validator for discovered football leagues."""
+    _require_provider_runtime("oddsharvester")
+    script_path = settings.repo_root / "OddsHarvester" / "scripts" / "validate_football_catalog.py"
+    if not script_path.exists():
+        raise BridgeError(f"OddsHarvester catalog validator not found: {script_path}")
+
+    token = f"catalog_validation_{os.getpid()}_{id(candidates)}"
+    input_path = TEMP_DIR / f"{token}.input.json"
+    output_path = TEMP_DIR / f"{token}.output.json"
+    input_path.write_text(json.dumps(candidates))
+    cmd = [
+        settings.resolved_oddsharvester_python,
+        str(script_path),
+        "--input",
+        str(input_path),
+        "--output",
+        str(output_path),
+    ]
+    if season:
+        cmd.extend(["--season", season])
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env={**os.environ, "PYTHONUNBUFFERED": "1"},
+        )
+        try:
+            _stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout or ODDSHARVESTER_TIMEOUT)
+        except asyncio.TimeoutError:
+            proc.kill()
+            raise BridgeError(f"OddsHarvester catalog validation timed out after {timeout or ODDSHARVESTER_TIMEOUT}s")
+        if proc.returncode != 0:
+            raise BridgeError(stderr.decode().strip() or "OddsHarvester catalog validator failed")
+        if not output_path.exists():
+            raise BridgeError("OddsHarvester catalog validator produced no output file")
+        payload = json.loads(output_path.read_text())
+        if not isinstance(payload, list) or not all(isinstance(item, dict) for item in payload):
+            raise BridgeError("OddsHarvester catalog validator returned invalid JSON")
+        return payload
+    except json.JSONDecodeError as exc:
+        raise BridgeError(f"OddsHarvester catalog validator returned invalid JSON: {exc}") from exc
+    finally:
+        input_path.unlink(missing_ok=True)
+        output_path.unlink(missing_ok=True)
+
+
+async def discover_oddsharvester_football_catalog(*, timeout: int | None = None) -> dict:
+    """Discover the rendered OddsPortal football catalog through the existing worker script."""
+    _require_provider_runtime("oddsharvester")
+    script_path = settings.repo_root / "OddsHarvester" / "scripts" / "discover_football_catalog.py"
+    if not script_path.exists():
+        raise BridgeError(f"OddsHarvester catalog discovery script not found: {script_path}")
+
+    output_path = TEMP_DIR / f"catalog_discovery_{os.getpid()}_{id(asyncio.current_task())}.json"
+    cmd = [
+        settings.resolved_oddsharvester_python,
+        str(script_path),
+        "--output",
+        str(output_path),
+    ]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env={**os.environ, "PYTHONUNBUFFERED": "1"},
+        )
+        try:
+            _stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=timeout or ODDSHARVESTER_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            raise BridgeError(
+                f"OddsHarvester catalog discovery timed out after {timeout or ODDSHARVESTER_TIMEOUT}s"
+            )
+        if proc.returncode != 0:
+            raise BridgeError(stderr.decode().strip() or "OddsHarvester catalog discovery failed")
+        if not output_path.exists():
+            raise BridgeError("OddsHarvester catalog discovery produced no output file")
+        payload = json.loads(output_path.read_text())
+        leagues = payload.get("leagues") if isinstance(payload, dict) else None
+        if not isinstance(leagues, list) or not all(isinstance(item, dict) for item in leagues):
+            raise BridgeError("OddsHarvester catalog discovery returned invalid JSON")
+        return payload
+    except json.JSONDecodeError as exc:
+        raise BridgeError(f"OddsHarvester catalog discovery returned invalid JSON: {exc}") from exc
+    finally:
+        output_path.unlink(missing_ok=True)
+
+
 async def run_oddsharvester_json(
     args: list[str],
     label: str = "oddsharvester",
     *,
     timeout: int | None = None,
     include_report: bool = False,
+    extra_env: dict[str, str] | None = None,
 ) -> list[dict] | OddsHarvesterJsonResult:
     output_path = TEMP_DIR / f"{label}_{os.getpid()}_{abs(hash(tuple(args)))}.json"
     report_path = output_path.with_suffix(".report.json")
@@ -175,16 +273,18 @@ async def run_oddsharvester_json(
         command_args.extend(["--report-output", str(report_path)])
 
     cli_error: str | None = None
+    run_kwargs: dict[str, object] = {"timeout": timeout}
+    if extra_env:
+        run_kwargs["extra_env"] = extra_env
     try:
-        raw_output = await run_oddsharvester(command_args, timeout=timeout)
+        raw_output = await run_oddsharvester(command_args, **run_kwargs)
     except BridgeError as exc:
         cli_error = str(exc)
         if include_report and _report_option_is_unsupported(cli_error):
             output_path.unlink(missing_ok=True)
             report_path.unlink(missing_ok=True)
             raw_output = await run_oddsharvester(
-                [*args, "--output", str(output_path), "--format", "json"],
-                timeout=timeout,
+                [*args, "--output", str(output_path), "--format", "json"], **run_kwargs
             )
             cli_error = None
         elif not (include_report and report_path.exists()):

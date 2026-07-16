@@ -1,4 +1,4 @@
-import { ApiClient } from './client';
+import { ApiClient, waitForSessionRefresh } from './client';
 import type { User, LoginRequest, SignupRequest, AuthResponse } from '$lib/types';
 
 class AuthApi extends ApiClient {
@@ -11,6 +11,7 @@ class AuthApi extends ApiClient {
 	}
 
 	async logout(): Promise<void> {
+		await waitForSessionRefresh();
 		return this.post<void>('/api/v1/auth/logout');
 	}
 

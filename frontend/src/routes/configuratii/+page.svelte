@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { page } from '$app/stores';
 	import { ApiClientError } from '$lib/api/client';
 	import { strategiesApi } from '$lib/api/strategies';
 	import Badge from '$lib/components/ui/Badge.svelte';
@@ -30,6 +31,7 @@
 	let error = $state('');
 	let formError = $state('');
 	let notice = $state('');
+	const isAdmin = $derived(Boolean($page.data.user?.is_admin));
 
 	let editingStrategyId = $state<number | null>(null);
 	let name = $state('');
@@ -68,6 +70,7 @@
 	}
 
 	function editStrategy(strategy: Strategy) {
+		if (!isAdmin) return;
 		editingStrategyId = strategy.id;
 		name = strategy.name;
 		modelType = strategy.model_type;
@@ -93,6 +96,7 @@
 	}
 
 	async function saveStrategy() {
+		if (!isAdmin) return;
 		if (!name.trim()) {
 			formError = 'Name is required';
 			return;
@@ -133,6 +137,7 @@
 	}
 
 	async function duplicateStrategy(strategy: Strategy) {
+		if (!isAdmin) return;
 		duplicatingId = strategy.id;
 		formError = '';
 		notice = '';
@@ -188,7 +193,13 @@
 		</div>
 	{/if}
 
-	<div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
+	{#if !isAdmin}
+		<div class="border border-football-gold/40 bg-football-gold/10 p-4 text-sm text-foreground" role="status">
+			Catalogul de strategii este disponibil doar pentru consultare. Doar administratorii pot crea, edita sau duplica strategii globale.
+		</div>
+	{/if}
+
+	<div class={isAdmin ? 'grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]' : 'grid gap-6'}>
 		<div class="space-y-3">
 			{#if loading}
 				<Loading message="Loading strategies..." />
@@ -225,23 +236,26 @@
 									</div>
 								</div>
 							</div>
-							<div class="flex shrink-0 gap-2">
-								<Button variant="secondary" size="sm" onclick={() => editStrategy(strategy)}>Edit</Button>
-								<Button
-									variant="ghost"
-									size="sm"
-									disabled={duplicatingId === strategy.id}
-									onclick={() => duplicateStrategy(strategy)}
-								>
-									{duplicatingId === strategy.id ? 'Duplicating...' : 'Duplicate'}
-								</Button>
-							</div>
+							{#if isAdmin}
+								<div class="flex shrink-0 gap-2">
+									<Button variant="secondary" size="sm" onclick={() => editStrategy(strategy)}>Edit</Button>
+									<Button
+										variant="ghost"
+										size="sm"
+										disabled={duplicatingId === strategy.id}
+										onclick={() => duplicateStrategy(strategy)}
+									>
+										{duplicatingId === strategy.id ? 'Duplicating...' : 'Duplicate'}
+									</Button>
+								</div>
+							{/if}
 						</div>
 					</Card>
 				{/each}
 			{/if}
 		</div>
 
+		{#if isAdmin}
 		<Card>
 			<form
 				class="space-y-4"
@@ -302,5 +316,6 @@
 				</Button>
 			</form>
 		</Card>
+		{/if}
 	</div>
 </div>

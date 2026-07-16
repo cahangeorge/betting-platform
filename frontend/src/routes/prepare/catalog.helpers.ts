@@ -1,6 +1,6 @@
 import type { CatalogResponse, Country, LeagueInfo } from '$lib/types';
 
-export type CatalogAvailability = 'validated' | 'discovered' | 'unavailable' | null;
+export type CatalogAvailability = 'validated' | 'validated_url' | 'discovered' | 'unavailable' | null;
 
 export type ScrapeCatalog = {
 	countries: Country[];
@@ -90,9 +90,13 @@ export function normaliseCatalogAvailability(status?: string | null): CatalogAva
 		case 'available':
 		case 'ready':
 			return 'validated';
+		case 'validation_passed':
+		case 'results_page_verified':
+			return 'validated_url';
 		case 'discovered':
 		case 'pending':
 		case 'pending_validation':
+		case 'validation_pending':
 		case 'validating':
 			return 'discovered';
 		case 'unavailable':
@@ -112,6 +116,8 @@ export function catalogAvailabilityLabel(status: CatalogAvailability): string | 
 	switch (status) {
 		case 'validated':
 			return 'Ready to scrape';
+		case 'validated_url':
+			return 'Results page verified';
 		case 'discovered':
 			return 'In validation';
 		case 'unavailable':
@@ -145,8 +151,7 @@ export function isLeagueScrapeSelectable(league: Pick<LeagueInfo, 'scrape_slug' 
 	return (
 		typeof league.scrape_slug === 'string' &&
 		league.scrape_slug.length > 0 &&
-		availability !== 'discovered' &&
-		availability !== 'unavailable'
+		availability === 'validated'
 	);
 }
 
@@ -236,6 +241,21 @@ export function buildHistoryDateRange(years: number, today = new Date()): { from
 		from: formatLocalDate(start),
 		to: formatLocalDate(end)
 	};
+}
+
+export function historicRangeMetadata(
+	from: string,
+	to: string,
+	fallbackDays = 0
+): { days: number; years: number } {
+	const start = new Date(`${from}T00:00:00`);
+	const end = new Date(`${to}T00:00:00`);
+	const parsedDays =
+		Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end
+			? 0
+			: Math.ceil((end.getTime() - start.getTime()) / 86_400_000);
+	const days = parsedDays > 0 ? parsedDays : Math.max(0, fallbackDays);
+	return { days, years: days > 0 ? Math.max(1, Math.ceil(days / 365)) : 0 };
 }
 
 export function buildFootballSeasonsFromDateRange(from: string, to: string): string[] {

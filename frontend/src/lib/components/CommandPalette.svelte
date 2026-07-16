@@ -10,10 +10,12 @@
 		Zap,
 		Plus,
 		Eye,
-		Settings
+		Settings,
+		Globe2
 	} from 'lucide-svelte';
 	import { goto } from '$app/navigation';
 	import { cn } from '$lib/utils';
+	import { onMount } from 'svelte';
 
 	interface CommandItem {
 		id: string;
@@ -82,6 +84,13 @@
 			action: () => goto('/settings/strategies')
 		},
 		{
+			id: 'countries-leagues',
+			label: 'Listare țări/ligi',
+			icon: Globe2,
+			group: 'secondary',
+			action: () => goto('/settings/countries-leagues')
+		},
+		{
 			id: 'live',
 			label: 'Live opportunities',
 			icon: Eye,
@@ -124,15 +133,16 @@
 
 	let {
 		matches = [],
-		open = $bindable(false)
+		onClose
 	}: {
 		matches?: { id: number; home_team: string; away_team: string }[];
-		open?: boolean;
+		onClose: () => void;
 	} = $props();
 
 	let query = $state('');
 	let selectedIndex = $state(0);
 	let inputRef = $state<HTMLInputElement | null>(null);
+	let dialogRef = $state<HTMLDivElement | null>(null);
 
 	const allItems = $derived.by(() => {
 		const matchItems: CommandItem[] = matches.map((m) => ({
@@ -142,7 +152,12 @@
 			group: 'match',
 			action: () => goto(`/matches/${m.id}`)
 		}));
-		return [...pages, ...matchItems, ...actions];
+		return [
+			...pages.filter((item) => item.group === 'primary'),
+			...actions,
+			...pages.filter((item) => item.group === 'secondary'),
+			...matchItems
+		];
 	});
 
 	const filtered = $derived(
@@ -176,21 +191,29 @@
 			.filter((section) => section.items.length > 0)
 	);
 
-	$effect(() => {
-		selectedIndex = 0;
-	});
-
 	function handleKeydown(e: KeyboardEvent) {
-		if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-			e.preventDefault();
-			open = !open;
+		if (e.key === 'Tab') {
+			const focusable = Array.from(
+				dialogRef?.querySelectorAll<HTMLElement>(
+					'input, button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'
+				) ?? []
+			);
+			if (focusable.length === 0) return;
+			const first = focusable[0];
+			const last = focusable.at(-1);
+			if (e.shiftKey && document.activeElement === first) {
+				e.preventDefault();
+				last?.focus();
+			} else if (!e.shiftKey && document.activeElement === last) {
+				e.preventDefault();
+				first.focus();
+			}
 			return;
 		}
-		if (!open) return;
 
 		if (e.key === 'Escape') {
 			e.preventDefault();
-			open = false;
+			onClose();
 			return;
 		}
 
@@ -201,56 +224,64 @@
 			e.preventDefault();
 			selectedIndex = (selectedIndex - 1 + filtered.length) % filtered.length;
 		} else if (e.key === 'Enter') {
+			if (document.activeElement instanceof HTMLButtonElement && dialogRef?.contains(document.activeElement)) {
+				return;
+			}
 			e.preventDefault();
 			const item = filtered[selectedIndex];
 			if (item) {
 				item.action();
-				open = false;
+				onClose();
 			}
 		}
 	}
 
 	function executeItem(item: CommandItem) {
 		item.action();
-		open = false;
+		onClose();
 	}
 
-	$effect(() => {
-		if (open) {
-			const t = setTimeout(() => inputRef?.focus(), 50);
-			return () => clearTimeout(t);
-		}
+	onMount(() => {
+		const previouslyFocused =
+			document.activeElement instanceof HTMLElement ? document.activeElement : null;
+		const focusTimer = setTimeout(() => inputRef?.focus(), 50);
+		return () => {
+			clearTimeout(focusTimer);
+			previouslyFocused?.focus();
+		};
 	});
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
 
-{#if open}
-	<div
-		role="button"
-		aria-label="Close command palette"
-		tabindex="-1"
-		onkeydown={(e) => {
-			if (e.key === 'Escape' || e.key === 'Enter' || e.key === ' ') {
-				e.preventDefault();
-				open = false;
-			}
-		}}
-		class="fixed inset-0 z-[60] flex items-start justify-center pt-[15vh] bg-background/95 backdrop-blur-sm"
-		onclick={(e) => {
-			if (e.target === e.currentTarget) open = false;
-		}}
-	>
-		<div class="w-full max-w-xl overflow-hidden  border border-border bg-card shadow-2xl">
+	<div class="fixed inset-0 z-[60] flex items-start justify-center pt-[15vh]">
+		<button
+			type="button"
+			class="absolute inset-0 bg-background/95 backdrop-blur-sm"
+			onclick={onClose}
+			aria-label="Close command palette"
+		></button>
+		<div
+			bind:this={dialogRef}
+			role="dialog"
+			aria-modal="true"
+			aria-label="Navigare rapidă"
+			class="relative w-full max-w-xl overflow-hidden border border-border bg-card shadow-2xl"
+		>
 			<!-- Search input -->
 			<div class="flex items-center gap-3 px-4 py-3 border-b border-border">
 				<Search class="w-5 h-5 text-muted-foreground" />
 				<input
 					bind:this={inputRef}
 					type="text"
+					aria-label="Caută pagini, meciuri și acțiuni"
 					placeholder="Search pages, matches, actions..."
 					class="flex-1 bg-transparent text-sm outline-none text-foreground placeholder:text-muted-foreground"
-					bind:value={query}
+					value={query}
+					oninput={(event) => {
+						query = event.currentTarget.value;
+						selectedIndex = 0;
+					}}
 				/>
 				<span class="text-[10px] font-mono px-1.5 py-0.5 border border-border text-muted-foreground">
 					ESC
@@ -285,6 +316,7 @@
 											: 'text-foreground hover:bg-muted'
 									)}
 									onmouseenter={() => (selectedIndex = entry.index)}
+									onfocus={() => (selectedIndex = entry.index)}
 									onclick={() => executeItem(item)}
 								>
 									<div class="flex items-center gap-3">
@@ -319,4 +351,3 @@
 			</div>
 		</div>
 	</div>
-{/if}

@@ -47,6 +47,30 @@ def test_discovered_row_overrides_static_row_with_status_metadata():
     assert australia.leagues[0].status == "unavailable"
 
 
+def test_pending_discovery_does_not_hide_a_static_cli_supported_league():
+    catalog = merge_football_catalog(
+        CATALOG,
+        [
+            _discovered(
+                scrape_slug="australia-a-league",
+                league_name="A-League Men",
+                status="validation_pending",
+            ),
+            _discovered(
+                scrape_slug="australia-npl-victoria",
+                status="available",
+            ),
+        ],
+    )
+    australia = next(country for country in catalog if country.country == "Australia")
+    by_slug = {league.scrape_slug: league for league in australia.leagues}
+
+    assert by_slug["australia-a-league"].source == "static"
+    assert by_slug["australia-a-league"].status == "available"
+    assert by_slug["australia-npl-victoria"].source == "discovered"
+    assert by_slug["australia-npl-victoria"].status == "available"
+
+
 def test_refresh_payload_rejects_non_oddsportal_or_mismatched_urls():
     with pytest.raises(ValidationError, match="source_url"):
         FootballCatalogRefreshRequest.model_validate(

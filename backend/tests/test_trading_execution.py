@@ -7,6 +7,7 @@ from app.adapters.betfair_readonly import BetfairReadOnlyAdapter
 from app.adapters.flumine_paper import FluminePaperAdapter
 from app.config import Settings
 from app.models.trading import ExecutionIntent, ExecutionOrder, TradingAccount
+from app.services import trading_execution
 from app.services.trading_execution import create_execution_intent, execute_paper_intent
 
 
@@ -17,11 +18,22 @@ class _ScalarResult:
     def scalar_one_or_none(self):
         return self.value
 
+    def scalars(self):
+        return self
+
+    def unique(self):
+        return self
+
+    def all(self):
+        if self.value is None:
+            return []
+        return self.value if isinstance(self.value, list) else [self.value]
+
 
 class _FakeDb:
     def __init__(self, *, account, ticket, odds, existing=None):
         self.account = account
-        self.responses = [existing, ticket, odds]
+        self.responses = [existing, None, ticket, [odds]]
         self.added = []
         self.next_id = 1
 
@@ -60,9 +72,24 @@ def _paper_domain():
         status="scheduled",
         match_date=datetime.now(timezone.utc) + timedelta(hours=2),
     )
-    leg = SimpleNamespace(market="1x2", selection="home", match=match)
+    leg = SimpleNamespace(market="1x2", selection="home", odds=2.25, match=match)
     ticket = SimpleNamespace(id=9, user_id=user_id, ticket_type="single", status="open", stake=10.0, legs=[leg])
-    odds = SimpleNamespace(id=15, home_odds=2.25, draw_odds=3.1, away_odds=3.4)
+    odds = SimpleNamespace(
+        id=15,
+        odds_snapshot_id=16,
+        snapshot=SimpleNamespace(
+            id=16,
+            observed_at=datetime.now(timezone.utc),
+            ingested_at=datetime.now(timezone.utc),
+        ),
+        market="1x2",
+        bookmaker="PaperBook",
+        home_odds=2.25,
+        draw_odds=3.1,
+        away_odds=3.4,
+        timestamp=datetime.now(timezone.utc),
+        created_at=datetime.now(timezone.utc),
+    )
     return user_id, account, ticket, odds
 
 
@@ -84,6 +111,7 @@ async def test_paper_execution_uses_persisted_odds_and_has_no_external_order():
     assert created is True
     assert intent.limit_price == 2.25
     assert intent.odds_entry_id == odds.id
+    assert intent.odds_snapshot_id == odds.odds_snapshot_id
 
     db.responses = [intent]
     await execute_paper_intent(db, intent.id)
@@ -168,6 +196,83 @@ async def test_betfair_boundary_is_read_only_and_not_configured():
 
     assert health.status == "not_configured"
     assert not hasattr(adapter, "place_order")
+
+
+@pytest.mark.asyncio
+async def test_versioned_execution_is_revalidated_before_account_debit(monkeypatch):
+    user_id, account, ticket, odds = _paper_domain()
+    run = SimpleNamespace(id=101, model_version_id=9)
+    intent = ExecutionIntent(
+        id=33,
+        user_id=user_id,
+        trading_account_id=account.id,
+        ticket_id=ticket.id,
+        odds_entry_id=odds.id,
+        idempotency_key="governance-revalidation",
+        mode="paper",
+        market="1x2",
+        selection="home",
+        side="BACK",
+        order_type="LIMIT",
+        stake=10,
+        limit_price=2.25,
+        status="queued",
+        model_evaluation_id=21,
+    )
+    db = _FakeDb(account=account, ticket=ticket, odds=odds)
+    db.responses = [intent, [run]]
+
+    async def blocked_governance(*_args, **_kwargs):
+        return {
+            "allowed": False,
+            "mode": "manual",
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "runs": [{"run_id": 101, "allowed": False, "reason": "critical_monitoring_drift"}],
+            "model_evaluation_ids": [21],
+        }
+
+    monkeypatch.setattr(trading_execution, "assess_prediction_runs_governance", blocked_governance)
+
+    result = await execute_paper_intent(db, intent.id)
+
+    assert result.status == "failed"
+    assert result.error == "Paper execution is blocked by current model governance"
+    assert account.balance == 100
+    assert not any(isinstance(value, ExecutionOrder) for value in db.added)
+
+
+@pytest.mark.asyncio
+async def test_versioned_execution_intent_records_current_governance_evaluation(monkeypatch):
+    user_id, account, ticket, odds = _paper_domain()
+    ticket.legs[0].model_prediction_id = 42
+    run = SimpleNamespace(id=101, model_version_id=9)
+    db = _FakeDb(account=account, ticket=ticket, odds=odds)
+    db.responses = [None, None, ticket, [run], [odds]]
+
+    async def allowed_governance(*_args, **_kwargs):
+        return {
+            "allowed": True,
+            "mode": "manual",
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "runs": [{"run_id": 101, "allowed": True, "reason": "staged_manual_paper_only"}],
+            "model_evaluation_ids": [21],
+        }
+
+    monkeypatch.setattr(trading_execution, "assess_prediction_runs_governance", allowed_governance)
+
+    intent, created = await create_execution_intent(
+        db,
+        user_id=user_id,
+        trading_account_id=account.id,
+        ticket_id=ticket.id,
+        idempotency_key="versioned-ticket",
+        side="BACK",
+        order_type="LIMIT",
+        settings=Settings(trading_enabled=True, trading_paper_enabled=True),
+    )
+
+    assert created is True
+    assert intent.model_evaluation_id == 21
 
 
 def test_local_flumine_limit_order_contract_is_used_without_execution_client():

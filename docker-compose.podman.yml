@@ -1,5 +1,11 @@
 version: '3.8'
 
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
     image: docker.io/postgres:16-alpine
@@ -17,6 +23,7 @@ services:
       timeout: 5s
       retries: 10
     restart: unless-stopped
+    logging: *default-logging
     networks:
       - betnet
 
@@ -30,6 +37,7 @@ services:
       timeout: 5s
       retries: 10
     restart: unless-stopped
+    logging: *default-logging
     networks:
       - betnet
 
@@ -40,8 +48,8 @@ services:
     environment:
       BET_DATABASE_URL: postgresql+asyncpg://betuser:${POSTGRES_PASSWORD:-betpassword_dev}@postgres:5432/betting_platform
       BET_JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production}
-      BET_CORS_ORIGINS: "*"
-      BET_COOKIE_SECURE: "true"
+      BET_CORS_ORIGINS: http://localhost:5174,http://127.0.0.1:5174,http://localhost:8080,http://127.0.0.1:8080
+      BET_COOKIE_SECURE: "false"
       BET_DEBUG: "false"
       BET_TASK_QUEUE_BACKEND: taskiq
       BET_REDIS_URL: redis://redis:6379/0
@@ -76,7 +84,14 @@ services:
         condition: service_healthy
     command: >
       sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
     restart: unless-stopped
+    logging: *default-logging
     networks:
       - betnet
 
@@ -111,12 +126,15 @@ services:
       - ./soccerdata:/workspace/soccerdata:ro
       - ./flumine:/workspace/flumine:ro
     depends_on:
+      backend:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     command: taskiq worker app.tasks.broker:broker app.tasks.jobs
     restart: unless-stopped
+    logging: *default-logging
     networks:
       - betnet
 
@@ -137,6 +155,8 @@ services:
       BET_TRADING_TASKIQ_QUEUE_NAME: bet-trading
       BET_FLUMINE_ROOT: /workspace/flumine
     depends_on:
+      backend:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       redis:
@@ -145,6 +165,7 @@ services:
       - ./flumine:/workspace/flumine:ro
     command: taskiq worker app.tasks.trading_broker:trading_broker app.tasks.trading
     restart: unless-stopped
+    logging: *default-logging
     networks:
       - betnet
 
@@ -162,12 +183,15 @@ services:
       BET_TASKIQ_CONSUMER_GROUP: bet-workers
       BET_TASKIQ_POLL_INTERVAL_SECONDS: 60
     depends_on:
+      backend:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     command: python -m app.tasks.jobs
     restart: unless-stopped
+    logging: *default-logging
     networks:
       - betnet
 
@@ -183,8 +207,16 @@ services:
     ports:
       - "127.0.0.1:5174:3000"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r => { if (!r.ok && r.status !== 302) process.exit(1) }).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
     restart: unless-stopped
+    logging: *default-logging
     networks:
       - betnet
 
@@ -195,9 +227,12 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
-      - frontend
-      - backend
+      frontend:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
     restart: unless-stopped
+    logging: *default-logging
     networks:
       - betnet
 

@@ -14,7 +14,7 @@ def _prediction(quality_report):
             draw_odds=3.4,
             away_odds=4.0,
             bookmaker="Book",
-            timestamp=None,
+            timestamp=NOW,
         )
     ]
     match = SimpleNamespace(
@@ -22,7 +22,8 @@ def _prediction(quality_report):
         competition="World Cup",
         home_team="USA",
         away_team="Australia",
-        match_date=None,
+        match_date=datetime(2026, 7, 9, tzinfo=timezone.utc),
+        status="scheduled",
         odds=odds,
     )
     return SimpleNamespace(
@@ -34,6 +35,7 @@ def _prediction(quality_report):
         away_prob=0.15,
         model_type="PoissonGoalsModel",
         quality_report=quality_report,
+        created_at=NOW,
     )
 
 

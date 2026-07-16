@@ -11,6 +11,7 @@ from app.api.v1 import (
     jobs,
     live,
     matches,
+    model_governance,
     predictions,
     strategies,
     tickets,
@@ -33,3 +34,8 @@ v1_router.include_router(catalog.router, prefix="/catalog", tags=["catalog"])
 v1_router.include_router(strategies.router, prefix="/strategies", tags=["strategies"])
 v1_router.include_router(live.router, prefix="/live", tags=["live"])
 v1_router.include_router(trading.router, prefix="/trading", tags=["trading"])
+v1_router.include_router(
+    model_governance.router,
+    prefix="/model-governance",
+    tags=["model-governance"],
+)

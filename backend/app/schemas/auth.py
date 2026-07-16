@@ -10,6 +10,12 @@ def _normalize_email(v: str) -> str:
     return v
 
 
+def _validate_bcrypt_password_length(value: str) -> str:
+    if len(value.encode("utf-8")) > 72:
+        raise ValueError("Password must not exceed 72 UTF-8 bytes")
+    return value
+
+
 class SignupRequest(BaseModel):
     email: str
     password: str
@@ -25,7 +31,7 @@ class SignupRequest(BaseModel):
     def validate_password(cls, v: str) -> str:
         if len(v) < 8:
             raise ValueError("Password must be at least 8 characters")
-        return v
+        return _validate_bcrypt_password_length(v)
 
 
 class LoginRequest(BaseModel):
@@ -36,6 +42,11 @@ class LoginRequest(BaseModel):
     @classmethod
     def validate_email(cls, v: str) -> str:
         return _normalize_email(v)
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        return _validate_bcrypt_password_length(v)
 
 
 class TokenResponse(BaseModel):

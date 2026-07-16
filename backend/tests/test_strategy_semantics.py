@@ -107,6 +107,35 @@ def test_resolve_prediction_model_key_supports_ui_aliases():
     assert prediction_engine.resolve_prediction_model_key("PoissonGoalsModel") == "PoissonGoalsModel"
 
 
+@pytest.mark.asyncio
+async def test_fetch_training_matches_limits_newest_then_returns_chronological_order():
+    newest = SimpleNamespace(id=3, match_date=datetime(2026, 7, 3, tzinfo=timezone.utc))
+    middle = SimpleNamespace(id=2, match_date=datetime(2026, 7, 2, tzinfo=timezone.utc))
+
+    class _Result:
+        def scalars(self):
+            return self
+
+        def all(self):
+            # Database query is deliberately newest-first before LIMIT.
+            return [newest, middle]
+
+    class _Db:
+        statement = None
+
+        async def execute(self, statement):
+            self.statement = statement
+            return _Result()
+
+    db = _Db()
+    matches = await prediction_engine.fetch_training_matches(db, "Liga Profesional", limit=2)
+
+    assert [match.id for match in matches] == [2, 3]
+    sql = str(db.statement)
+    assert "matches.match_date DESC NULLS LAST" in sql
+    assert "matches.created_at DESC" in sql
+
+
 def test_build_strategy_duplicate_copies_editable_configuration_only():
     source = SimpleNamespace(
         id=12,
@@ -176,6 +205,7 @@ async def test_execute_single_model_run_forwards_penaltyblog_options(monkeypatch
                     draw_odds=3.4,
                     away_odds=4.2,
                     bookmaker="Book",
+                    timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
                 )
             ]
         }
@@ -238,7 +268,7 @@ async def test_execute_single_model_run_forwards_penaltyblog_options(monkeypatch
     predictions = [obj for obj in db.added if obj.__class__.__name__ == "ModelPrediction"]
     assert predictions[0].home_odds == 2.05
     assert predictions[0].expected_value == 0.025
-    assert predictions[0].quality_report["market"]["implied_source"] == "penaltyblog.implied.calculate_implied"
+    assert predictions[0].quality_report["market"]["implied_source"] == "canonical_snapshot_median_devig"
 
 
 @pytest.mark.asyncio

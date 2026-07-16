@@ -1,7 +1,7 @@
 <script lang="ts">
 	let {
 		size = 'md',
-		message = 'Loading...'
+		message = 'Se încarcă...'
 	}: {
 		size?: 'sm' | 'md' | 'lg';
 		message?: string;

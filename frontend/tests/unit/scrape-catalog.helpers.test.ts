@@ -13,6 +13,7 @@ import {
 	getLargeScrapeScopeWarning,
 	isLeagueScrapeSelectable,
 	normaliseCatalogAvailability,
+	historicRangeMetadata,
 	parseCatalogMetadata,
 	parseScrapeCatalog
 } from '../../src/routes/prepare/catalog.helpers.ts';
@@ -49,7 +50,7 @@ test('omits leagues that do not have scrape support', () => {
 	assert.equal(isLeagueScrapeSelectable({ scrape_slug: null }), false);
 	assert.equal(
 		isLeagueScrapeSelectable({ scrape_slug: 'world-cup' }),
-		true
+		false
 	);
 });
 
@@ -81,7 +82,10 @@ test('keeps the legacy catalog array working while consuming dynamic source, sta
 test('makes unvalidated and unavailable dynamic leagues non-selectable without changing legacy behavior', () => {
 	assert.equal(normaliseCatalogAvailability('available'), 'validated');
 	assert.equal(normaliseCatalogAvailability('pending_validation'), 'discovered');
+	assert.equal(normaliseCatalogAvailability('validation_pending'), 'discovered');
+	assert.equal(normaliseCatalogAvailability('validation_passed'), 'validated_url');
 	assert.equal(isLeagueScrapeSelectable({ scrape_slug: 'australia-a-league', status: 'validated' }), true);
+	assert.equal(isLeagueScrapeSelectable({ scrape_slug: 'australia-npl', status: 'validation_passed' }), false);
 	assert.equal(isLeagueScrapeSelectable({ scrape_slug: 'australia-npl', status: 'discovered' }), false);
 	assert.equal(isLeagueScrapeSelectable({ scrape_slug: 'australia-state', status: 'unavailable' }), false);
 	assert.deepEqual(parseCatalogMetadata({ source: 'oddsportal', status: 'available', last_seen_at: '2026-07-12T10:00:00Z' }), {
@@ -135,6 +139,13 @@ test('builds a concrete date range for history presets', () => {
 	assert.deepEqual(buildHistoryDateRange(10, new Date('2026-06-20T12:00:00Z')), {
 		from: '2016-06-20',
 		to: '2026-06-20'
+	});
+});
+
+test('derives truthful one-year metadata from manually edited historic dates', () => {
+	assert.deepEqual(historicRangeMetadata('2025-07-12', '2026-07-12', 3650), {
+		days: 365,
+		years: 1
 	});
 });
 

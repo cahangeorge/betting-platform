@@ -27,7 +27,7 @@ from app.services.task_runs import (
     mark_outbox_publish_failed,
     mark_outbox_published,
 )
-from app.services.ticket_engine import generate_tickets
+from app.services.ticket_engine import TicketGenerationError, TicketRiskPolicyRequiredError, generate_tickets
 
 SCHEDULED_JOB_OWNER_CONFIG_KEY = "_created_by_user_id"
 
@@ -175,6 +175,15 @@ def _optional_int_config(config: dict[str, Any], key: str) -> int | None:
     if value in (None, ""):
         return None
     return int(value)
+
+
+def _optional_int_list_config(config: dict[str, Any], key: str) -> list[int] | None:
+    value = config.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        raise ValueError(f"{key} must be a list of integer ids")
+    return [int(item) for item in value]
 
 
 def _bool_config(config: dict[str, Any], key: str, default: bool) -> bool:
@@ -426,19 +435,50 @@ async def _run_ticket_generation_job(
     if user is None:
         return ScheduledJobRunResult(job_id=job.id, task_type=job.task_type, status="skipped", detail="missing_user_id")
 
+    bankroll_id = _optional_int_config(config, "bankroll_id")
+    if bankroll_id is None:
+        return ScheduledJobRunResult(
+            job_id=job.id,
+            task_type=job.task_type,
+            status="skipped",
+            detail="missing_bankroll_id",
+        )
+
     market_types = list(config.get("market_types") or config.get("markets") or ["1x2"])
-    batch, tickets = await generate_tickets(
-        db=db,
-        user_id=user.id,
-        bankroll_id=_optional_int_config(config, "bankroll_id"),
-        ticket_count=_int_config(config, "ticket_count", 5),
-        difficulty=str(config.get("difficulty") or "balanced"),
-        market_types=market_types,
-        min_odds=float(config.get("min_odds", 1.01) or 1.01),
-        max_odds=float(config.get("max_odds", 100.0) or 100.0),
-        stake=float(config.get("stake", 10.0) or 10.0),
-        run_id=_optional_int_config(config, "run_id"),
-    )
+    try:
+        batch, tickets = await generate_tickets(
+            db=db,
+            user_id=user.id,
+            bankroll_id=bankroll_id,
+            ticket_count=_int_config(config, "ticket_count", 1),
+            difficulty=str(config["difficulty"]) if config.get("difficulty") else None,
+            ticket_format=str(config["ticket_format"]) if config.get("ticket_format") else None,
+            accumulator_risk_acknowledged=bool(config.get("accumulator_risk_acknowledged", False)),
+            automated=True,
+            market_types=market_types,
+            min_odds=float(config.get("min_odds", 1.01) or 1.01),
+            max_odds=float(config.get("max_odds", 100.0) or 100.0),
+            run_id=_optional_int_config(config, "run_id"),
+            run_ids=_optional_int_list_config(config, "run_ids"),
+            prediction_ids=_optional_int_list_config(config, "prediction_ids"),
+        )
+    except TicketRiskPolicyRequiredError:
+        return ScheduledJobRunResult(
+            job_id=job.id,
+            task_type=job.task_type,
+            status="skipped",
+            detail="risk_policy_required",
+        )
+    except TicketGenerationError as exc:
+        blockers = exc.report.get("risk_assessment", {}).get("blockers", [])
+        blocker_codes = [item.get("code") for item in blockers if isinstance(item, dict) and item.get("code")]
+        detail = ",".join(blocker_codes) if blocker_codes else str(exc)
+        return ScheduledJobRunResult(
+            job_id=job.id,
+            task_type=job.task_type,
+            status="skipped",
+            detail=f"tickets_blocked:{detail}",
+        )
     return ScheduledJobRunResult(
         job_id=job.id,
         task_type=job.task_type,

@@ -41,13 +41,13 @@
 </script>
 
 {#if !isOnline}
-	<div class="rounded-xl border border-amber-500/30 bg-amber-500/12 px-4 py-3 text-sm text-amber-100 shadow-lg backdrop-blur-md">
-		<span class="font-semibold">Offline mode.</span>
-		Cached pages remain available, but live odds, scraping, predictions, and bet placement may fail until the connection returns.
+	<div class="border border-amber-500/30 bg-amber-500/12 px-4 py-3 text-sm text-amber-100 shadow-lg backdrop-blur-md" role="status">
+		<span class="font-semibold">Mod offline.</span>
+		Paginile din cache rămân disponibile, dar datele live, colectarea și predicțiile pot eșua până revine conexiunea.
 	</div>
 {:else if showRecoveryNotice}
-	<div class="rounded-xl border border-emerald-500/30 bg-emerald-500/12 px-4 py-3 text-sm text-emerald-100 shadow-lg backdrop-blur-md">
-		<span class="font-semibold">Back online.</span>
-		Betfront can refresh live feeds and sync queued requests again.
+	<div class="border border-emerald-500/30 bg-emerald-500/12 px-4 py-3 text-sm text-emerald-100 shadow-lg backdrop-blur-md" role="status">
+		<span class="font-semibold">Conexiune restabilită.</span>
+		Betfront poate actualiza din nou fluxurile live și cererile în așteptare.
 	</div>
 {/if}

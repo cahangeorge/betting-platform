@@ -13,8 +13,8 @@ from app.api.deps import get_current_user
 from app.config import get_settings
 from app.database import get_db
 from app.models.match import Match, MatchSource, MatchStat, OddsEntry
-from app.models.scrape import ScrapeJob
 from app.models.prediction import ModelPrediction, PredictionRun
+from app.models.scrape import ScrapeJob
 from app.models.user import User
 from app.schemas.match import (
     LiveHeartbeatResponse,
@@ -109,7 +109,11 @@ def _select_bookmaker_odds(odds: list[OddsEntry]) -> list[OddsEntry]:
 
     primary_market = [entry for entry in odds if _normalize_live_market(entry.market) in LIVE_1X2_MARKET_ALIASES]
     selected = primary_market or odds
-    return sorted(selected, key=lambda entry: entry.created_at or datetime.fromtimestamp(0, tz=timezone.utc), reverse=True)
+    return sorted(
+        selected,
+        key=lambda entry: entry.created_at or datetime.fromtimestamp(0, tz=timezone.utc),
+        reverse=True,
+    )
 
 
 def _normalize_live_market(value: str) -> str:
@@ -119,9 +123,7 @@ def _normalize_live_market(value: str) -> str:
 def _resolve_live_bookmaker_odds(
     odds_entries: list[OddsEntry], outcome: str
 ) -> tuple[float | None, str, datetime | None]:
-    candidates = [
-        entry for entry in odds_entries if _normalize_live_market(entry.market) in LIVE_1X2_MARKET_ALIASES
-    ]
+    candidates = [entry for entry in odds_entries if _normalize_live_market(entry.market) in LIVE_1X2_MARKET_ALIASES]
     if not candidates:
         return None, "", None
 
@@ -145,9 +147,7 @@ def _resolve_live_bookmaker_odds(
     return getattr(best_entry, outcome_field), best_entry.bookmaker, best_entry.timestamp or best_entry.created_at
 
 
-def _normalize_live_confidence_band(
-    edge_pct: float, prediction_age_seconds: int | None
-) -> str:
+def _normalize_live_confidence_band(edge_pct: float, prediction_age_seconds: int | None) -> str:
     if prediction_age_seconds is not None:
         if edge_pct >= 5.0 and prediction_age_seconds <= 180:
             return "high"
@@ -282,9 +282,8 @@ async def _load_live_prediction_map(
     if not run:
         return {}
 
-    prediction_stmt = (
-        select(ModelPrediction)
-        .where(ModelPrediction.run_id == run.id, ModelPrediction.match_id.in_(match_ids))
+    prediction_stmt = select(ModelPrediction).where(
+        ModelPrediction.run_id == run.id, ModelPrediction.match_id.in_(match_ids)
     )
     prediction_result = await db.execute(prediction_stmt)
     mapped: dict[int, list[ModelPrediction]] = {}
@@ -314,9 +313,7 @@ def _build_match_payload(
     ]
     match_status = _normalize_match_status(match.status)
     is_live_match = match_status in LIVE_ACTIVE_STATUSES
-    freshest_live_odds_timestamp = _safe_max_datetime(
-        [odds.timestamp or odds.created_at for odds in live_1x2_odds]
-    )
+    freshest_live_odds_timestamp = _safe_max_datetime([odds.timestamp or odds.created_at for odds in live_1x2_odds])
 
     match_last_update = _safe_max_datetime(
         [
@@ -438,13 +435,10 @@ async def live_overview(
     now = _safe_now()
     source = _source_from_bridge_readiness()
 
-    stmt = (
-        select(Match)
-        .options(
-            selectinload(Match.odds),
-            selectinload(Match.sources),
-            selectinload(Match.stats),
-        )
+    stmt = select(Match).options(
+        selectinload(Match.odds),
+        selectinload(Match.sources),
+        selectinload(Match.stats),
     )
 
     is_live_filter = False
@@ -453,9 +447,7 @@ async def live_overview(
         normalized = status.lower()
         if normalized == "live":
             is_live_filter = True
-            stmt = stmt.where(
-                Match.status.in_(list(LIVE_ACTIVE_STATUSES))
-            )
+            stmt = stmt.where(Match.status.in_(list(LIVE_ACTIVE_STATUSES)))
         elif normalized in {"finished", "ft"}:
             stmt = stmt.where(Match.status.in_(list(LIVE_FINISHED_STATUSES)))
         else:
@@ -508,7 +500,9 @@ async def live_overview(
     freshest = max(all_timestamps) if all_timestamps else None
     data_age_seconds = int((now - freshest).total_seconds()) if freshest else None
     is_data_stale = freshest is None or (data_age_seconds is not None and data_age_seconds > LIVE_STALE_SECONDS)
-    jobs_active_result = await db.execute(select(func.count()).select_from(ScrapeJob).where(ScrapeJob.status == "running"))
+    jobs_active_result = await db.execute(
+        select(func.count()).select_from(ScrapeJob).where(ScrapeJob.status == "running")
+    )
     jobs_active = int(jobs_active_result.scalar_one() or 0)
 
     return LiveOverviewResponse(

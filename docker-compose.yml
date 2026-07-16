@@ -1,5 +1,11 @@
 version: '3.8'
 
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -17,6 +23,7 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    logging: *default-logging
 
   redis:
     image: redis:7-alpine
@@ -28,6 +35,7 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    logging: *default-logging
 
   backend:
     build:
@@ -72,8 +80,16 @@ services:
       - ./soccerdata:/workspace/soccerdata:ro
       - ./flumine:/workspace/flumine:ro
       - shared_data:/shared_data
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: >
+      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
     restart: unless-stopped
+    logging: *default-logging
 
   backend-worker:
     build:
@@ -102,6 +118,8 @@ services:
       BET_SOCCERDATA_ROOT: /workspace/soccerdata
       PYTHONPATH: /app
     depends_on:
+      backend:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       redis:
@@ -115,6 +133,7 @@ services:
       - shared_data:/shared_data
     command: taskiq worker app.tasks.broker:broker app.tasks.jobs
     restart: unless-stopped
+    logging: *default-logging
 
   trading-runner:
     build:
@@ -134,6 +153,8 @@ services:
       BET_FLUMINE_ROOT: /workspace/flumine
       PYTHONPATH: /app
     depends_on:
+      backend:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       redis:
@@ -143,6 +164,7 @@ services:
       - ./flumine:/workspace/flumine:ro
     command: taskiq worker app.tasks.trading_broker:trading_broker app.tasks.trading
     restart: unless-stopped
+    logging: *default-logging
 
   backend-scheduler:
     build:
@@ -159,6 +181,8 @@ services:
       BET_TASKIQ_POLL_INTERVAL_SECONDS: 60
       PYTHONPATH: /app
     depends_on:
+      backend:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       redis:
@@ -167,6 +191,7 @@ services:
       - ./backend:/app
     command: python -m app.tasks.jobs
     restart: unless-stopped
+    logging: *default-logging
 
   frontend:
     build:
@@ -178,12 +203,17 @@ services:
     ports:
       - "5173:3000"
     depends_on:
-      - backend
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
+      backend:
+        condition: service_healthy
     command: node build/index.js
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r => { if (!r.ok && r.status !== 302) process.exit(1) }).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
     restart: unless-stopped
+    logging: *default-logging
 
   nginx:
     build:
@@ -192,14 +222,19 @@ services:
     ports:
       - "80:80"
     depends_on:
-      - backend
-      - backend-worker
-      - backend-scheduler
-      - frontend
+      backend:
+        condition: service_healthy
+      backend-worker:
+        condition: service_started
+      backend-scheduler:
+        condition: service_started
+      frontend:
+        condition: service_healthy
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - shared_data:/shared_data:ro
     restart: unless-stopped
+    logging: *default-logging
 
 volumes:
   postgres_data:

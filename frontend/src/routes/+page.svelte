@@ -460,12 +460,12 @@
 
 	<section class="workbench-page min-w-0 space-y-4">
 		<div class="min-w-0 space-y-2">
-			<p class="workbench-eyebrow">Decision workspace</p>
+			<p class="workbench-eyebrow">Spațiu de decizie</p>
 			<div class="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
 				<div class="min-w-0">
-					<h1 class="workbench-heading">Today’s decisions</h1>
+					<h1 class="workbench-heading">Deciziile de azi</h1>
 					<p class="mt-1 max-w-3xl text-sm text-muted-foreground">
-						Start with trusted upcoming selections, then review active tickets and performance when you need more context.
+						Începe cu selecțiile viitoare verificate, apoi revizuiește biletele active și performanța când ai nevoie de context suplimentar.
 					</p>
 				</div>
 				{#if summaryLoading}
@@ -712,8 +712,8 @@
 			<section class="min-w-0 space-y-4">
 				<div class="flex min-w-0 flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
 					<div class="min-w-0">
-						<h2 class="text-xl font-semibold text-foreground">Upcoming matches and predictions</h2>
-						<p class="text-sm text-muted-foreground">Upcoming matches enriched with value selections and model predictions when they are available.</p>
+						<h2 class="text-xl font-semibold text-foreground">Meciuri și predicții viitoare</h2>
+						<p class="text-sm text-muted-foreground">Meciuri viitoare completate cu selecții value și predicții atunci când sunt disponibile.</p>
 					</div>
 					<div class="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-3 xl:w-[44rem]">
 						<Select bind:value={futurePeriod} options={futurePeriodOptions} name="future-period" />

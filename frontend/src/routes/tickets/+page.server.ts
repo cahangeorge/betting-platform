@@ -13,7 +13,7 @@ export const load: PageServerLoad = async ({ cookies, fetch }) => {
 	const { fetchJson } = createBackendPageLoader(apiBase, token, fetch);
 
 	const [ticketsResult, matchesResult, statsResult, bankrollsResult, batchesResult, tradingAccountsResult] = await Promise.all([
-		fetchJson('/tickets', [], 'tickets'),
+		fetchJson('/tickets?per_page=100', [], 'tickets'),
 		fetchJson('/matches?status=scheduled', { matches: [] }, 'scheduled matches'),
 		fetchJson('/tickets/stats', { total: 0, won: 0, lost: 0, profit_loss: 0 }, 'ticket stats'),
 		fetchJson<Bankroll[]>('/bankroll', [], 'bankrolls'),

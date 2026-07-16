@@ -26,8 +26,23 @@ export async function cleanupSessionArtifacts(session: AuthSession): Promise<voi
 		DELETE FROM scrape_jobs
 		WHERE job_type LIKE ${sqlLiteral(`e2e-%${session.namespace}%`)}
 			OR CAST(params AS TEXT) LIKE ${sqlLiteral(`%${session.namespace}%`)};
-		DELETE FROM prediction_runs WHERE user_id = ${session.user.id};
+		DELETE FROM settlements
+		WHERE ticket_id IN (SELECT id FROM tickets WHERE user_id = ${session.user.id})
+			OR bet_placement_id IN (
+				SELECT id FROM bet_placements
+				WHERE ticket_id IN (SELECT id FROM tickets WHERE user_id = ${session.user.id})
+			);
+		DELETE FROM ledger_entries
+		WHERE bankroll_id IN (SELECT id FROM bankrolls WHERE user_id = ${session.user.id})
+			OR ticket_id IN (SELECT id FROM tickets WHERE user_id = ${session.user.id});
+		DELETE FROM bet_placements
+		WHERE ticket_id IN (SELECT id FROM tickets WHERE user_id = ${session.user.id});
 		DELETE FROM tickets WHERE user_id = ${session.user.id};
+		DELETE FROM ticket_batches
+		WHERE bankroll_id IN (SELECT id FROM bankrolls WHERE user_id = ${session.user.id});
+		DELETE FROM prediction_runs WHERE user_id = ${session.user.id};
+		DELETE FROM strategies
+		WHERE name LIKE ${sqlLiteral(`%${session.namespace}%`)};
 		DELETE FROM bankrolls WHERE user_id = ${session.user.id};
 		DELETE FROM sessions WHERE user_id = ${session.user.id};
 		DELETE FROM users WHERE id = ${session.user.id} OR email = ${sqlLiteral(session.credentials.email)};

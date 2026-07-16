@@ -13,9 +13,10 @@ class LeagueInfo(BaseModel):
     # Added fields are optional/defaulted to keep the original catalog contract
     # stable for clients that only consume id/name/scrape_slug.
     source: Literal["static", "discovered"] = "static"
-    status: Literal["available", "validation_pending", "unavailable"] = "available"
+    status: Literal["available", "validation_pending", "validation_passed", "unavailable"] = "available"
     source_url: str | None = None
     last_seen_at: datetime | None = None
+    scrape_capability: Literal["full", "upcoming"] = "full"
 
 
 class CountryInfo(BaseModel):
@@ -80,3 +81,71 @@ class FootballCatalogRefreshResponse(BaseModel):
     updated: int
     marked_unavailable: int
     refreshed_at: datetime
+
+
+class FootballCatalogValidationRequest(BaseModel):
+    country: str | None = Field(default=None, min_length=1, max_length=255)
+    limit: int = Field(default=20, ge=1, le=25)
+
+
+class FootballCatalogValidationOutcome(BaseModel):
+    scrape_slug: str
+    status: Literal["available", "validation_pending", "unavailable"]
+    detail: str
+    match_count: int = Field(default=0, ge=0)
+
+
+class FootballCatalogValidationResponse(BaseModel):
+    requested: int
+    checked: int
+    results_page_ok: int
+    unavailable: int
+    pending: int
+    outcomes: list[FootballCatalogValidationOutcome] = Field(default_factory=list)
+
+
+class FootballCatalogDiscoveryValidationRequest(BaseModel):
+    """Run a bounded live discovery and validation workflow for selected countries."""
+
+    countries: list[str] = Field(min_length=1, max_length=20)
+    max_attempts: int = Field(default=3, ge=1, le=5)
+    batch_size: int = Field(default=20, ge=1, le=25)
+
+    @field_validator("countries")
+    @classmethod
+    def normalize_countries(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            country = value.strip()
+            if not country:
+                raise ValueError("countries must not contain blank values")
+            key = country.casefold()
+            if key not in seen:
+                normalized.append(country)
+                seen.add(key)
+        if not normalized:
+            raise ValueError("at least one country is required")
+        return normalized
+
+
+class FootballCatalogWorkflowAttempt(BaseModel):
+    attempt: int = Field(ge=1)
+    discovered: int = Field(ge=0)
+    created: int = Field(ge=0)
+    updated: int = Field(ge=0)
+    checked: int = Field(ge=0)
+    available: int = Field(ge=0)
+    unavailable: int = Field(ge=0)
+    pending: int = Field(ge=0)
+
+
+class FootballCatalogDiscoveryValidationResponse(BaseModel):
+    countries: list[str]
+    attempts_used: int = Field(ge=0)
+    discovered: int = Field(ge=0)
+    available: int = Field(ge=0)
+    unavailable: int = Field(ge=0)
+    pending: int = Field(ge=0)
+    stop_reason: Literal["all_validated", "attempt_limit", "no_candidates"]
+    attempts: list[FootballCatalogWorkflowAttempt] = Field(default_factory=list)

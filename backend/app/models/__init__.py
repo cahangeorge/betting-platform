@@ -10,7 +10,18 @@ from app.models.bankroll import Bankroll, BookmakerAccount, LedgerEntry
 from app.models.football_catalog import FootballLeagueCatalog
 from app.models.job import ScheduledJob, ScheduledJobRun, TaskOutbox
 from app.models.match import Match, MatchResultCorrection, MatchSource, MatchStat, OddsEntry
+from app.models.model_governance import (
+    ModelCertification,
+    ModelEvaluation,
+    ModelEvaluationFold,
+    ModelEvaluationPrediction,
+    ModelMonitoringSnapshot,
+    ModelVersion,
+    PredictionOutcome,
+)
+from app.models.odds_lineage import OddsSnapshot, TicketLegQuoteSnapshot
 from app.models.prediction import EnsemblePrediction, ModelPrediction, Prediction, PredictionRun, PredictionSession
+from app.models.risk import BankrollRiskPolicy, BankrollRiskState
 from app.models.scrape import ScrapedDataset, ScrapeJob, ScrapeJobLog
 from app.models.strategy import Strategy
 from app.models.ticket import BetPlacement, Settlement, Ticket, TicketBatch, TicketLeg
@@ -25,6 +36,8 @@ __all__ = [
     "Match",
     "MatchResultCorrection",
     "OddsEntry",
+    "OddsSnapshot",
+    "TicketLegQuoteSnapshot",
     "MatchStat",
     "MatchSource",
     "PredictionRun",
@@ -32,6 +45,13 @@ __all__ = [
     "EnsemblePrediction",
     "PredictionSession",
     "Prediction",
+    "ModelVersion",
+    "ModelEvaluation",
+    "ModelEvaluationFold",
+    "ModelEvaluationPrediction",
+    "PredictionOutcome",
+    "ModelCertification",
+    "ModelMonitoringSnapshot",
     "Ticket",
     "TicketBatch",
     "TicketLeg",
@@ -43,6 +63,8 @@ __all__ = [
     "Bankroll",
     "BookmakerAccount",
     "LedgerEntry",
+    "BankrollRiskPolicy",
+    "BankrollRiskState",
     "ScheduledJob",
     "ScheduledJobRun",
     "TaskOutbox",

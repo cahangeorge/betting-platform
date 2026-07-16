@@ -16,14 +16,14 @@
 
 	const variantClasses: Record<string, string> = {
 		default: 'bg-primary text-primary-foreground',
-		success: 'bg-green-500/15 text-green-400 border-green-500/30',
-		warning: 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30',
-		danger: 'bg-destructive text-destructive-foreground',
-		info: 'bg-blue-500/15 text-blue-400 border-blue-500/30',
-		live: 'bg-red-500/15 text-red-400 border-red-500/30 animate-pulse',
-		premium: 'bg-purple-500/15 text-purple-400 border-purple-500/30',
-		profit: 'bg-green-500/15 text-green-400 border-green-500/30',
-		loss: 'bg-red-500/15 text-red-400 border-red-500/30',
+		success: 'border-[hsl(var(--status-success-border))] bg-[hsl(var(--status-success-bg))] text-[hsl(var(--status-success-text))]',
+		warning: 'border-[hsl(var(--status-warning-border))] bg-[hsl(var(--status-warning-bg))] text-[hsl(var(--status-warning-text))]',
+		danger: 'border-[hsl(var(--status-danger-border))] bg-[hsl(var(--status-danger-bg))] text-[hsl(var(--status-danger-text))]',
+		info: 'border-[hsl(var(--status-info-border))] bg-[hsl(var(--status-info-bg))] text-[hsl(var(--status-info-text))]',
+		live: 'border-[hsl(var(--status-danger-border))] bg-[hsl(var(--status-danger-bg))] text-[hsl(var(--status-danger-text))]',
+		premium: 'border-[hsl(var(--status-premium-border))] bg-[hsl(var(--status-premium-bg))] text-[hsl(var(--status-premium-text))]',
+		profit: 'border-[hsl(var(--status-success-border))] bg-[hsl(var(--status-success-bg))] text-[hsl(var(--status-success-text))]',
+		loss: 'border-[hsl(var(--status-danger-border))] bg-[hsl(var(--status-danger-bg))] text-[hsl(var(--status-danger-text))]',
 		neutral: 'bg-secondary text-secondary-foreground'
 	};
 

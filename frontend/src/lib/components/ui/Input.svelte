@@ -3,6 +3,8 @@
 	import { cn } from '$lib/utils';
 	import ShadcnInput from './input/input.svelte';
 
+	const generatedId = $props.id();
+
 	let {
 		value = $bindable(),
 		label,
@@ -13,6 +15,8 @@
 		disabled = false,
 		name,
 		class: className,
+		'aria-describedby': ariaDescribedBy,
+		'aria-invalid': ariaInvalid,
 		...rest
 	}: {
 		value: string;
@@ -27,10 +31,19 @@
 	} & Omit<HTMLInputAttributes, 'type' | 'value' | 'placeholder' | 'disabled' | 'name' | 'class'> = $props();
 
 	let inputClasses = $derived(
-		cn(error ? 'border-destructive focus-visible:ring-destructive' : '', className)
+		cn(
+			error
+				? 'border-[hsl(var(--status-danger-border))] focus-visible:ring-[hsl(var(--status-danger-border))]'
+				: '',
+			className
+		)
 	);
 
-	let inputId = $derived(id ?? name);
+	let inputId = $derived(id ?? name ?? `${generatedId}-input`);
+	let errorId = $derived(`${inputId}-error`);
+	let describedBy = $derived(
+		[ariaDescribedBy, error ? errorId : undefined].filter(Boolean).join(' ') || undefined
+	);
 </script>
 
 <div class="space-y-1.5">
@@ -48,8 +61,10 @@
 		bind:value
 		class={inputClasses}
 		{...rest}
+		aria-invalid={ariaInvalid ?? (error ? true : undefined)}
+		aria-describedby={describedBy}
 	/>
 	{#if error}
-		<p class="text-sm font-medium text-destructive">{error}</p>
+		<p id={errorId} class="text-sm font-medium text-[hsl(var(--status-danger-text))]">{error}</p>
 	{/if}
 </div>

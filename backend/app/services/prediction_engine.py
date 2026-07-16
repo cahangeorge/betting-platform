@@ -1,16 +1,16 @@
 import asyncio
 import json
 from datetime import date as date_type
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.match import Match, OddsEntry
 from app.models.prediction import ModelPrediction, PredictionRun
+from app.services.odds_quotes import QuoteSet, load_odds_entries, select_quote_set
 from app.services.prediction_quality import (
     best_market_odds_by_outcome,
-    build_market_consensus,
     evaluate_prediction_quality,
     market_outcomes,
 )
@@ -153,6 +153,8 @@ MARKET_OUTCOMES = {
     "ou_2_5": ["over", "under"],
 }
 
+DEFAULT_TRAINING_HISTORY_DAYS = 365
+
 
 def resolve_prediction_model_key(model_type: str) -> str:
     resolved = MODEL_TYPE_ALIASES.get(model_type)
@@ -182,10 +184,17 @@ async def fetch_training_matches(
     if df:
         stmt = stmt.where(Match.match_date >= df)
     if dt:
-        stmt = stmt.where(Match.match_date <= dt)
-    stmt = stmt.order_by(Match.match_date.asc(), Match.created_at.asc()).limit(limit)
+        # Training must stop before the target kickoff to prevent result leakage.
+        stmt = stmt.where(Match.match_date < dt)
+    stmt = stmt.order_by(
+        Match.match_date.desc().nulls_last(),
+        Match.created_at.desc(),
+        Match.id.desc(),
+    ).limit(limit)
     result = await db.execute(stmt)
-    return list(result.scalars().all())
+    # Limit against the newest available history, then restore chronological
+    # order because penaltyblog fitting and time-decay weights expect it.
+    return list(reversed(result.scalars().all()))
 
 
 async def fetch_target_matches(
@@ -247,13 +256,52 @@ def extract_market_probabilities(grid: dict, market: str) -> list[dict]:
 
 
 async def fetch_target_odds_map(db: AsyncSession, target_ids: list[int]) -> dict[int, list[OddsEntry]]:
-    if not target_ids:
-        return {}
-    result = await db.execute(select(OddsEntry).where(OddsEntry.match_id.in_(target_ids)))
     odds_by_match: dict[int, list[OddsEntry]] = {}
-    for odds in result.scalars().all():
+    for odds in await load_odds_entries(db, match_ids=target_ids):
         odds_by_match.setdefault(odds.match_id, []).append(odds)
     return odds_by_match
+
+
+def _canonical_market_consensus(quote_set: QuoteSet) -> dict:
+    probabilities = dict(quote_set.consensus_probabilities)
+    pick = max(probabilities.items(), key=lambda item: item[1])[0] if probabilities else None
+    odds = {
+        outcome: {
+            "odds": quote.price,
+            "bookmaker": quote.bookmaker,
+            "odds_entry_id": quote.entry_id,
+            "odds_snapshot_id": quote.snapshot_id,
+            "observed_at": quote.observed_at.isoformat(),
+        }
+        for outcome, quote in quote_set.best_quotes.items()
+    }
+    return {
+        "pick": pick,
+        "probabilities": {key: round(float(value), 6) for key, value in probabilities.items()},
+        "odds": odds,
+        "implied_source": "canonical_snapshot_median_devig" if probabilities else "unavailable",
+        "quote_snapshot": {
+            "snapshot_id": quote_set.snapshot_id,
+            "snapshot_key": list(quote_set.snapshot_key) if quote_set.snapshot_key is not None else None,
+            "observed_at": quote_set.observed_at.isoformat() if quote_set.observed_at is not None else None,
+            "ticket_eligible": quote_set.is_ticket_eligible,
+            "reason_codes": list(quote_set.reason_codes),
+        },
+    }
+
+
+def _apply_quote_eligibility(quality_report: dict, quote_set: QuoteSet) -> dict:
+    if quote_set.is_ticket_eligible:
+        return quality_report
+    reliability = quality_report.setdefault("reliability", {})
+    block_reasons = reliability.setdefault("block_reasons", [])
+    for reason in quote_set.reason_codes:
+        if reason not in block_reasons:
+            block_reasons.append(reason)
+    reliability["is_ticket_eligible"] = False
+    reliability["label"] = "unreliable"
+    reliability["score"] = min(int(reliability.get("score", 0) or 0), 25)
+    return quality_report
 
 
 async def calculate_implied_probabilities_with_penaltyblog(
@@ -368,6 +416,41 @@ def _row_odds_and_value_fields(
     )
 
 
+def _score_grid_analysis_payload(grid: dict) -> dict | None:
+    """Extract the bounded exact-score explanation emitted by the model bridge.
+
+    This payload is intentionally nested under ``analysis_only`` in persisted
+    quality reports. Ticket eligibility continues to be derived exclusively
+    from supported market rows and never from exact-score cells.
+    """
+    raw_score_grid = grid.get("scoreGrid")
+    home_xg = grid.get("homeGoalExpectation")
+    away_xg = grid.get("awayGoalExpectation")
+    if not isinstance(raw_score_grid, dict) or home_xg is None or away_xg is None:
+        return None
+
+    probabilities = raw_score_grid.get("probabilities")
+    if not isinstance(probabilities, list) or not probabilities:
+        return None
+
+    try:
+        sanitized = [[float(probability) for probability in row] for row in probabilities if isinstance(row, list)]
+        if not sanitized or any(len(row) != len(sanitized[0]) for row in sanitized):
+            return None
+        displayed_mass = sum(sum(row) for row in sanitized)
+        return {
+            "usage": "analysis_only",
+            "ticket_generation_eligible": False,
+            "home_expected_goals": float(home_xg),
+            "away_expected_goals": float(away_xg),
+            "max_displayed_goals": int(raw_score_grid.get("maxDisplayedGoals", len(sanitized) - 1)),
+            "displayed_probability_mass": float(raw_score_grid.get("displayedProbabilityMass", displayed_mass)),
+            "probabilities": sanitized,
+        }
+    except (TypeError, ValueError):
+        return None
+
+
 async def execute_single_model_run(
     db: AsyncSession,
     run_id: int,
@@ -386,12 +469,9 @@ async def execute_single_model_run(
     fit_kwargs: dict | None = None,
     use_time_decay: bool = False,
     time_decay_xi: float = 0.0018,
+    training_history_days: int = DEFAULT_TRAINING_HISTORY_DAYS,
 ) -> dict:
     canonical_model_key = resolve_prediction_model_key(model_key)
-    training = await fetch_training_matches(db, league, sport, training_limit)
-    if len(training) < 20:
-        raise ValueError(f"Insufficient training data: {len(training)} matches (need >=20)")
-
     targets = await fetch_target_matches(
         db,
         league,
@@ -404,6 +484,30 @@ async def execute_single_model_run(
     )
     if not targets:
         raise ValueError("No target matches found for this selection.")
+
+    dated_targets = [
+        match_date for target in targets if (match_date := getattr(target, "match_date", None)) is not None
+    ]
+    target_anchor = min(dated_targets) if dated_targets else (_to_datetime(date_from) or datetime.now(timezone.utc))
+    if target_anchor.tzinfo is None:
+        target_anchor = target_anchor.replace(tzinfo=timezone.utc)
+    quote_as_of = min(target_anchor, datetime.now(timezone.utc))
+    history_days = max(1, int(training_history_days))
+    training_date_from = target_anchor - timedelta(days=history_days)
+    training = await fetch_training_matches(
+        db,
+        league,
+        sport,
+        training_limit,
+        date_from=training_date_from.isoformat(),
+        date_to=target_anchor.isoformat(),
+    )
+    if len(training) < 20:
+        raise ValueError(
+            f"Insufficient training data in the {history_days}-day window before "
+            f"{target_anchor.isoformat()}: {len(training)} matches (need >=20)"
+        )
+
     target_odds_map = await fetch_target_odds_map(db, [target.id for target in targets])
 
     goals_home = [m.home_score for m in training]
@@ -448,8 +552,8 @@ async def execute_single_model_run(
             rows_written = 0
             odds_entries = target_odds_map.get(target.id) or []
             for market in markets:
-                market_consensus = build_market_consensus(market, odds_entries, implied_probabilities=None)
-                market_consensus["implied_source"] = "overround_normalized_fallback"
+                quote_set = select_quote_set(odds_entries, market=market, as_of=quote_as_of)
+                market_consensus = _canonical_market_consensus(quote_set)
                 model_probabilities = _fallback_market_probabilities(market, market_consensus)
                 if not model_probabilities:
                     continue
@@ -461,6 +565,12 @@ async def execute_single_model_run(
                     model_probabilities=model_probabilities,
                     market_consensus=market_consensus,
                 )
+                quality_report = _apply_quote_eligibility(quality_report, quote_set)
+                quality_report.setdefault("training", {})["window"] = {
+                    "days": history_days,
+                    "date_from": training_date_from.isoformat(),
+                    "date_to_exclusive": target_anchor.isoformat(),
+                }
                 quality_report = _mark_quality_as_fallback(quality_report, reason)
                 (
                     home_odds,
@@ -476,6 +586,9 @@ async def execute_single_model_run(
                         run_id=run_id,
                         model_type=model_key,
                         match_id=target.id,
+                        odds_snapshot_id=(
+                            quote_set.snapshot_id if isinstance(quote_set.snapshot_id, int) else None
+                        ),
                         market=market,
                         home_prob=home_prob,
                         draw_prob=draw_prob,
@@ -537,17 +650,8 @@ async def execute_single_model_run(
                 model_probabilities = _market_model_probability_map(market, outcome_lookup)
                 home_prob, draw_prob, away_prob = _row_probability_fields(market, model_probabilities)
                 odds_entries = target_odds_map.get(target.id) or []
-                implied_probabilities = await calculate_implied_probabilities_with_penaltyblog(market, odds_entries)
-                market_consensus = build_market_consensus(
-                    market,
-                    odds_entries,
-                    implied_probabilities=implied_probabilities,
-                )
-                market_consensus["implied_source"] = (
-                    "penaltyblog.implied.calculate_implied"
-                    if implied_probabilities
-                    else "overround_normalized_fallback"
-                )
+                quote_set = select_quote_set(odds_entries, market=market, as_of=quote_as_of)
+                market_consensus = _canonical_market_consensus(quote_set)
                 quality_report = evaluate_prediction_quality(
                     training_matches=training,
                     target_match=target,
@@ -555,6 +659,15 @@ async def execute_single_model_run(
                     model_probabilities=model_probabilities,
                     market_consensus=market_consensus,
                 )
+                quality_report = _apply_quote_eligibility(quality_report, quote_set)
+                quality_report.setdefault("training", {})["window"] = {
+                    "days": history_days,
+                    "date_from": training_date_from.isoformat(),
+                    "date_to_exclusive": target_anchor.isoformat(),
+                }
+                score_grid_payload = _score_grid_analysis_payload(grid)
+                if score_grid_payload is not None:
+                    quality_report.setdefault("analysis_only", {})["score_grid"] = score_grid_payload
                 (
                     home_odds,
                     draw_odds,
@@ -569,6 +682,7 @@ async def execute_single_model_run(
                     run_id=run_id,
                     model_type=model_key,
                     match_id=target.id,
+                    odds_snapshot_id=(quote_set.snapshot_id if isinstance(quote_set.snapshot_id, int) else None),
                     market=market,
                     home_prob=home_prob,
                     draw_prob=draw_prob,
@@ -635,6 +749,11 @@ async def execute_single_model_run(
 
     return {
         "training_matches": len(training),
+        "training_window": {
+            "days": history_days,
+            "date_from": training_date_from.isoformat(),
+            "date_to_exclusive": target_anchor.isoformat(),
+        },
         "target_matches": len(targets),
         "written": written,
         "failed": failed,
@@ -658,6 +777,7 @@ async def run_single_prediction(
     date_to: str | None = None,
     max_goals: int = 10,
     user_id: int | None = None,
+    training_history_days: int = DEFAULT_TRAINING_HISTORY_DAYS,
 ) -> dict:
     if markets is None:
         markets = ["1x2"]
@@ -688,6 +808,7 @@ async def run_single_prediction(
             target_match_ids=target_match_ids,
             date_from=date_from,
             date_to=date_to,
+            training_history_days=training_history_days,
         )
         if summary.get("written", 0) <= 0:
             run.status = "failed"
@@ -697,6 +818,11 @@ async def run_single_prediction(
             run.status = "completed"
         run.completed_at = datetime.now(timezone.utc)
         run.matches_count = summary["target_matches"]
+        run.input_context = {
+            **(run.input_context or {}),
+            "training_matches": summary.get("training_matches", 0),
+            "training_window": summary.get("training_window"),
+        }
         run.error = None
         if run.status != "completed":
             run.error = prediction_error_payload(summary)

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ModelPredictionResponse(BaseModel):
@@ -53,6 +53,11 @@ class PredictionRunResponse(BaseModel):
     started_at: datetime | None = None
     completed_at: datetime | None = None
     error: str | None = None
+    source_dataset_id: int | None = None
+    strategy_id: int | None = None
+    strategy_name: str | None = None
+    input_hash: str | None = None
+    input_context: dict | None = None
     created_at: datetime
 
 
@@ -75,6 +80,7 @@ class RunSingleRequest(BaseModel):
     markets: list[str] = ["1x2"]
     training_mode: str = "recent"
     training_limit: int = 380
+    training_history_days: int = Field(default=365, ge=30, le=3650)
     target_mode: str = "future"
     target_limit: int = 50
     target_match_ids: list[int] | None = None
@@ -90,6 +96,7 @@ class RunEnsembleRequest(BaseModel):
     markets: list[str] = ["1x2"]
     training_mode: str = "recent"
     training_limit: int = 380
+    training_history_days: int = Field(default=365, ge=30, le=3650)
     target_mode: str = "future"
     target_limit: int = 50
     weighting: str = "uniform"
@@ -164,3 +171,65 @@ class PredictionVerificationResponse(BaseModel):
     unsupported_predictions: int = 0
     accuracy: float | None = None
     items: list[PredictionVerificationItem] = []
+
+
+class PredictionCalibrationBucket(BaseModel):
+    lower_bound: float
+    upper_bound: float
+    mean_predicted_probability: float
+    observed_frequency: float
+    calibration_gap: float
+    samples: int
+
+
+class PredictionCalibrationGroup(BaseModel):
+    model_type: str
+    market: str
+    resolved_predictions: int
+    accuracy: float
+    brier_score: float
+    log_loss: float
+    expected_calibration_error: float
+    buckets: list[PredictionCalibrationBucket] = []
+
+
+class PredictionCalibrationResponse(BaseModel):
+    resolved_predictions: int = 0
+    groups: list[PredictionCalibrationGroup] = []
+
+
+class PredictionScoreGridCell(BaseModel):
+    home_goals: int
+    away_goals: int
+    probability: float
+
+
+class PredictionScoreGridItem(BaseModel):
+    match_id: int
+    home_team: str
+    away_team: str
+    kickoff: datetime | None = None
+    league: str | None = None
+    model_type: str
+    prediction_ids: list[int] = Field(default_factory=list)
+    source_markets: list[str] = Field(default_factory=list)
+    available: bool = False
+    unavailable_reason: str | None = None
+    home_expected_goals: float | None = None
+    away_expected_goals: float | None = None
+    max_displayed_goals: int = 5
+    displayed_probability_mass: float | None = None
+    cells: list[PredictionScoreGridCell] = Field(default_factory=list)
+    top_scores: list[PredictionScoreGridCell] = Field(default_factory=list)
+    usage: str = "analysis_only"
+    ticket_generation_eligible: bool = False
+
+
+class PredictionScoreGridResponse(BaseModel):
+    run_id: int
+    source_dataset_id: int | None = None
+    items: list[PredictionScoreGridItem] = Field(default_factory=list)
+    disclaimer: str = (
+        "Exact-score probabilities are model explanations for analysis only. "
+        "They are not eligible inputs for ticket generation."
+    )

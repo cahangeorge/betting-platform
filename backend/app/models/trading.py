@@ -9,6 +9,8 @@ from app.models import Base
 
 if TYPE_CHECKING:
     from app.models.match import OddsEntry
+    from app.models.model_governance import ModelEvaluation
+    from app.models.odds_lineage import OddsSnapshot
     from app.models.ticket import Ticket
     from app.models.user import User
 
@@ -48,6 +50,12 @@ class ExecutionIntent(Base):
     odds_entry_id: Mapped[int] = mapped_column(
         ForeignKey("odds_entries.id", ondelete="RESTRICT"), nullable=False, index=True
     )
+    odds_snapshot_id: Mapped[int | None] = mapped_column(
+        ForeignKey("odds_snapshots.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    model_evaluation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("model_evaluations.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
     mode: Mapped[str] = mapped_column(String(20), default="paper", nullable=False)
     market: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -72,6 +80,8 @@ class ExecutionIntent(Base):
     account: Mapped["TradingAccount"] = relationship("TradingAccount", back_populates="intents")
     ticket: Mapped["Ticket"] = relationship("Ticket")
     odds_entry: Mapped["OddsEntry"] = relationship("OddsEntry")
+    odds_snapshot: Mapped["OddsSnapshot | None"] = relationship("OddsSnapshot")
+    model_evaluation: Mapped["ModelEvaluation | None"] = relationship("ModelEvaluation")
     orders: Mapped[list["ExecutionOrder"]] = relationship(
         "ExecutionOrder", back_populates="intent", cascade="all, delete-orphan"
     )

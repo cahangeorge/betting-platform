@@ -79,28 +79,28 @@
 </script>
 
 {#if showBanner}
-	<div class="rounded-xl border border-fuchsia-500/30 bg-fuchsia-500/12 px-4 py-3 text-sm text-fuchsia-50 shadow-lg backdrop-blur-md">
+	<div class="border border-fuchsia-500/30 bg-fuchsia-500/12 px-4 py-3 text-sm text-fuchsia-50 shadow-lg backdrop-blur-md">
 		<div class="flex items-start justify-between gap-3">
 			<div>
-				<div class="font-semibold">Update available</div>
+				<div class="font-semibold">Actualizare disponibilă</div>
 				<p class="mt-1 text-fuchsia-100/85">
-					A fresher Betfront build is ready. Reload to apply the newest routes, odds views, and cached assets.
+					O versiune nouă Betfront este pregătită. Reîncarcă pentru a aplica rutele, vizualizările și resursele actualizate.
 				</p>
 			</div>
 			<div class="flex shrink-0 items-center gap-2">
 				<button
 					type="button"
-					class="border border-fuchsia-300/30 px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-fuchsia-50 transition hover:bg-fuchsia-400/10"
+					class="min-h-11 border border-fuchsia-300/30 px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-fuchsia-50 transition hover:bg-fuchsia-400/10"
 					onclick={() => (dismissed = true)}
 				>
-					Dismiss
+					Închide
 				</button>
 				<button
 					type="button"
-					class="bg-fuchsia-300 px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-slate-950 transition hover:bg-fuchsia-200"
+					class="min-h-11 bg-fuchsia-300 px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-slate-950 transition hover:bg-fuchsia-200"
 					onclick={applyUpdate}
 				>
-					Reload
+					Reîncarcă
 				</button>
 			</div>
 		</div>

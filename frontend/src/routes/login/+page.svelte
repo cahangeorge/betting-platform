@@ -1,26 +1,26 @@
-<script lang="ts">
+	<script lang="ts">
 	import { enhance } from '$app/forms';
-	import Card from '$lib/components/ui/Card.svelte';
+	import PublicFooter from '$lib/components/PublicFooter.svelte';
 
-	let { form, data }: import('./$types').PageProps = $props();
+	let { form }: import('./$types').PageProps = $props();
 </script>
 
-<div class="min-h-[calc(100vh-4rem)] flex items-center justify-center">
+<div class="flex min-h-[calc(100vh-4rem)] items-center justify-center py-6">
 	<div class="w-full max-w-md">
-		<div class="text-center mb-8">
+		<div class="mb-8 text-center">
 			<div
-				class="w-16 h-16 flex items-center justify-center mx-auto mb-4 bg-muted border border-football-green "
+				class="mx-auto mb-4 flex h-16 w-16 items-center justify-center border border-football-green bg-muted"
 			>
-				<span class="font-extrabold text-2xl text-football-green font-sport">SI</span>
+				<span class="font-sport text-2xl font-extrabold text-football-green">BF</span>
 			</div>
-			<h1 class="text-2xl font-extrabold font-sport text-foreground">Welcome back</h1>
-			<p class="mt-2 text-muted-foreground">Sign in to your account</p>
+			<h1 class="font-sport text-2xl font-extrabold text-foreground">Bine ai revenit</h1>
+			<p class="mt-2 text-muted-foreground">Autentifică-te pentru a continua analiza.</p>
 		</div>
 
-		<div class="bg-card  border border-border p-5 border-t-2 border-t-football-green">
+		<div class="border border-border border-t-2 border-t-football-green bg-card p-5">
 			<form method="POST" action="?/login" use:enhance class="space-y-5">
 				{#if form?.error}
-					<div class="p-3 text-sm bg-destructive/10 border border-destructive/30 text-destructive">
+					<div class="border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive" role="alert">
 						{form.error}
 					</div>
 				{/if}
@@ -28,31 +28,33 @@
 				<label class="text-sm font-medium leading-none" for="email">Email</label>
 				<input
 					id="email"
-					class="flex h-10 w-full border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-					type="email" name="email" placeholder="you@example.com"
+					class="flex min-h-11 w-full border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+					type="email" name="email" placeholder="nume@exemplu.ro"
 					value={form?.email ?? ''} required
 				/>
 
-				<label class="text-sm font-medium leading-none" for="password">Password</label>
+				<label class="text-sm font-medium leading-none" for="password">Parolă</label>
 				<input
 					id="password"
-					class="flex h-10 w-full border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-					type="password" name="password" placeholder="Enter your password" required
+					class="flex min-h-11 w-full border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+					type="password" name="password" placeholder="Introdu parola" required
 				/>
 
 				<div class="flex items-center justify-between pt-2">
 					<a href="/signup" class="text-sm text-football-green hover:text-football-green/80 transition-colors">
-						No account yet? Sign up
+						Nu ai cont? Creează unul
 					</a>
 				</div>
 
 				<button
 					type="submit"
-					class="inline-flex items-center justify-center whitespace-nowrap text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground hover:bg-primary/90 h-10 px-4 py-2 w-full"
+					class="inline-flex min-h-11 w-full items-center justify-center whitespace-nowrap bg-primary px-4 py-2 text-sm font-medium text-primary-foreground ring-offset-background transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50"
 				>
-					Sign In
+					Autentificare
 				</button>
 			</form>
 		</div>
 	</div>
 </div>
+
+<PublicFooter />

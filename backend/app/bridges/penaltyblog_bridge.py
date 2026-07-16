@@ -81,9 +81,21 @@ def serialize_value(value):
 
 
 def serialize_probability_grid(grid):
+    score_limit = min(5, grid.grid.shape[0] - 1, grid.grid.shape[1] - 1)
+    score_matrix = [
+        [serialize_value(grid.exact_score(home_goals, away_goals)) for away_goals in range(score_limit + 1)]
+        for home_goals in range(score_limit + 1)
+    ]
     return {
         "homeGoalExpectation": serialize_value(grid.home_goal_expectation),
         "awayGoalExpectation": serialize_value(grid.away_goal_expectation),
+        # A deliberately bounded analytics payload. Exact-score probabilities
+        # are exposed for explanation/visualisation, never as ticket candidates.
+        "scoreGrid": {
+            "maxDisplayedGoals": score_limit,
+            "probabilities": score_matrix,
+            "displayedProbabilityMass": serialize_value(sum(sum(row) for row in score_matrix)),
+        },
         "homeWin": serialize_value(grid.home_win),
         "draw": serialize_value(grid.draw),
         "awayWin": serialize_value(grid.away_win),
