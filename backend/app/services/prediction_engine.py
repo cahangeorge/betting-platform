@@ -282,7 +282,16 @@ def _canonical_market_consensus(quote_set: QuoteSet) -> dict:
         "implied_source": "canonical_snapshot_median_devig" if probabilities else "unavailable",
         "quote_snapshot": {
             "snapshot_id": quote_set.snapshot_id,
-            "snapshot_key": list(quote_set.snapshot_key) if quote_set.snapshot_key is not None else None,
+            "snapshot_key": (
+                [
+                    quote_set.snapshot_key[0],
+                    quote_set.snapshot_key[1].isoformat()
+                    if isinstance(quote_set.snapshot_key[1], (date_type, datetime))
+                    else quote_set.snapshot_key[1],
+                ]
+                if quote_set.snapshot_key is not None
+                else None
+            ),
             "observed_at": quote_set.observed_at.isoformat() if quote_set.observed_at is not None else None,
             "ticket_eligible": quote_set.is_ticket_eligible,
             "reason_codes": list(quote_set.reason_codes),

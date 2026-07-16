@@ -414,6 +414,7 @@ test('selected runs keep exact contributing lineage through review, activation, 
 			'data-state',
 			'active'
 		);
+		await expect(page.getByRole('tab', { name: 'Active', exact: true })).toContainText('1');
 		await expect(page.getByText(`#TKT-${generated.tickets[0].id}`, { exact: true })).toBeVisible();
 
 		await page.getByRole('tab', { name: 'Istoric', exact: true }).click();

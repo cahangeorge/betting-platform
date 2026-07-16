@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -5,6 +6,23 @@ import pytest
 
 from app.api.v1 import predictions as predictions_api
 from app.services import prediction_engine
+from app.services.odds_quotes import QuoteSet
+
+
+def test_canonical_market_consensus_serializes_legacy_datetime_snapshot_key():
+    observed_at = datetime(2026, 7, 17, 9, 30, tzinfo=timezone.utc)
+    consensus = prediction_engine._canonical_market_consensus(
+        QuoteSet(
+            market="1x2",
+            as_of=observed_at,
+            observed_at=observed_at,
+            snapshot_id=None,
+            snapshot_key=("observed_at", observed_at),
+        )
+    )
+
+    assert consensus["quote_snapshot"]["snapshot_key"] == ["observed_at", observed_at.isoformat()]
+    json.dumps(consensus)
 
 
 @pytest.mark.asyncio

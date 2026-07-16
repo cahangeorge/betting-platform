@@ -1,0 +1,911 @@
+{
+  "context": {
+    "date": "2026-07-17",
+    "timezone": "Europe/Bucharest",
+    "dataset_id": 162,
+    "bankroll_id": 1390,
+    "match_count": 3,
+    "matches": [
+      {
+        "id": 2156,
+        "kickoff": "2026-07-17T09:30:00+00:00",
+        "home": "Campbelltown City",
+        "away": "Adelaide Comets",
+        "competition": "NPL South Australia",
+        "odds_count": 14
+      },
+      {
+        "id": 2157,
+        "kickoff": "2026-07-17T10:30:00+00:00",
+        "home": "West Torrens",
+        "away": "Para",
+        "competition": "NPL South Australia",
+        "odds_count": 11
+      },
+      {
+        "id": 2041,
+        "kickoff": "2026-07-17T18:00:00+00:00",
+        "home": "Deportivo Maipu",
+        "away": "San Martin T.",
+        "competition": "Primera Nacional",
+        "odds_count": 18
+      }
+    ]
+  },
+  "screenshots": [
+    {
+      "filename": "01-login-page.png",
+      "label": "login-page",
+      "url": "http://127.0.0.1:5175/login",
+      "timestamp": "2026-07-16T22:22:43.500Z"
+    },
+    {
+      "filename": "02-login-email-completed.png",
+      "label": "login-email-completed",
+      "url": "http://127.0.0.1:5175/login",
+      "timestamp": "2026-07-16T22:22:43.580Z"
+    },
+    {
+      "filename": "03-login-credentials-completed.png",
+      "label": "login-credentials-completed",
+      "url": "http://127.0.0.1:5175/login",
+      "timestamp": "2026-07-16T22:22:43.646Z"
+    },
+    {
+      "filename": "04-dashboard-authenticated.png",
+      "label": "dashboard-authenticated",
+      "url": "http://127.0.0.1:5175/",
+      "timestamp": "2026-07-16T22:22:44.133Z"
+    },
+    {
+      "filename": "05-data-hub-opened.png",
+      "label": "data-hub-opened",
+      "url": "http://127.0.0.1:5175/data",
+      "timestamp": "2026-07-16T22:22:44.965Z"
+    },
+    {
+      "filename": "06-analyze-dataset-loaded.png",
+      "label": "analyze-dataset-loaded",
+      "url": "http://127.0.0.1:5175/analyze?dataset_id=162",
+      "timestamp": "2026-07-16T22:22:45.848Z"
+    },
+    {
+      "filename": "07-analysis-preflight-all-three-matches.png",
+      "label": "analysis-preflight-all-three-matches",
+      "url": "http://127.0.0.1:5175/analyze?dataset_id=162",
+      "timestamp": "2026-07-16T22:23:49.525Z"
+    },
+    {
+      "filename": "08-advanced-options-opened.png",
+      "label": "advanced-options-opened",
+      "url": "http://127.0.0.1:5175/analyze?dataset_id=162",
+      "timestamp": "2026-07-16T22:23:49.731Z"
+    },
+    {
+      "filename": "09-date-from-set-today.png",
+      "label": "date-from-set-today",
+      "url": "http://127.0.0.1:5175/analyze?dataset_id=162",
+      "timestamp": "2026-07-16T22:23:49.893Z"
+    },
+    {
+      "filename": "10-date-to-set-today.png",
+      "label": "date-to-set-today",
+      "url": "http://127.0.0.1:5175/analyze?dataset_id=162",
+      "timestamp": "2026-07-16T22:23:50.050Z"
+    },
+    {
+      "filename": "11-analysis-started-running-status.png",
+      "label": "analysis-started-running-status",
+      "url": "http://127.0.0.1:5175/analyze?dataset_id=162",
+      "timestamp": "2026-07-16T22:23:50.420Z"
+    },
+    {
+      "filename": "12-analysis-progress-0-percent.png",
+      "label": "analysis-progress-0-percent",
+      "url": "http://127.0.0.1:5175/analyze?dataset_id=162",
+      "timestamp": "2026-07-16T22:23:50.602Z"
+    },
+    {
+      "filename": "13-analysis-progress-100-percent.png",
+      "label": "analysis-progress-100-percent",
+      "url": "http://127.0.0.1:5175/analyze?dataset_id=162",
+      "timestamp": "2026-07-16T22:24:21.360Z"
+    },
+    {
+      "filename": "14-analysis-terminal-results-and-candidates.png",
+      "label": "analysis-terminal-results-and-candidates",
+      "url": "http://127.0.0.1:5175/analyze?dataset_id=162",
+      "timestamp": "2026-07-16T22:24:22.809Z"
+    },
+    {
+      "filename": "15-retry-after-json-serialization-fix-ready.png",
+      "label": "retry-after-json-serialization-fix-ready",
+      "url": "http://127.0.0.1:5175/analyze?dataset_id=162",
+      "timestamp": "2026-07-16T22:26:32.573Z"
+    },
+    {
+      "filename": "16-retry-today-filters-confirmed.png",
+      "label": "retry-today-filters-confirmed",
+      "url": "http://127.0.0.1:5175/analyze?dataset_id=162",
+      "timestamp": "2026-07-16T22:26:32.770Z"
+    },
+    {
+      "filename": "17-retry-analysis-running.png",
+      "label": "retry-analysis-running",
+      "url": "http://127.0.0.1:5175/analyze?dataset_id=162",
+      "timestamp": "2026-07-16T22:26:33.041Z"
+    },
+    {
+      "filename": "18-retry-progress-0-percent.png",
+      "label": "retry-progress-0-percent",
+      "url": "http://127.0.0.1:5175/analyze?dataset_id=162",
+      "timestamp": "2026-07-16T22:26:33.231Z"
+    },
+    {
+      "filename": "19-retry-progress-100-percent.png",
+      "label": "retry-progress-100-percent",
+      "url": "http://127.0.0.1:5175/analyze?dataset_id=162",
+      "timestamp": "2026-07-16T22:27:22.486Z"
+    },
+    {
+      "filename": "20-retry-terminal-success-results.png",
+      "label": "retry-terminal-success-results",
+      "url": "http://127.0.0.1:5175/analyze?dataset_id=162",
+      "timestamp": "2026-07-16T22:27:23.740Z"
+    },
+    {
+      "filename": "21-eligible-candidates-selected-after-fix.png",
+      "label": "eligible-candidates-selected-after-fix",
+      "url": "http://127.0.0.1:5175/analyze?dataset_id=162",
+      "timestamp": "2026-07-16T22:27:24.263Z"
+    },
+    {
+      "filename": "22-tickets-handoff-after-successful-analysis.png",
+      "label": "tickets-handoff-after-successful-analysis",
+      "url": "http://127.0.0.1:5175/tickets?dataset_id=162&run_ids=1066%2C1067%2C1068%2C1069%2C1070%2C1071%2C1072%2C1073&source=analyze",
+      "timestamp": "2026-07-16T22:27:24.589Z"
+    },
+    {
+      "filename": "23-analysis-restored-success-7-complete-1-partial.png",
+      "label": "analysis-restored-success-7-complete-1-partial",
+      "url": "http://127.0.0.1:5175/analyze?dataset_id=162&run_ids=1066,1067,1068,1069,1070,1071,1072,1073",
+      "timestamp": "2026-07-16T22:28:16.297Z"
+    },
+    {
+      "filename": "24-select-all-visible-eligible-candidates.png",
+      "label": "select-all-visible-eligible-candidates",
+      "url": "http://127.0.0.1:5175/analyze?dataset_id=162&run_ids=1066,1067,1068,1069,1070,1071,1072,1073",
+      "timestamp": "2026-07-16T22:28:16.946Z"
+    },
+    {
+      "filename": "25-refresh-job-created-pending.png",
+      "label": "refresh-job-created-pending",
+      "url": "http://127.0.0.1:5175/prepare",
+      "timestamp": "2026-07-16T22:31:10.305Z"
+    },
+    {
+      "filename": "26-refresh-job-running-live-oddsharvester.png",
+      "label": "refresh-job-running-live-oddsharvester",
+      "url": "http://127.0.0.1:5175/prepare",
+      "timestamp": "2026-07-16T22:31:43.026Z"
+    },
+    {
+      "filename": "27-refresh-job-failed-timeout.png",
+      "label": "refresh-job-failed-timeout",
+      "url": "http://127.0.0.1:5175/prepare",
+      "timestamp": "2026-07-16T22:41:47.248Z"
+    },
+    {
+      "filename": "28-targeted-refresh-retry-created.png",
+      "label": "targeted-refresh-retry-created",
+      "url": "http://127.0.0.1:5175/prepare",
+      "timestamp": "2026-07-16T22:42:09.228Z"
+    },
+    {
+      "filename": "29-targeted-refresh-retry-running.png",
+      "label": "targeted-refresh-retry-running",
+      "url": "http://127.0.0.1:5175/prepare",
+      "timestamp": "2026-07-16T22:43:00.624Z"
+    },
+    {
+      "filename": "30-targeted-refresh-first-two-completed.png",
+      "label": "targeted-refresh-first-two-completed",
+      "url": "http://127.0.0.1:5175/prepare",
+      "timestamp": "2026-07-16T22:43:51.104Z"
+    },
+    {
+      "filename": "31-targeted-refresh-third-match-created.png",
+      "label": "targeted-refresh-third-match-created",
+      "url": "http://127.0.0.1:5175/prepare",
+      "timestamp": "2026-07-16T22:43:53.631Z"
+    },
+    {
+      "filename": "32-targeted-refresh-third-match-running.png",
+      "label": "targeted-refresh-third-match-running",
+      "url": "http://127.0.0.1:5175/prepare",
+      "timestamp": "2026-07-16T22:44:15.510Z"
+    },
+    {
+      "filename": "33-all-three-match-refreshes-completed.png",
+      "label": "all-three-match-refreshes-completed",
+      "url": "http://127.0.0.1:5175/prepare",
+      "timestamp": "2026-07-16T22:45:27.608Z"
+    },
+    {
+      "filename": "34-fresh-odds-analysis-ready.png",
+      "label": "fresh-odds-analysis-ready",
+      "url": "http://127.0.0.1:5175/analyze?dataset_id=162",
+      "timestamp": "2026-07-16T22:45:29.166Z"
+    },
+    {
+      "filename": "35-btts-disabled-keep-fresh-1x2.png",
+      "label": "btts-disabled-keep-fresh-1x2",
+      "url": "http://127.0.0.1:5175/analyze?dataset_id=162",
+      "timestamp": "2026-07-16T22:45:29.332Z"
+    },
+    {
+      "filename": "36-totals-disabled-1x2-only.png",
+      "label": "totals-disabled-1x2-only",
+      "url": "http://127.0.0.1:5175/analyze?dataset_id=162",
+      "timestamp": "2026-07-16T22:45:29.481Z"
+    },
+    {
+      "filename": "37-fresh-analysis-date-today-confirmed.png",
+      "label": "fresh-analysis-date-today-confirmed",
+      "url": "http://127.0.0.1:5175/analyze?dataset_id=162",
+      "timestamp": "2026-07-16T22:45:29.639Z"
+    },
+    {
+      "filename": "38-fresh-odds-analysis-running.png",
+      "label": "fresh-odds-analysis-running",
+      "url": "http://127.0.0.1:5175/analyze?dataset_id=162",
+      "timestamp": "2026-07-16T22:45:29.853Z"
+    },
+    {
+      "filename": "39-fresh-analysis-progress-0.png",
+      "label": "fresh-analysis-progress-0",
+      "url": "http://127.0.0.1:5175/analyze?dataset_id=162",
+      "timestamp": "2026-07-16T22:45:30.043Z"
+    },
+    {
+      "filename": "40-fresh-analysis-progress-100.png",
+      "label": "fresh-analysis-progress-100",
+      "url": "http://127.0.0.1:5175/analyze?dataset_id=162",
+      "timestamp": "2026-07-16T22:46:10.460Z"
+    },
+    {
+      "filename": "41-fresh-analysis-terminal.png",
+      "label": "fresh-analysis-terminal",
+      "url": "http://127.0.0.1:5175/analyze?dataset_id=162",
+      "timestamp": "2026-07-16T22:46:11.838Z"
+    },
+    {
+      "filename": "42-eligible-only-filter-enabled.png",
+      "label": "eligible-only-filter-enabled",
+      "url": "http://127.0.0.1:5175/analyze?dataset_id=162",
+      "timestamp": "2026-07-16T22:46:12.202Z"
+    },
+    {
+      "filename": "43-all-fresh-eligible-candidates-selected.png",
+      "label": "all-fresh-eligible-candidates-selected",
+      "url": "http://127.0.0.1:5175/analyze?dataset_id=162",
+      "timestamp": "2026-07-16T22:46:12.586Z"
+    },
+    {
+      "filename": "44-tickets-config-with-fresh-selected-candidates.png",
+      "label": "tickets-config-with-fresh-selected-candidates",
+      "url": "http://127.0.0.1:5175/tickets?dataset_id=162&run_ids=1074%2C1075%2C1076%2C1077%2C1078%2C1079%2C1080%2C1081&prediction_ids=4619%2C4633%2C4639%2C4627%2C4630%2C4625%2C4636%2C4622%2C4637%2C4620%2C4634%2C4640%2C4628%2C4624%2C4631&source=analyze",
+      "timestamp": "2026-07-16T22:46:12.934Z"
+    },
+    {
+      "filename": "45-ticket-generation-lineage-confirmed.png",
+      "label": "ticket-generation-lineage-confirmed",
+      "url": "http://127.0.0.1:5175/tickets?dataset_id=162&run_ids=1074%2C1075%2C1076%2C1077%2C1078%2C1079%2C1080%2C1081&prediction_ids=4619%2C4633%2C4639%2C4627%2C4630%2C4625%2C4636%2C4622%2C4637%2C4620%2C4634%2C4640%2C4628%2C4624%2C4631&source=analyze",
+      "timestamp": "2026-07-16T22:48:52.382Z"
+    },
+    {
+      "filename": "46-demo-paper-bankroll-selected.png",
+      "label": "demo-paper-bankroll-selected",
+      "url": "http://127.0.0.1:5175/tickets?dataset_id=162&run_ids=1074%2C1075%2C1076%2C1077%2C1078%2C1079%2C1080%2C1081&prediction_ids=4619%2C4633%2C4639%2C4627%2C4630%2C4625%2C4636%2C4622%2C4637%2C4620%2C4634%2C4640%2C4628%2C4624%2C4631&source=analyze",
+      "timestamp": "2026-07-16T22:48:52.498Z"
+    },
+    {
+      "filename": "47-three-tickets-requested.png",
+      "label": "three-tickets-requested",
+      "url": "http://127.0.0.1:5175/tickets?dataset_id=162&run_ids=1074%2C1075%2C1076%2C1077%2C1078%2C1079%2C1080%2C1081&prediction_ids=4619%2C4633%2C4639%2C4627%2C4630%2C4625%2C4636%2C4622%2C4637%2C4620%2C4634%2C4640%2C4628%2C4624%2C4631&source=analyze",
+      "timestamp": "2026-07-16T22:48:52.627Z"
+    },
+    {
+      "filename": "48-single-ticket-risk-selected.png",
+      "label": "single-ticket-risk-selected",
+      "url": "http://127.0.0.1:5175/tickets?dataset_id=162&run_ids=1074%2C1075%2C1076%2C1077%2C1078%2C1079%2C1080%2C1081&prediction_ids=4619%2C4633%2C4639%2C4627%2C4630%2C4625%2C4636%2C4622%2C4637%2C4620%2C4634%2C4640%2C4628%2C4624%2C4631&source=analyze",
+      "timestamp": "2026-07-16T22:48:52.731Z"
+    },
+    {
+      "filename": "49-ticket-preflight-running.png",
+      "label": "ticket-preflight-running",
+      "url": "http://127.0.0.1:5175/tickets?dataset_id=162&run_ids=1074%2C1075%2C1076%2C1077%2C1078%2C1079%2C1080%2C1081&prediction_ids=4619%2C4633%2C4639%2C4627%2C4630%2C4625%2C4636%2C4622%2C4637%2C4620%2C4634%2C4640%2C4628%2C4624%2C4631&source=analyze",
+      "timestamp": "2026-07-16T22:48:52.883Z"
+    },
+    {
+      "filename": "50-ticket-preflight-completed.png",
+      "label": "ticket-preflight-completed",
+      "url": "http://127.0.0.1:5175/tickets?dataset_id=162&run_ids=1074%2C1075%2C1076%2C1077%2C1078%2C1079%2C1080%2C1081&prediction_ids=4619%2C4633%2C4639%2C4627%2C4630%2C4625%2C4636%2C4622%2C4637%2C4620%2C4634%2C4640%2C4628%2C4624%2C4631&source=analyze",
+      "timestamp": "2026-07-16T22:48:53.016Z"
+    },
+    {
+      "filename": "51-three-ticket-generation-running.png",
+      "label": "three-ticket-generation-running",
+      "url": "http://127.0.0.1:5175/tickets?dataset_id=162&run_ids=1074%2C1075%2C1076%2C1077%2C1078%2C1079%2C1080%2C1081&prediction_ids=4619%2C4633%2C4639%2C4627%2C4630%2C4625%2C4636%2C4622%2C4637%2C4620%2C4634%2C4640%2C4628%2C4624%2C4631&source=analyze",
+      "timestamp": "2026-07-16T22:48:53.165Z"
+    },
+    {
+      "filename": "52-three-ticket-generation-blocked-insufficient-unique-matches.png",
+      "label": "three-ticket-generation-blocked-insufficient-unique-matches",
+      "url": "http://127.0.0.1:5175/tickets?dataset_id=162&run_ids=1074%2C1075%2C1076%2C1077%2C1078%2C1079%2C1080%2C1081&prediction_ids=4619%2C4633%2C4639%2C4627%2C4630%2C4625%2C4636%2C4622%2C4637%2C4620%2C4634%2C4640%2C4628%2C4624%2C4631&source=analyze",
+      "timestamp": "2026-07-16T22:50:10.220Z"
+    },
+    {
+      "filename": "53-request-adjusted-to-two-distinct-tickets.png",
+      "label": "request-adjusted-to-two-distinct-tickets",
+      "url": "http://127.0.0.1:5175/tickets?dataset_id=162&run_ids=1074%2C1075%2C1076%2C1077%2C1078%2C1079%2C1080%2C1081&prediction_ids=4619%2C4633%2C4639%2C4627%2C4630%2C4625%2C4636%2C4622%2C4637%2C4620%2C4634%2C4640%2C4628%2C4624%2C4631&source=analyze",
+      "timestamp": "2026-07-16T22:50:10.356Z"
+    },
+    {
+      "filename": "54-minimum-odds-expanded-to-1-01.png",
+      "label": "minimum-odds-expanded-to-1-01",
+      "url": "http://127.0.0.1:5175/tickets?dataset_id=162&run_ids=1074%2C1075%2C1076%2C1077%2C1078%2C1079%2C1080%2C1081&prediction_ids=4619%2C4633%2C4639%2C4627%2C4630%2C4625%2C4636%2C4622%2C4637%2C4620%2C4634%2C4640%2C4628%2C4624%2C4631&source=analyze",
+      "timestamp": "2026-07-16T22:50:10.508Z"
+    },
+    {
+      "filename": "55-maximum-odds-expanded-for-all-valid-candidates.png",
+      "label": "maximum-odds-expanded-for-all-valid-candidates",
+      "url": "http://127.0.0.1:5175/tickets?dataset_id=162&run_ids=1074%2C1075%2C1076%2C1077%2C1078%2C1079%2C1080%2C1081&prediction_ids=4619%2C4633%2C4639%2C4627%2C4630%2C4625%2C4636%2C4622%2C4637%2C4620%2C4634%2C4640%2C4628%2C4624%2C4631&source=analyze",
+      "timestamp": "2026-07-16T22:50:10.650Z"
+    },
+    {
+      "filename": "56-adjusted-ticket-preflight-running.png",
+      "label": "adjusted-ticket-preflight-running",
+      "url": "http://127.0.0.1:5175/tickets?dataset_id=162&run_ids=1074%2C1075%2C1076%2C1077%2C1078%2C1079%2C1080%2C1081&prediction_ids=4619%2C4633%2C4639%2C4627%2C4630%2C4625%2C4636%2C4622%2C4637%2C4620%2C4634%2C4640%2C4628%2C4624%2C4631&source=analyze",
+      "timestamp": "2026-07-16T22:50:10.842Z"
+    },
+    {
+      "filename": "57-adjusted-ticket-preflight-completed.png",
+      "label": "adjusted-ticket-preflight-completed",
+      "url": "http://127.0.0.1:5175/tickets?dataset_id=162&run_ids=1074%2C1075%2C1076%2C1077%2C1078%2C1079%2C1080%2C1081&prediction_ids=4619%2C4633%2C4639%2C4627%2C4630%2C4625%2C4636%2C4622%2C4637%2C4620%2C4634%2C4640%2C4628%2C4624%2C4631&source=analyze",
+      "timestamp": "2026-07-16T22:50:10.993Z"
+    },
+    {
+      "filename": "58-two-ticket-generation-running.png",
+      "label": "two-ticket-generation-running",
+      "url": "http://127.0.0.1:5175/tickets?dataset_id=162&run_ids=1074%2C1075%2C1076%2C1077%2C1078%2C1079%2C1080%2C1081&prediction_ids=4619%2C4633%2C4639%2C4627%2C4630%2C4625%2C4636%2C4622%2C4637%2C4620%2C4634%2C4640%2C4628%2C4624%2C4631&source=analyze",
+      "timestamp": "2026-07-16T22:50:11.186Z"
+    },
+    {
+      "filename": "59-two-ticket-generated-batch-review-ready.png",
+      "label": "two-ticket-generated-batch-review-ready",
+      "url": "http://127.0.0.1:5175/tickets?dataset_id=162&run_ids=1074%2C1075%2C1076%2C1077%2C1078%2C1079%2C1080%2C1081&prediction_ids=4619%2C4633%2C4639%2C4627%2C4630%2C4625%2C4636%2C4622%2C4637%2C4620%2C4634%2C4640%2C4628%2C4624%2C4631&source=analyze",
+      "timestamp": "2026-07-16T22:50:11.490Z"
+    },
+    {
+      "filename": "60-generated-ticket-1-selections-reviewed.png",
+      "label": "generated-ticket-1-selections-reviewed",
+      "url": "http://127.0.0.1:5175/tickets?dataset_id=162&run_ids=1074%2C1075%2C1076%2C1077%2C1078%2C1079%2C1080%2C1081&prediction_ids=4619%2C4633%2C4639%2C4627%2C4630%2C4625%2C4636%2C4622%2C4637%2C4620%2C4634%2C4640%2C4628%2C4624%2C4631&source=analyze",
+      "timestamp": "2026-07-16T22:50:11.664Z"
+    },
+    {
+      "filename": "61-generated-ticket-2-selections-reviewed.png",
+      "label": "generated-ticket-2-selections-reviewed",
+      "url": "http://127.0.0.1:5175/tickets?dataset_id=162&run_ids=1074%2C1075%2C1076%2C1077%2C1078%2C1079%2C1080%2C1081&prediction_ids=4619%2C4633%2C4639%2C4627%2C4630%2C4625%2C4636%2C4622%2C4637%2C4620%2C4634%2C4640%2C4628%2C4624%2C4631&source=analyze",
+      "timestamp": "2026-07-16T22:50:11.831Z"
+    },
+    {
+      "filename": "62-two-ticket-batch-review-acknowledged.png",
+      "label": "two-ticket-batch-review-acknowledged",
+      "url": "http://127.0.0.1:5175/tickets?dataset_id=162&run_ids=1074%2C1075%2C1076%2C1077%2C1078%2C1079%2C1080%2C1081&prediction_ids=4619%2C4633%2C4639%2C4627%2C4630%2C4625%2C4636%2C4622%2C4637%2C4620%2C4634%2C4640%2C4628%2C4624%2C4631&source=analyze",
+      "timestamp": "2026-07-16T22:50:11.995Z"
+    },
+    {
+      "filename": "63-two-ticket-batch-activation-running.png",
+      "label": "two-ticket-batch-activation-running",
+      "url": "http://127.0.0.1:5175/tickets?dataset_id=162&run_ids=1074%2C1075%2C1076%2C1077%2C1078%2C1079%2C1080%2C1081&prediction_ids=4619%2C4633%2C4639%2C4627%2C4630%2C4625%2C4636%2C4622%2C4637%2C4620%2C4634%2C4640%2C4628%2C4624%2C4631&source=analyze",
+      "timestamp": "2026-07-16T22:50:12.150Z"
+    },
+    {
+      "filename": "64-two-tickets-active-paper-mode.png",
+      "label": "two-tickets-active-paper-mode",
+      "url": "http://127.0.0.1:5175/tickets?dataset_id=162&run_ids=1074%2C1075%2C1076%2C1077%2C1078%2C1079%2C1080%2C1081&prediction_ids=4619%2C4633%2C4639%2C4627%2C4630%2C4625%2C4636%2C4622%2C4637%2C4620%2C4634%2C4640%2C4628%2C4624%2C4631&source=analyze",
+      "timestamp": "2026-07-16T22:50:13.072Z"
+    },
+    {
+      "filename": "65-activated-ticket-batch-history.png",
+      "label": "activated-ticket-batch-history",
+      "url": "http://127.0.0.1:5175/tickets?dataset_id=162&run_ids=1074%2C1075%2C1076%2C1077%2C1078%2C1079%2C1080%2C1081&prediction_ids=4619%2C4633%2C4639%2C4627%2C4630%2C4625%2C4636%2C4622%2C4637%2C4620%2C4634%2C4640%2C4628%2C4624%2C4631&source=analyze",
+      "timestamp": "2026-07-16T22:50:13.911Z"
+    },
+    {
+      "filename": "66-final-active-tickets-status.png",
+      "label": "final-active-tickets-status",
+      "url": "http://127.0.0.1:5175/tickets?dataset_id=162&run_ids=1074%2C1075%2C1076%2C1077%2C1078%2C1079%2C1080%2C1081&prediction_ids=4619%2C4633%2C4639%2C4627%2C4630%2C4625%2C4636%2C4622%2C4637%2C4620%2C4634%2C4640%2C4628%2C4624%2C4631&source=analyze",
+      "timestamp": "2026-07-16T22:50:14.537Z"
+    },
+    {
+      "filename": "67-active-counter-fixed-two-open-tickets.png",
+      "label": "active-counter-fixed-two-open-tickets",
+      "url": "http://127.0.0.1:5175/tickets?dataset_id=162&run_ids=1074%2C1075%2C1076%2C1077%2C1078%2C1079%2C1080%2C1081&prediction_ids=4619%2C4633%2C4639%2C4627%2C4630%2C4625%2C4636%2C4622%2C4637%2C4620%2C4634%2C4640%2C4628%2C4624%2C4631&source=analyze",
+      "timestamp": "2026-07-16T22:55:35.609Z"
+    },
+    {
+      "filename": "68-final-history-batch-150-after-ui-fix.png",
+      "label": "final-history-batch-150-after-ui-fix",
+      "url": "http://127.0.0.1:5175/tickets?dataset_id=162&run_ids=1074%2C1075%2C1076%2C1077%2C1078%2C1079%2C1080%2C1081&prediction_ids=4619%2C4633%2C4639%2C4627%2C4630%2C4625%2C4636%2C4622%2C4637%2C4620%2C4634%2C4640%2C4628%2C4624%2C4631&source=analyze",
+      "timestamp": "2026-07-16T22:55:35.763Z"
+    }
+  ],
+  "consoleErrors": [],
+  "analysisRetry": {
+    "completed": true,
+    "ticketsUrl": "/tickets?dataset_id=162&run_ids=1066%2C1067%2C1068%2C1069%2C1070%2C1071%2C1072%2C1073&source=analyze"
+  },
+  "ticketFlow": {
+    "datasetId": 162,
+    "predictionRunIds": [
+      1074,
+      1075,
+      1076,
+      1077,
+      1078,
+      1079,
+      1080,
+      1081
+    ],
+    "initialAttempt": {
+      "requestedTickets": 3,
+      "difficulty": "safe",
+      "preflight": {
+        "source_prediction_run_id": 1074,
+        "source_prediction_run_ids": [
+          1074,
+          1075,
+          1076,
+          1077,
+          1078,
+          1079,
+          1080,
+          1081
+        ],
+        "source_dataset_id": 162,
+        "scanned_predictions": 15,
+        "eligible_candidates": 7,
+        "eligible_unique_matches": 1,
+        "eligible_prediction_ids": [
+          4619,
+          4625,
+          4627,
+          4630,
+          4633,
+          4636,
+          4639
+        ],
+        "excluded_predictions": 8,
+        "excluded_by_reason": {
+          "odds_outside_interval": 8
+        },
+        "governance_assessment": {
+          "allowed": true,
+          "mode": "manual",
+          "checked_at": "2026-07-16T22:50:09.983206+00:00",
+          "runs": [
+            {
+              "run_id": 1074,
+              "model_version_id": null,
+              "allowed": true,
+              "reason": "unversioned_rollout_compatibility"
+            },
+            {
+              "run_id": 1075,
+              "model_version_id": null,
+              "allowed": true,
+              "reason": "unversioned_rollout_compatibility"
+            },
+            {
+              "run_id": 1076,
+              "model_version_id": null,
+              "allowed": true,
+              "reason": "unversioned_rollout_compatibility"
+            },
+            {
+              "run_id": 1077,
+              "model_version_id": null,
+              "allowed": true,
+              "reason": "unversioned_rollout_compatibility"
+            },
+            {
+              "run_id": 1078,
+              "model_version_id": null,
+              "allowed": true,
+              "reason": "unversioned_rollout_compatibility"
+            },
+            {
+              "run_id": 1079,
+              "model_version_id": null,
+              "allowed": true,
+              "reason": "unversioned_rollout_compatibility"
+            },
+            {
+              "run_id": 1080,
+              "model_version_id": null,
+              "allowed": true,
+              "reason": "unversioned_rollout_compatibility"
+            },
+            {
+              "run_id": 1081,
+              "model_version_id": null,
+              "allowed": true,
+              "reason": "unversioned_rollout_compatibility"
+            }
+          ],
+          "model_evaluation_ids": []
+        },
+        "risk_assessment": {
+          "policy_version": "1",
+          "allowed": true,
+          "blockers": [],
+          "warnings": []
+        },
+        "staking_snapshot": {
+          "mode": "flat_percent",
+          "eligible": true,
+          "stake": "10.00",
+          "stake_percent": "1.000000",
+          "full_kelly_fraction": null,
+          "applied_kelly_fraction": null,
+          "reason_code": null
+        },
+        "risks": [
+          {
+            "difficulty": "safe",
+            "tier": "safe",
+            "aliases": [
+              "safe",
+              "low"
+            ],
+            "required_legs": 1,
+            "eligible_candidates": 7,
+            "eligible_unique_matches": 1,
+            "can_generate": true,
+            "excluded_by_reason": {
+              "odds_outside_interval": 8
+            }
+          },
+          {
+            "difficulty": "low",
+            "tier": "safe",
+            "aliases": [
+              "safe",
+              "low"
+            ],
+            "required_legs": 1,
+            "eligible_candidates": 7,
+            "eligible_unique_matches": 1,
+            "can_generate": true,
+            "excluded_by_reason": {
+              "odds_outside_interval": 8
+            }
+          },
+          {
+            "difficulty": "balanced",
+            "tier": "balanced",
+            "aliases": [
+              "balanced",
+              "medium"
+            ],
+            "required_legs": 2,
+            "eligible_candidates": 7,
+            "eligible_unique_matches": 1,
+            "can_generate": false,
+            "excluded_by_reason": {
+              "odds_outside_interval": 8,
+              "insufficient_unique_matches": 1
+            }
+          },
+          {
+            "difficulty": "medium",
+            "tier": "balanced",
+            "aliases": [
+              "balanced",
+              "medium"
+            ],
+            "required_legs": 2,
+            "eligible_candidates": 7,
+            "eligible_unique_matches": 1,
+            "can_generate": false,
+            "excluded_by_reason": {
+              "odds_outside_interval": 8,
+              "insufficient_unique_matches": 1
+            }
+          },
+          {
+            "difficulty": "aggressive",
+            "tier": "aggressive",
+            "aliases": [
+              "aggressive",
+              "high"
+            ],
+            "required_legs": 3,
+            "eligible_candidates": 7,
+            "eligible_unique_matches": 1,
+            "can_generate": false,
+            "excluded_by_reason": {
+              "odds_outside_interval": 8,
+              "insufficient_unique_matches": 2
+            }
+          },
+          {
+            "difficulty": "high",
+            "tier": "aggressive",
+            "aliases": [
+              "aggressive",
+              "high"
+            ],
+            "required_legs": 3,
+            "eligible_candidates": 7,
+            "eligible_unique_matches": 1,
+            "can_generate": false,
+            "excluded_by_reason": {
+              "odds_outside_interval": 8,
+              "insufficient_unique_matches": 2
+            }
+          }
+        ]
+      },
+      "blockedGeneration": {
+        "detail": "Difficulty 'safe' requires 3 unique matches for this batch, but only 1 are eligible. Requested 15; missing 0. Excluded 8/15 predictions: odds_outside_interval=8."
+      }
+    },
+    "finalConfiguration": {
+      "requestedTickets": 2,
+      "difficulty": "safe",
+      "minOdds": 1.01,
+      "maxOdds": 100,
+      "preflight": {
+        "source_prediction_run_id": 1074,
+        "source_prediction_run_ids": [
+          1074,
+          1075,
+          1076,
+          1077,
+          1078,
+          1079,
+          1080,
+          1081
+        ],
+        "source_dataset_id": 162,
+        "scanned_predictions": 15,
+        "eligible_candidates": 15,
+        "eligible_unique_matches": 2,
+        "eligible_prediction_ids": [
+          4619,
+          4620,
+          4622,
+          4624,
+          4625,
+          4627,
+          4628,
+          4630,
+          4631,
+          4633,
+          4634,
+          4636,
+          4637,
+          4639,
+          4640
+        ],
+        "excluded_predictions": 0,
+        "excluded_by_reason": {},
+        "governance_assessment": {
+          "allowed": true,
+          "mode": "manual",
+          "checked_at": "2026-07-16T22:50:10.695696+00:00",
+          "runs": [
+            {
+              "run_id": 1074,
+              "model_version_id": null,
+              "allowed": true,
+              "reason": "unversioned_rollout_compatibility"
+            },
+            {
+              "run_id": 1075,
+              "model_version_id": null,
+              "allowed": true,
+              "reason": "unversioned_rollout_compatibility"
+            },
+            {
+              "run_id": 1076,
+              "model_version_id": null,
+              "allowed": true,
+              "reason": "unversioned_rollout_compatibility"
+            },
+            {
+              "run_id": 1077,
+              "model_version_id": null,
+              "allowed": true,
+              "reason": "unversioned_rollout_compatibility"
+            },
+            {
+              "run_id": 1078,
+              "model_version_id": null,
+              "allowed": true,
+              "reason": "unversioned_rollout_compatibility"
+            },
+            {
+              "run_id": 1079,
+              "model_version_id": null,
+              "allowed": true,
+              "reason": "unversioned_rollout_compatibility"
+            },
+            {
+              "run_id": 1080,
+              "model_version_id": null,
+              "allowed": true,
+              "reason": "unversioned_rollout_compatibility"
+            },
+            {
+              "run_id": 1081,
+              "model_version_id": null,
+              "allowed": true,
+              "reason": "unversioned_rollout_compatibility"
+            }
+          ],
+          "model_evaluation_ids": []
+        },
+        "risk_assessment": {
+          "policy_version": "1",
+          "allowed": true,
+          "blockers": [],
+          "warnings": []
+        },
+        "staking_snapshot": {
+          "mode": "flat_percent",
+          "eligible": true,
+          "stake": "10.00",
+          "stake_percent": "1.000000",
+          "full_kelly_fraction": null,
+          "applied_kelly_fraction": null,
+          "reason_code": null
+        },
+        "risks": [
+          {
+            "difficulty": "safe",
+            "tier": "safe",
+            "aliases": [
+              "safe",
+              "low"
+            ],
+            "required_legs": 1,
+            "eligible_candidates": 15,
+            "eligible_unique_matches": 2,
+            "can_generate": true,
+            "excluded_by_reason": {}
+          },
+          {
+            "difficulty": "low",
+            "tier": "safe",
+            "aliases": [
+              "safe",
+              "low"
+            ],
+            "required_legs": 1,
+            "eligible_candidates": 15,
+            "eligible_unique_matches": 2,
+            "can_generate": true,
+            "excluded_by_reason": {}
+          },
+          {
+            "difficulty": "balanced",
+            "tier": "balanced",
+            "aliases": [
+              "balanced",
+              "medium"
+            ],
+            "required_legs": 2,
+            "eligible_candidates": 15,
+            "eligible_unique_matches": 2,
+            "can_generate": true,
+            "excluded_by_reason": {}
+          },
+          {
+            "difficulty": "medium",
+            "tier": "balanced",
+            "aliases": [
+              "balanced",
+              "medium"
+            ],
+            "required_legs": 2,
+            "eligible_candidates": 15,
+            "eligible_unique_matches": 2,
+            "can_generate": true,
+            "excluded_by_reason": {}
+          },
+          {
+            "difficulty": "aggressive",
+            "tier": "aggressive",
+            "aliases": [
+              "aggressive",
+              "high"
+            ],
+            "required_legs": 3,
+            "eligible_candidates": 15,
+            "eligible_unique_matches": 2,
+            "can_generate": false,
+            "excluded_by_reason": {
+              "insufficient_unique_matches": 1
+            }
+          },
+          {
+            "difficulty": "high",
+            "tier": "aggressive",
+            "aliases": [
+              "aggressive",
+              "high"
+            ],
+            "required_legs": 3,
+            "eligible_candidates": 15,
+            "eligible_unique_matches": 2,
+            "can_generate": false,
+            "excluded_by_reason": {
+              "insufficient_unique_matches": 1
+            }
+          }
+        ]
+      }
+    },
+    "generation": {
+      "batchId": 150,
+      "revision": 1,
+      "ticketIds": [
+        1028,
+        1029
+      ],
+      "ticketStatuses": [
+        "generated",
+        "generated"
+      ]
+    },
+    "activation": {
+      "status": "activated",
+      "debitedAmount": 20,
+      "ticketIds": [
+        1028,
+        1029
+      ],
+      "ticketStatuses": [
+        "open",
+        "open"
+      ]
+    },
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 400 (Bad Request)"
+    ],
+    "expectedConsoleErrors": [
+      "HTTP 400 for intentionally blocked three-ticket generation attempt"
+    ]
+  },
+  "uiFixVerification": {
+    "activeCounter": 2,
+    "ticketIds": [
+      1028,
+      1029
+    ],
+    "batchId": 150
+  },
+  "verification": {
+    "backend_full": "448 passed",
+    "frontend_check": "0 errors, 0 warnings",
+    "frontend_unit": "27 passed",
+    "frontend_e2e_hybrid": "41 passed",
+    "frontend_build": "passed",
+    "svelte_autofixer": "0 issues",
+    "ui_active_counter": 2
+  }
+}

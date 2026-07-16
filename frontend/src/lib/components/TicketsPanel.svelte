@@ -898,7 +898,7 @@
 			generatedReviewAcknowledged = false;
 			activeTab = 'active';
 			settlementMessage = `${activatedTickets.length} bilet${activatedTickets.length === 1 ? '' : 'e'} activate după revizuire; miză debitată ${activation.debited_amount.toFixed(2)}.`;
-			await loadTickets();
+			await Promise.all([loadTickets(), refreshTicketTotals()]);
 		} catch (err) {
 			if (err instanceof ApiClientError && err.statusCode === 409 && generatedBatchId !== null) {
 				try {
