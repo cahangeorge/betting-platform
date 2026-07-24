@@ -1,14 +1,15 @@
 # Current Platform Status
 
-Updated: 2026-07-24T10:52:26+03:00
+Updated: 2026-07-24T11:40:34+03:00
 Repository/branch: `/home/gion/Projects/bet` / `agent/demo-tickets-2026-07-17`
 Dirty state at this handoff refresh:
 
 ```text
-Clean working tree at 40352aed38f98600a621954c67c82b600faab223.
-The branch is five commits ahead of
-origin/agent/demo-tickets-2026-07-17. No reset, clean, checkout, history
-rewrite, or submodule mutation was performed.
+Local verified candidate 3543ebb was committed from a clean staged scope.
+The branch is one commit ahead of origin/agent/demo-tickets-2026-07-17 at
+41333eb. The subsequent documentation refresh is the only expected dirty
+state. No reset, clean, checkout, history rewrite, or submodule mutation was
+performed.
 ```
 
 This is the first status document to read in a new coding session. Re-run
@@ -46,6 +47,40 @@ Current program state:
   [`2026-07-23-exclude-paper-execution-from-mvp.md`](../adr/2026-07-23-exclude-paper-execution-from-mvp.md).
 - Verdict: **clean local release-candidate validation GO; public release/MVP
   launch HOLD pending external evidence**.
+
+## 2026-07-24 CI-remediation candidate
+
+The first GitHub Actions run on `41333eb` exposed real runner-only defects in
+backend dependency versions, bridge layout, a Playwright locator, Nginx
+hardening, and the first-deployment/recovery path. Commit `3543ebb`
+(`fix(release): close CI and first-deploy gates`) closes those findings:
+
+- exact CI-like backend environment (FastAPI `0.139.2`, Starlette `1.3.1`,
+  Flumine `3.1.0`) passed Ruff, **41/41** targeted live/API/trading tests and
+  **531/531** full tests; Alembic remains `025 (head)` with no drift;
+- live overview now has an ASGI HTTP response-model test and the WebSocket gate
+  validates the public `/api/v1/live/ws` ASGI match, without FastAPI private
+  serialization or included-router internals;
+- Flumine uses the installed distribution when the optional local checkout is
+  absent and still fails closed for an explicitly invalid configured checkout;
+- hybrid CI checks out submodules, installs and imports OddsHarvester, and uses
+  the runner Python for the bridge; the affected local hybrid scenarios passed
+  **5/5**, one worker, zero retries;
+- Nginx runs as UID `101` on internal `8080/8443`; release CI now proves UID,
+  HTTP `308`, and a real temporary-certificate HTTPS handshake before packaging.
+  Equivalent local smoke returned `uid=101 http=308 https=502`;
+- the first-deployment bootstrap is committed and fail-closed, restore runs
+  Alembic before applications restart, publish checks out repository scripts,
+  and Security executes the production contracts;
+- root production/security contracts are **21/21**; secret scan, actionlint,
+  YAML, shell syntax and diff checks pass;
+- independent backend, frontend and final release/UI reviewers reported
+  **PASS / APPROVE**, with no P1/P2 code issue remaining.
+
+The push of `3543ebb` was attempted but blocked by the execution policy because
+publishing this exact payload to the public GitHub repository requires explicit
+user authorization. Therefore remote CI still reflects `41333eb`; it is not
+valid release evidence for `3543ebb`.
 
 ## 2026-07-24 clean release-candidate integration
 
@@ -273,18 +308,19 @@ Evidence already confirmed in this checkout:
   values. Cross-host Redis/PostgreSQL still requires TLS supplied by the target
   platform.
 
-Public launch remains blocked by external credential rotation, protected
+Public launch remains blocked by pushing `3543ebb` and obtaining current remote
+CI evidence, external credential rotation, protected
 environment/tag/package configuration plus an actual signed GHCR tag run,
 secret-manager setup, DNS/valid TLS/firewall, off-host backup/restore rehearsal,
 staging lifecycle with two-user evidence, observability/on-call/soak/canary,
-clean integrated revision, and protected CI build/publish/pull proof.
+and protected CI build/publish/pull proof.
 
 Durable knowledge synchronization at this checkpoint:
 
 - Serena memories `core`, `mvp_readiness`, and `platform_hardening` now record
   the current `025`/auth/WS/idempotency/Taskiq/release state.
-- Native Codebase Memory reindexed `bet-core` in moderate mode to **5,237
-  nodes / 19,762 edges**; actual and expected graph counts match and the result
+- Native Codebase Memory reindexed `bet-core` after `3543ebb` in moderate mode
+  to **5,247 nodes / 19,958 edges**; actual and expected graph counts match and the result
   is `indexed`.
 - The final compressed whole-workspace Repomix pack is output
   `59a58de9391eb430`: **1,153 files / 2,467,034 tokens / 138,366 lines**;
@@ -513,7 +549,8 @@ verification is recorded in the remediation update above.
 
 ## Exact next step
 
-Push the clean branch, inspect all GitHub checks and protected
+After explicit authorization to publish the current payload to the public
+repository, push `3543ebb`, inspect all GitHub checks and protected
 `registry-release` environment/tag/package controls, then run one disposable
 signed GHCR tag from the verified SHA. Deploy only verified digest-pinned
 images to protected staging. Keep public release/MVP launch **HOLD** until
