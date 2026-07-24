@@ -1,9 +1,9 @@
 # MVP Readiness Program
 
-Updated: 2026-07-24T10:52:26+03:00
+Updated: 2026-07-24T22:19:40+03:00
 Repository: `/home/gion/Projects/bet`
-Branch: `agent/demo-tickets-2026-07-17`
-Program status: **ACTIVE — local development validation GO; release/MVP launch HOLD**
+Branch: `agent/auditable-trivy-release-gate-2026-07-24`
+Program status: **ACTIVE — local validation and container policy GO; CI integration/public MVP launch HOLD**
 
 This is the durable execution register for reaching a verified MVP. It records
 project status, expert findings, phases, task dependencies, verification gates,
@@ -65,7 +65,7 @@ The program can be marked **MVP GO** only when:
 | `flumine/` | EXCLUDED | post-MVP paper execution | accepted ADR excludes paper execution from public MVP |
 | PWA | LOCAL GATES GREEN | installable shell | production HTTPS offline/recovery/update suite passed; installed-device lifecycle remains |
 | Mobile/desktop design | LOCAL GATES GREEN | operator UI | 320–1920 plus landscape/safe-area/touch/forced-colors browser gates passed; hardware/manual zoom remains |
-| DevOps/release | MAIN INTEGRATED / RELEASE FIX IN PR | deployment | protected environment/tag controls exist; PR #8 fixes the release-only Ruff install gate; signed tag, secrets, public TLS, off-host backup, monitoring and canary remain |
+| DevOps/release | MAIN INTEGRATED / CONTAINER-RISK POLICY ACCEPTED, PATCH LOCAL | deployment | PR #8-#10 merged; source, build and runtime smoke green; auditable unfixed-risk policy accepted; CI integration, signed tag, secrets, public TLS, off-host backup, monitoring and canary remain |
 | QA | LOCAL GATES GREEN / STAGING HOLD | release evidence | real protected two-user staging lifecycle is absent |
 | `betfront/` | ARCHIVED/DIRTY | none | preserve; do not include in current MVP |
 
@@ -75,27 +75,30 @@ formerly dirty parent checkout was reconciled into clean candidate
 remediated in local candidate `3543ebb`, without reset, clean, or history
 rewrite. Follow-up `d20c583` removed two CI timing races and was published with
 all five branch workflows green. PR #7 was subsequently merged into `main` as
-`881a436`. The first evidence-only release run found that Ruff was absent from
-the declared backend `dev` extra; fix `1131157` is open in PR #8.
+`881a436`. PR #8 through #10 subsequently closed the Ruff install,
+OddsHarvester/lineage, and vulnerable `ecdsa` dependency gates. Current remote
+`main` is `3930d0e`; evidence-only run `30116510025` passed source verification,
+image builds, and runtime smoke, then stopped on 115 High/Critical
+operating-system findings without an available fixed version.
 
 ## Verified refresh — 2026-07-24
 
 | Check | Result |
 | --- | --- |
-| Backend Ruff / pytest | PASS; exact CI-like FastAPI 0.139.2 / Starlette 1.3.1 / Flumine 3.1.0 environment, Ruff clean, **532 passed** |
+| Backend Ruff / pytest | PASS; synced current tree, Ruff clean, **545 passed** |
 | Alembic | **025 head**, no drift |
-| Root production-contract/secret tests | **21 passed**; tracked-plus-untracked local secret scanner passed |
+| Root production-contract/secret tests | **25 passed**; tracked-plus-untracked local secret scanner passed |
 | Compose contracts | both config and render checks passed |
 | Shell/repository checks | `bash -n` and `git diff --check` passed |
 | Runtime | `/health`, frontend HTTP 200; `/ready` includes Bet Redis `6380` plus fresh worker/scheduler heartbeats; final Taskiq round-trip passed |
 | Recovery/provider | runtime smoke, queued-message recovery, lost-stream outbox recovery, provider canary passed |
-| Frontend | pinned `pnpm 10.34.5`; `pnpm check` 0 diagnostics; **32 files / 121 unit cases**; `check:e2e`, build, and authenticated Chromium smoke passed |
-| Chromium hybrid | **52/52 twice consecutively** before the device slice, then final current-files **56/56** (10.3m, one worker), all `retries=0`; final adjusted specs **2/2** |
+| Frontend | pinned `pnpm 10.34.5`; `pnpm check` 0 diagnostics; **32 files / 121 unit cases**; `check:e2e` and build passed |
+| Chromium hybrid | fresh local **56/56** (3.7m, one worker), `retries=0`; PR #10 Hybrid also passed **56/56** |
 | Published branch CI | SHA `d20c583`: Backend, Frontend, Security, Compose Smoke and Hybrid E2E all PASS; remote Hybrid **56/56** |
 | Firefox / WebKit | official smoke **1/1** on each engine; host WebKit lacked runtime libraries, so the verified WebKit run used the official Playwright `v1.60.0-noble` container |
 | PWA | production HTTPS service-worker suite **3/3**, including offline/recovery announcements and draft-safe update |
 | Recovery hygiene | final strict cleanup removed interrupted E2E fixtures and ended at `Namespaces: 0`; fresh temporary-DB dump/restore passed at Alembic `025` with matching schema/version/key row counts |
-| Release workflow supply chain | full-SHA actions; known-safe Trivy Action `v0.35.0` + binary `v0.69.3`; real Taskiq source gate; exact scanned-image GHCR handoff; non-root Nginx HTTP/TLS runtime smoke; keyless Cosign plus GitHub attestations; fail-closed overwrite guard; protected tag execution remains external |
+| Release workflow supply chain | full-SHA actions; known-safe Trivy Action `v0.35.0` + binary `v0.69.3`; real Taskiq source gate; exact scanned-image GHCR handoff; non-root image runtime smoke; complete JSON vulnerability evidence plus fixable-finding gate is implemented locally under an Accepted ADR; protected tag execution remains external |
 | Production dependency lock | combined backend/OddsHarvester/penaltyblog/soccerdata Python 3.12 lock, **204 exact packages**; regeneration and strict dry-run passed |
 | Local production containers | frontend build + UID 1001 + HTTP 200 PASS; backend 204-package build + UID 1001 + FastAPI import + bundled Chromium PASS; nginx build/config PASS. Explicit host-resolved mappings worked around rootless Podman container DNS without changing Dockerfiles |
 
@@ -249,7 +252,7 @@ confirmed.
 | QA-002 | Tenant | add cross-user isolation gates for jobs, predictions, WS, trading, bankroll, and settlement | COMPLETE-local — REST/settlement isolation plus user-scoped prediction WebSocket tests |
 | QA-003 | Browser | run all hybrid tests with retries disabled and eliminate flaky waits/cleanup ambiguity | COMPLETE-local — repeated retry-free Chromium gates |
 | OPS-002 | CI/CD | build, scan, publish, deploy, smoke, and retain immutable rollback artifacts | PARTIAL — exact scanned-image handoff, GHCR digest publication, keyless Cosign, GitHub attestations, non-overwrite, version promotion, and auto-rollback are implemented and contract-tested; protected tag/deploy execution remains external |
-| OPS-006 | CI supply chain | pin and validate actions/scanners, gate release tags on application tests, scan current source and images | COMPLETE-local — all actions are full-SHA pinned; digest-pinned services; known-safe Trivy; real Taskiq release gate; exact-digest signing/attestation; no ignored unfixed High/Critical |
+| OPS-006 | CI supply chain | pin and validate actions/scanners, gate release tags on application tests, scan current source and images | PARTIAL-CANDIDATE — all actions are full-SHA pinned; digest-pinned services; known-safe Trivy; real Taskiq release gate; accepted local patch retains complete unfiltered JSON and blocks fixable High/Critical findings; CI evidence on the integrated patch remains required |
 | BE-004 | Container scraper runtime | make the production Chromium install available to the non-root backend runtime user | COMPLETE-local contract — shared `/ms-playwright` path and ownership; CI now launches Chromium in the built non-root image; execution awaits CI because local container DNS is unavailable |
 | BE-005 | Production dependencies | resolve backend plus all bridge projects from one exact Python 3.12 dependency graph | COMPLETE-local — 204-package uv lock, regeneration diff and strict dry-run green |
 | FE-007 | Container dependencies | pin pnpm and avoid a second mutable production dependency resolution | COMPLETE-local — `pnpm 10.34.5`, one frozen install, builder prune and copied production node_modules; native build green |

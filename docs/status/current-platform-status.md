@@ -1,15 +1,20 @@
 # Current Platform Status
 
-Updated: 2026-07-24T13:03:01+03:00
-Repository/branch: `/home/gion/Projects/bet` / `agent/release-ruff-gate-2026-07-24`
+Updated: 2026-07-24T22:22:32+03:00
+Repository/branch: `/home/gion/Projects/bet` / `agent/auditable-trivy-release-gate-2026-07-24`
 Dirty state at this handoff refresh:
 
 ```text
-The branch is synchronized with
-origin/agent/release-ruff-gate-2026-07-24 and contains implementation commit
-1131157 followed by the committed documentation/Serena handoff. The working
-tree was clean before this final wording update. No reset, clean, history
-rewrite, or submodule mutation was performed.
+The branch was created cleanly from current `origin/main` (`3930d0e`). Its
+candidate commit contains exactly eight intended release-audit/handoff paths:
+the workflow, gate script, two test files, accepted ADR, and the three
+canonical status documents. The previous pre-sync tracked modifications remain
+preserved reversibly in the stash named
+`pre-main-sync-mvp-audit-2026-07-24`; they were superseded by the more complete
+PR #9 implementation already on `main`. Playwright result metadata is not part
+of the intended diff. The three tracked submodules are clean and unchanged. No
+tag, GHCR publication, deployment, reset, clean, or submodule mutation
+occurred.
 ```
 
 This is the first status document to read in a new coding session. Re-run
@@ -38,19 +43,85 @@ Current program state:
 
 - Phase 0 durable checkpoint and baseline: **complete**.
 - Phase 1 reproducible development runtime: **complete locally**.
-- Phase 2 security/release foundation: **local and branch CI gates green; external release gates pending**.
+- Phase 2 security/release foundation: **application/source gates green;
+  container residual-risk policy accepted and patch local; external release
+  gates pending**.
 - Phase 3 product/UX: **local implemented scope and browser/PWA gates green**.
 - Phase 4 adversarial QA/staging: **local and branch E2E gates green; protected staging and external operations evidence pending**.
-- Phase 5 release candidate: **published branch and branch CI complete;
-  protected release and external staging gates pending**.
+- Phase 5 release candidate: **PR #8 through #10 merged; evidence-only source,
+  image build, and runtime smoke green; container risk review plus protected
+  release and external staging gates pending**.
 - Paper execution: **excluded from public MVP** by accepted ADR
   [`2026-07-23-exclude-paper-execution-from-mvp.md`](../adr/2026-07-23-exclude-paper-execution-from-mvp.md).
-- Verdict: **clean local release-candidate validation GO; public release/MVP
-  launch HOLD pending external evidence**.
+- Verdict: **local application/runtime validation GO; container-risk evidence
+  policy accepted; public MVP launch HOLD pending CI and external evidence**.
+
+## 2026-07-24 final evidence and container-risk checkpoint
+
+This section supersedes the older PR #8 continuation instructions below.
+
+- Current remote `main` is `3930d0ebdf73cb58a0f7b30aaed0ec64e6e7fb3b`.
+  PR #8 (Ruff declaration), PR #9 (portable OddsHarvester release runtime,
+  scrape-dataset lineage and browser timing fixes), and PR #10 (replace
+  vulnerable `python-jose`/`ecdsa` with PyJWT) are merged.
+- `main` Backend, Frontend, and Security runs on `3930d0e` passed. PR #10 Hybrid
+  E2E passed **56/56**.
+- Evidence-only release run
+  [30116510025](https://github.com/cahangeorge/betting-platform/actions/runs/30116510025)
+  passed `verify-source` completely, including Alembic, backend **545/545**,
+  frontend check/unit/build, Taskiq worker/scheduler smoke, and Chromium
+  **56/56**. It built and runtime-smoked all three production images.
+- That run stopped at the backend Trivy step with **115** operating-system
+  findings (**96 High / 19 Critical**) for which the report showed no fixed
+  version. Frontend/nginx scanning, SBOM packaging, and publication were
+  skipped. `publish-signed-images` remained skipped and nothing was published.
+- The local candidate changes the evidence contract rather than hiding those
+  findings: every image writes a complete unfiltered JSON report, the reports
+  are uploaded even when the gate fails, missing/malformed reports fail closed,
+  and any High/Critical finding with an available fixed version blocks
+  automatically. Unfixed findings remain explicit release evidence and require
+  owner risk review before an RC tag can be approved. The decision is recorded
+  as **Accepted** in
+  [`2026-07-24-auditable-container-vulnerability-gate.md`](../adr/2026-07-24-auditable-container-vulnerability-gate.md).
+- Fresh local verification on the synced tree:
+  - backend Ruff and **545/545** pytest;
+  - root release/security contracts **25/25**, Ruff, tracked/untracked secret
+    scan, actionlint `1.7.12` with verified checksum, workflow YAML, shell
+    syntax, and `git diff --check`;
+  - frontend `pnpm check` 0 diagnostics, unit **121/121**, E2E TypeScript, and
+    production build;
+  - Chromium hybrid **56/56**, one worker, zero retries, **3.7m**;
+  - production HTTPS PWA **3/3** with backend active;
+  - Alembic `025 (head)` and `alembic check` with no upgrade operations.
+- Codebase Memory was refreshed to **5,266 nodes / 20,101 edges**, status
+  `ready`. The latest compressed whole-workspace Repomix pack remains
+  `7fb2a326972893e0`; it was not regenerated because the current blocker and
+  patch are narrow release-policy/script changes and fresh source/CI evidence
+  is stronger.
+
+Exact continuation order:
+
+1. The product owner accepted the auditable container vulnerability policy on
+   2026-07-24. This does not authorize a tag, GHCR publication, deployment, or
+   public launch.
+2. Commit the eight intended paths on a fresh release-fix branch, push, and
+   require Backend, Frontend, Security, and Hybrid E2E green.
+3. Merge only after the PR is green, then rerun evidence-only `Release Build
+   and Evidence` on the resulting `main`. Require `verify-source`,
+   `build-scan-and-package`, three complete JSON vulnerability reports, three
+   SBOMs, and `publish-signed-images` skipped.
+4. Review the exact unresolved report against runtime applicability and base
+   image/package updates. Do not approve a tag while any fixable High/Critical
+   finding exists.
+5. Only after successful evidence and explicit approval naming both the exact
+   tag and destination may an RC tag be pushed to GHCR. Protected staging,
+   secrets/TLS/DNS/firewall, off-host restore, observability/on-call,
+   soak/canary, rollback, and applicable compliance evidence still gate public
+   MVP launch.
 
 ## 2026-07-24 main integration and release-gate checkpoint
 
-This is the authoritative continuation point for the next session:
+Historical checkpoint (superseded by the section above):
 
 - PR
   [#7](https://github.com/cahangeorge/betting-platform/pull/7) was retargeted
