@@ -25,12 +25,8 @@ test('live and value bet pages surface seeded backend data', async ({ page, cont
 		await expect(page.getByText(liveHome).first()).toBeVisible();
 		await expect(page.getByText(liveAway).first()).toBeVisible();
 		const liveValueAddButton = page.getByRole('button', { name: 'Add to betslip' }).first();
-		const monitorOnlyBanner = page.getByText('Monitor-only mode for live betslip actions').first();
 		const lockedButton = page.getByRole('button', { name: 'Locked' }).first();
 		await expect(liveValueAddButton.or(lockedButton).first()).toBeVisible();
-		if (await lockedButton.isVisible()) {
-			await expect(monitorOnlyBanner).toBeVisible();
-		}
 		console.log('live-value-data: live ok');
 
 		await page.goto('/opportunities?view=value');

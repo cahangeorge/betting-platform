@@ -1,14 +1,14 @@
 # Current Platform Status
 
-Updated: 2026-07-24T22:35:55+03:00
+Updated: 2026-07-24T22:39:14+03:00
 Repository/branch: `/home/gion/Projects/bet` / `agent/trivy-gate-pr`
 Dirty state at this handoff refresh:
 
 ```text
 The branch was created cleanly from current `origin/main` (`3930d0e`). Its
-candidate commit contains exactly eight intended release-audit/handoff paths:
-the workflow, gate script, two test files, accepted ADR, and the three
-canonical status documents. The previous pre-sync tracked modifications remain
+candidate contains exactly nine intended release-audit/handoff paths: the
+workflow, gate script, three test files, accepted ADR, and the three canonical
+status documents. The previous pre-sync tracked modifications remain
 preserved reversibly in the stash named
 `pre-main-sync-mvp-audit-2026-07-24`; they were superseded by the more complete
 PR #9 implementation already on `main`. Playwright result metadata is not part
@@ -91,6 +91,9 @@ This section supersedes the older PR #8 continuation instructions below.
   - frontend `pnpm check` 0 diagnostics, unit **121/121**, E2E TypeScript, and
     production build;
   - Chromium hybrid **56/56**, one worker, zero retries, **3.7m**;
+  - after workflow-dispatch run `30120738580` exposed a duplicated transient
+    lock/banner assertion, the two affected live-state tests passed **2/2**
+    locally with the dedicated lock contract still intact;
   - production HTTPS PWA **3/3** with backend active;
   - Alembic `025 (head)` and `alembic check` with no upgrade operations.
 - Codebase Memory was refreshed to **5,266 nodes / 20,101 edges**, status
@@ -104,16 +107,19 @@ Exact continuation order:
 1. The product owner accepted the auditable container vulnerability policy on
    2026-07-24. This does not authorize a tag, GHCR publication, deployment, or
    public launch.
-2. Commit the eight intended paths on a fresh release-fix branch, push, and
-   require Backend, Frontend, Security, and Hybrid E2E green.
-3. Merge only after the PR is green, then rerun evidence-only `Release Build
+2. The nine-path candidate is committed and pushed on `agent/trivy-gate-pr`.
+   GitHub currently returns HTTP 500 when creating any new PR in this
+   repository; retry the PR operation without bypassing review.
+3. After the PR opens, require Backend, Frontend, Security, and Hybrid E2E
+   green.
+4. Merge only after the PR is green, then rerun evidence-only `Release Build
    and Evidence` on the resulting `main`. Require `verify-source`,
    `build-scan-and-package`, three complete JSON vulnerability reports, three
    SBOMs, and `publish-signed-images` skipped.
-4. Review the exact unresolved report against runtime applicability and base
+5. Review the exact unresolved report against runtime applicability and base
    image/package updates. Do not approve a tag while any fixable High/Critical
    finding exists.
-5. Only after successful evidence and explicit approval naming both the exact
+6. Only after successful evidence and explicit approval naming both the exact
    tag and destination may an RC tag be pushed to GHCR. Protected staging,
    secrets/TLS/DNS/firewall, off-host restore, observability/on-call,
    soak/canary, rollback, and applicable compliance evidence still gate public
