@@ -73,13 +73,14 @@ Tracked submodules were clean at program start and remain unchanged. The
 formerly dirty parent checkout was reconciled into clean candidate
 `40352aed38f98600a621954c67c82b600faab223`, then runner-only CI findings were
 remediated in local candidate `3543ebb`, without reset, clean, or history
-rewrite.
+rewrite. Follow-up `d20c583` removed two CI timing races and is published with
+all five branch workflows green.
 
 ## Verified refresh — 2026-07-24
 
 | Check | Result |
 | --- | --- |
-| Backend Ruff / pytest | PASS; exact CI-like FastAPI 0.139.2 / Starlette 1.3.1 / Flumine 3.1.0 environment, Ruff clean, **531 passed** |
+| Backend Ruff / pytest | PASS; exact CI-like FastAPI 0.139.2 / Starlette 1.3.1 / Flumine 3.1.0 environment, Ruff clean, **532 passed** |
 | Alembic | **025 head**, no drift |
 | Root production-contract/secret tests | **21 passed**; tracked-plus-untracked local secret scanner passed |
 | Compose contracts | both config and render checks passed |
@@ -88,6 +89,7 @@ rewrite.
 | Recovery/provider | runtime smoke, queued-message recovery, lost-stream outbox recovery, provider canary passed |
 | Frontend | pinned `pnpm 10.34.5`; `pnpm check` 0 diagnostics; **32 files / 121 unit cases**; `check:e2e`, build, and authenticated Chromium smoke passed |
 | Chromium hybrid | **52/52 twice consecutively** before the device slice, then final current-files **56/56** (10.3m, one worker), all `retries=0`; final adjusted specs **2/2** |
+| Published branch CI | SHA `d20c583`: Backend, Frontend, Security, Compose Smoke and Hybrid E2E all PASS; remote Hybrid **56/56** |
 | Firefox / WebKit | official smoke **1/1** on each engine; host WebKit lacked runtime libraries, so the verified WebKit run used the official Playwright `v1.60.0-noble` container |
 | PWA | production HTTPS service-worker suite **3/3**, including offline/recovery announcements and draft-safe update |
 | Recovery hygiene | final strict cleanup removed interrupted E2E fixtures and ended at `Namespaces: 0`; fresh temporary-DB dump/restore passed at Alembic `025` with matching schema/version/key row counts |
@@ -129,11 +131,11 @@ Release/MVP launch remains **HOLD** pending external credential rotation,
 protected GitHub/GHCR configuration and one real signed tag run,
 secret-manager setup, DNS/valid TLS/firewall, off-host backup/restore rehearsal,
 staging lifecycle and two-user evidence, observability/on-call/soak/canary,
-push plus current CI evidence for `3543ebb`, and container-build/pull proof.
+and protected tag container-build/publish/pull proof.
 
-The application/release remediation is committed at `3543ebb`; preserve all
-existing work and do not reset or clean it. The documentation refresh following
-that commit is the only expected local delta until it is committed.
+The published branch candidate is `d20c583`; preserve all existing work and do
+not reset or clean it. The documentation refresh following that commit is the
+only expected local delta until it is committed.
 
 ## Fresh baseline at program start
 
@@ -187,7 +189,7 @@ Final durable index checkpoint:
 
 - Serena `core`, `mvp_readiness`, and `platform_hardening` memories are current;
   `serena memories check` passed.
-- Native MCP moderate reindex after `3543ebb` produced **5,247 nodes / 19,958
+- Native MCP moderate reindex after `d20c583` produced **5,248 nodes / 19,986
   edges**, status `indexed`.
 - `detect_changes` continues to enumerate the intentional dirty checkout
   relative to Git `HEAD`; actual and expected graph sizes match.
@@ -461,14 +463,12 @@ placement must remain disabled.
 
 ## Immediate execution order
 
-1. Obtain explicit public-repository publication authorization, push
-   `3543ebb`, and inspect all GitHub checks.
-2. Configure/verify the protected `registry-release` environment/tag rules/package
+1. Configure/verify the protected `registry-release` environment/tag rules/package
    access and run one disposable signed GHCR release tag from that revision.
-3. Execute protected staging lifecycle/two-user, off-host backup/restore,
+2. Execute protected staging lifecycle/two-user, off-host backup/restore,
    observability/soak/canary, secret-manager, and digest-pinned deployment
    evidence.
-4. Re-evaluate the release/MVP launch HOLD verdict.
+3. Re-evaluate the release/MVP launch HOLD verdict.
 
 ## Current blockers and unknowns
 
@@ -479,19 +479,16 @@ placement must remain disabled.
   outside the repository and remains an external launch gate if applicable.
 - Paper execution is excluded from MVP by accepted ADR
   `2026-07-23-exclude-paper-execution-from-mvp.md`.
-- The latest clean local application/release candidate exists at `3543ebb`.
-  Its push was blocked by the execution policy pending explicit authorization
-  to publish the payload to the public repository, so protected remote
-  build/publish/pull evidence remains open.
+- Published branch candidate `d20c583` has all five branch workflows green;
+  protected tag build/publish/pull evidence remains open.
 - GitHub currently lists only collaborator `cahangeorge`; a genuinely
   independent required reviewer for `registry-release` cannot be configured
   until another trusted reviewer is added.
 
 ## Exact next step
 
-Obtain explicit publication authorization, push `3543ebb`, inspect all GitHub
-checks, configure/verify the protected GitHub
-release controls, run one disposable signed GHCR tag, then run the protected
+Configure/verify the protected GitHub release controls, run one disposable
+signed GHCR tag from `d20c583`, then run the protected
 staging lifecycle against its digest-pinned images. Keep public release/MVP
 launch HOLD until the external release gates in the verification refresh are
 evidenced.

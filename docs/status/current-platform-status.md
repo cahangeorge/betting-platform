@@ -1,15 +1,14 @@
 # Current Platform Status
 
-Updated: 2026-07-24T11:40:34+03:00
+Updated: 2026-07-24T12:33:56+03:00
 Repository/branch: `/home/gion/Projects/bet` / `agent/demo-tickets-2026-07-17`
 Dirty state at this handoff refresh:
 
 ```text
-Local verified candidate 3543ebb was committed from a clean staged scope.
-The branch is one commit ahead of origin/agent/demo-tickets-2026-07-17 at
-41333eb. The subsequent documentation refresh is the only expected dirty
-state. No reset, clean, checkout, history rewrite, or submodule mutation was
-performed.
+Published branch candidate d20c583 is synchronized with
+origin/agent/demo-tickets-2026-07-17. The working tree was clean immediately
+before this documentation refresh. No reset, clean, checkout, history rewrite,
+or submodule mutation was performed.
 ```
 
 This is the first status document to read in a new coding session. Re-run
@@ -38,17 +37,17 @@ Current program state:
 
 - Phase 0 durable checkpoint and baseline: **complete**.
 - Phase 1 reproducible development runtime: **complete locally**.
-- Phase 2 security/release foundation: **local gates green; external release gates pending**.
+- Phase 2 security/release foundation: **local and branch CI gates green; external release gates pending**.
 - Phase 3 product/UX: **local implemented scope and browser/PWA gates green**.
-- Phase 4 adversarial QA/staging: **local gates green; protected staging and external operations evidence pending**.
-- Phase 5 release candidate: **clean local revision complete; push, protected
-  release, and external staging gates in progress**.
+- Phase 4 adversarial QA/staging: **local and branch E2E gates green; protected staging and external operations evidence pending**.
+- Phase 5 release candidate: **published branch and branch CI complete;
+  protected release and external staging gates pending**.
 - Paper execution: **excluded from public MVP** by accepted ADR
   [`2026-07-23-exclude-paper-execution-from-mvp.md`](../adr/2026-07-23-exclude-paper-execution-from-mvp.md).
 - Verdict: **clean local release-candidate validation GO; public release/MVP
   launch HOLD pending external evidence**.
 
-## 2026-07-24 CI-remediation candidate
+## 2026-07-24 published CI-remediation candidate
 
 The first GitHub Actions run on `41333eb` exposed real runner-only defects in
 backend dependency versions, bridge layout, a Playwright locator, Nginx
@@ -77,10 +76,26 @@ hardening, and the first-deployment/recovery path. Commit `3543ebb`
 - independent backend, frontend and final release/UI reviewers reported
   **PASS / APPROVE**, with no P1/P2 code issue remaining.
 
-The push of `3543ebb` was attempted but blocked by the execution policy because
-publishing this exact payload to the public GitHub repository requires explicit
-user authorization. Therefore remote CI still reflects `41333eb`; it is not
-valid release evidence for `3543ebb`.
+The user explicitly authorized public repository publication. Follow-up commit
+`d20c583` closes the two remaining runner timing failures:
+
+- FastAPI request-scoped `yield` cleanup commits after the response, so
+  scheduled-job create/toggle now commits before returning; its regression
+  test proves immediate visibility and the exact CI-like backend suite passes
+  **532/532**;
+- the live-value test now waits for either actionable or locked asynchronous
+  candidate state instead of branching on an early locator count.
+
+All five branch workflows are green on exact SHA `d20c583`:
+
+- Backend — run `30082364070`;
+- Frontend — run `30082364092`;
+- Security — run `30082364108`;
+- Compose Smoke — run `30082364068`;
+- Hybrid E2E — run `30082364057`, **56/56**.
+
+The branch is therefore a published, CI-green candidate. This does not yet
+authorize or prove the protected `v*` tag/GHCR/staging release.
 
 ## 2026-07-24 clean release-candidate integration
 
@@ -313,8 +328,7 @@ Evidence already confirmed in this checkout:
   values. Cross-host Redis/PostgreSQL still requires TLS supplied by the target
   platform.
 
-Public launch remains blocked by pushing `3543ebb` and obtaining current remote
-CI evidence, external credential rotation, protected
+Public launch remains blocked by external credential rotation, protected
 environment/tag/package configuration plus an actual signed GHCR tag run,
 secret-manager setup, DNS/valid TLS/firewall, off-host backup/restore rehearsal,
 staging lifecycle with two-user evidence, observability/on-call/soak/canary,
@@ -324,8 +338,8 @@ Durable knowledge synchronization at this checkpoint:
 
 - Serena memories `core`, `mvp_readiness`, and `platform_hardening` now record
   the current `025`/auth/WS/idempotency/Taskiq/release state.
-- Native Codebase Memory reindexed `bet-core` after `3543ebb` in moderate mode
-  to **5,247 nodes / 19,958 edges**; actual and expected graph counts match and the result
+- Native Codebase Memory reindexed `bet-core` after `d20c583` in moderate mode
+  to **5,248 nodes / 19,986 edges**; actual and expected graph counts match and the result
   is `indexed`.
 - The final compressed whole-workspace Repomix pack is output
   `59a58de9391eb430`: **1,153 files / 2,467,034 tokens / 138,366 lines**;
@@ -554,11 +568,10 @@ verification is recorded in the remediation update above.
 
 ## Exact next step
 
-After explicit authorization to publish the current payload to the public
-repository, push `3543ebb`, inspect all GitHub checks and protected
-`registry-release` environment/tag/package controls, then run one disposable
-signed GHCR tag from the verified SHA. Deploy only verified digest-pinned
-images to protected staging. Keep public release/MVP launch **HOLD** until
+Configure and verify protected `registry-release` environment/tag/package
+controls for `d20c583`, then run one explicitly authorized disposable signed
+GHCR tag. Deploy only verified digest-pinned images to protected staging. Keep
+public release/MVP launch **HOLD** until
 external credential rotation, secret-manager, DNS/TLS/firewall, off-host
 backup storage and restore, staging two-user scrape-to-settlement evidence,
 observability/on-call/soak/canary, and protected CI build/publish/pull evidence
