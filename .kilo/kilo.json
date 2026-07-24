@@ -17,7 +17,7 @@
         "@modelcontextprotocol/server-brave-search"
       ],
       "environment": {
-        "BRAVE_API_KEY": "BSAhEE883ismw-ak6F4qKB2xlxuz2Y2"
+        "BRAVE_API_KEY": "{env:BRAVE_API_KEY}"
       }
     },
     "filesystem": {

@@ -11,7 +11,7 @@ services:
     image: docker.io/postgres:16-alpine
     environment:
       POSTGRES_USER: betuser
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-betpassword_dev}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-not-a-real-dev-password}
       POSTGRES_DB: betting_platform
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -46,7 +46,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     environment:
-      BET_DATABASE_URL: postgresql+asyncpg://betuser:${POSTGRES_PASSWORD:-betpassword_dev}@postgres:5432/betting_platform
+      BET_DATABASE_URL: postgresql+asyncpg://betuser:${POSTGRES_PASSWORD:-not-a-real-dev-password}@postgres:5432/betting_platform
       BET_JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production}
       BET_CORS_ORIGINS: http://localhost:5174,http://127.0.0.1:5174,http://localhost:8080,http://127.0.0.1:8080
       BET_COOKIE_SECURE: "false"
@@ -100,7 +100,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     environment:
-      BET_DATABASE_URL: postgresql+asyncpg://betuser:${POSTGRES_PASSWORD:-betpassword_dev}@postgres:5432/betting_platform
+      BET_DATABASE_URL: postgresql+asyncpg://betuser:${POSTGRES_PASSWORD:-not-a-real-dev-password}@postgres:5432/betting_platform
       BET_JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production}
       BET_TASK_QUEUE_BACKEND: taskiq
       BET_REDIS_URL: redis://redis:6379/0
@@ -133,6 +133,12 @@ services:
       redis:
         condition: service_healthy
     command: taskiq worker app.tasks.broker:broker app.tasks.jobs
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.tasks.runtime", "worker"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
     restart: unless-stopped
     logging: *default-logging
     networks:
@@ -143,7 +149,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     environment:
-      BET_DATABASE_URL: postgresql+asyncpg://betuser:${POSTGRES_PASSWORD:-betpassword_dev}@postgres:5432/betting_platform
+      BET_DATABASE_URL: postgresql+asyncpg://betuser:${POSTGRES_PASSWORD:-not-a-real-dev-password}@postgres:5432/betting_platform
       BET_JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production}
       BET_TASK_QUEUE_BACKEND: taskiq
       BET_REDIS_URL: redis://redis:6379/0
@@ -174,7 +180,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     environment:
-      BET_DATABASE_URL: postgresql+asyncpg://betuser:${POSTGRES_PASSWORD:-betpassword_dev}@postgres:5432/betting_platform
+      BET_DATABASE_URL: postgresql+asyncpg://betuser:${POSTGRES_PASSWORD:-not-a-real-dev-password}@postgres:5432/betting_platform
       BET_JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production}
       BET_TASK_QUEUE_BACKEND: taskiq
       BET_REDIS_URL: redis://redis:6379/0
@@ -189,7 +195,13 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: python -m app.tasks.jobs
+    command: python -m app.tasks.scheduler
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.tasks.runtime", "scheduler"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
     restart: unless-stopped
     logging: *default-logging
     networks:
