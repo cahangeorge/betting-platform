@@ -1,6 +1,6 @@
 # Current Platform Status
 
-Updated: 2026-07-24T23:06:30+03:00
+Updated: 2026-07-24T23:33:07+03:00
 Repository/branch: `/home/gion/Projects/bet` / `agent/trivy-gate-pr`
 Dirty state at this handoff refresh:
 
@@ -96,12 +96,32 @@ This section supersedes the older PR #8 continuation instructions below.
   frontend runtime image; and pins both nginx images to
   `nginx:1.30.4-alpine@sha256:97d490c...`. Local image inspection confirmed
   that the formerly reported fixable packages are absent or at/above Trivy's
-  fixed versions. The final clean-revision Trivy proof must still come from CI:
-  the local Trivy binary checksum passed, but its database resolver could not
-  reach the registry from this host.
+  fixed versions. The local Trivy binary checksum passed, but its database
+  resolver could not reach the registry from this host; the authoritative
+  clean-revision proof therefore came from CI run `30123023608` below.
+- PR [#11](https://github.com/cahangeorge/betting-platform/pull/11) is open
+  from `agent/trivy-gate-pr` at audited image-remediation SHA `cc0645c`. Its
+  Backend, Frontend, Security, and Hybrid E2E checks all passed; Hybrid passed
+  in **6m23s**.
+- Evidence-only run
+  [30123023608](https://github.com/cahangeorge/betting-platform/actions/runs/30123023608)
+  passed `verify-source` and `build-scan-and-package`. It built, runtime-smoked,
+  audited, and SBOM-packaged all three images. The final reports contain
+  backend **115** unresolved findings (**96 High / 19 Critical**) with no
+  `FixedVersion`, frontend **0**, nginx **0**, and **0 fixable** findings.
+  `publish-signed-images` was skipped.
+- Independent review found one fail-closed schema-validation bypass in the
+  Python gate. The local follow-up now validates report identity/schema,
+  non-empty results, required finding fields, field types, and the
+  High/Critical-only severity contract; four adversarial regressions cover
+  missing severity, non-string `FixedVersion`, unexpected severity, and a
+  result object without its target identity. Targeted tests are **18/18**,
+  Ruff is clean, Serena reports no diagnostics,
+  and the hardened gate accepts the downloaded reports above. This follow-up
+  still requires final PR/CI evidence before merge.
 - Fresh local verification on the synced tree:
   - backend Ruff and **545/545** pytest;
-  - root release/security contracts **25/25**, Ruff, tracked/untracked secret
+  - root release/security contracts **29/29**, Ruff, tracked/untracked secret
     scan, actionlint `1.7.12` with verified checksum, workflow YAML, shell
     syntax, and `git diff --check`;
   - frontend `pnpm check` 0 diagnostics, unit **121/121**, E2E TypeScript, and
@@ -113,7 +133,7 @@ This section supersedes the older PR #8 continuation instructions below.
     locally with the dedicated lock contract still intact;
   - production HTTPS PWA **3/3** with backend active;
   - Alembic `025 (head)` and `alembic check` with no upgrade operations.
-- Codebase Memory was refreshed to **5,266 nodes / 20,101 edges**, status
+- Codebase Memory was refreshed to **5,270 nodes / 20,126 edges**, status
   `ready`. The latest compressed whole-workspace Repomix pack remains
   `7fb2a326972893e0`; it was not regenerated because the current blocker and
   patch are narrow release-policy/script changes and fresh source/CI evidence
@@ -124,12 +144,10 @@ Exact continuation order:
 1. The product owner accepted the auditable container vulnerability policy on
    2026-07-24. This does not authorize a tag, GHCR publication, deployment, or
    public launch.
-2. Commit and push the six-file runtime remediation plus its updated contract,
-   then retry PR creation on `agent/trivy-gate-pr`. GitHub previously returned
-   HTTP 500 when creating any new PR in this repository; do not bypass review.
-3. Dispatch Security, Hybrid E2E, and evidence-only `Release Build and
-   Evidence` on the final SHA. Require Backend, Frontend, Security, and Hybrid
-   E2E green plus a successful fixable-finding image gate.
+2. Commit and push the review hardening plus this refreshed handoff to PR #11.
+3. Require Backend, Frontend, Security, and Hybrid E2E green on the new head,
+   then dispatch evidence-only `Release Build and Evidence`. Require a
+   successful fixable-finding image gate and `publish-signed-images` skipped.
 4. Merge only after the PR is green, then rerun evidence-only `Release Build
    and Evidence` on the resulting `main`. Require `verify-source`,
    `build-scan-and-package`, three complete JSON vulnerability reports, three

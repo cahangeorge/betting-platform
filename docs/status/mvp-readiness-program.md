@@ -1,6 +1,6 @@
 # MVP Readiness Program
 
-Updated: 2026-07-24T23:06:30+03:00
+Updated: 2026-07-24T23:33:07+03:00
 Repository: `/home/gion/Projects/bet`
 Branch: `agent/trivy-gate-pr`
 Program status: **ACTIVE — local remediation GO; final CI integration/public MVP launch HOLD**
@@ -65,7 +65,7 @@ The program can be marked **MVP GO** only when:
 | `flumine/` | EXCLUDED | post-MVP paper execution | accepted ADR excludes paper execution from public MVP |
 | PWA | LOCAL GATES GREEN | installable shell | production HTTPS offline/recovery/update suite passed; installed-device lifecycle remains |
 | Mobile/desktop design | LOCAL GATES GREEN | operator UI | 320–1920 plus landscape/safe-area/touch/forced-colors browser gates passed; hardware/manual zoom remains |
-| DevOps/release | MAIN INTEGRATED / CONTAINER-RISK POLICY ACCEPTED, FIXABLE FINDINGS REMEDIATED LOCALLY | deployment | PR #8-#10 merged; auditable gate correctly blocked 72 fixable findings; runtime/dependency remediation and local image inspection are green; final CI scan, signed tag, secrets, public TLS, off-host backup, monitoring and canary remain |
+| DevOps/release | PR #11 GREEN AT IMAGE-REMEDIATION SHA; REVIEW HARDENING LOCAL | deployment | auditable gate blocked 72 fixable findings, remediation rerun passed with fixable=0, frontend/nginx=0, backend=115 unresolved, publication skipped; strict schema hardening needs final CI; signed tag, secrets, public TLS, off-host backup, monitoring and canary remain |
 | QA | LOCAL GATES GREEN / STAGING HOLD | release evidence | real protected two-user staging lifecycle is absent |
 | `betfront/` | ARCHIVED/DIRTY | none | preserve; do not include in current MVP |
 
@@ -82,9 +82,17 @@ image builds, and runtime smoke, then stopped on 115 High/Critical
 operating-system findings without an available fixed version. Candidate run
 `30120739636` then passed source/image/runtime gates and correctly blocked 72
 fixable High/Critical findings across the frontend and nginx images while
-skipping publication. The current local remediation upgrades those runtime
-dependencies and base images; authoritative clean-revision Trivy evidence is
-pending.
+skipping publication. The follow-up upgraded those runtime dependencies and
+base images; PR #11 evidence below proved the image remediation before
+independent review added the still-pending strict schema hardening.
+
+PR #11 then passed Backend, Frontend, Security, and Hybrid E2E on `cc0645c`.
+Evidence-only run `30123023608` passed source/build/runtime/scan/SBOM/package,
+reported backend 115 unresolved High/Critical findings without a fixed version,
+frontend/nginx zero, fixable zero, and skipped publication. Independent review
+found a malformed-finding bypass in the otherwise-green gate. The local
+follow-up validates report identity/schema and per-finding types/required
+fields, with adversarial regressions; final CI on that hardening is pending.
 
 ## Verified refresh — 2026-07-24
 
@@ -92,7 +100,7 @@ pending.
 | --- | --- |
 | Backend Ruff / pytest | PASS; synced current tree, Ruff clean, **545 passed** |
 | Alembic | **025 head**, no drift |
-| Root production-contract/secret tests | **25 passed**; tracked-plus-untracked local secret scanner passed |
+| Root production-contract/secret tests | **29 passed**; tracked-plus-untracked local secret scanner passed |
 | Compose contracts | both config and render checks passed |
 | Shell/repository checks | `bash -n` and `git diff --check` passed |
 | Runtime | `/health`, frontend HTTP 200; `/ready` includes Bet Redis `6380` plus fresh worker/scheduler heartbeats; final Taskiq round-trip passed |
@@ -103,7 +111,7 @@ pending.
 | Firefox / WebKit | official smoke **1/1** on each engine; host WebKit lacked runtime libraries, so the verified WebKit run used the official Playwright `v1.60.0-noble` container |
 | PWA | production HTTPS service-worker suite **3/3**, including offline/recovery announcements and draft-safe update |
 | Recovery hygiene | final strict cleanup removed interrupted E2E fixtures and ended at `Namespaces: 0`; fresh temporary-DB dump/restore passed at Alembic `025` with matching schema/version/key row counts |
-| Release workflow supply chain | full-SHA actions; known-safe Trivy Action `v0.35.0` + binary `v0.69.3`; real Taskiq source gate; exact scanned-image GHCR handoff; non-root image runtime smoke; complete JSON vulnerability evidence plus fixable-finding gate proved in run `30120739636`; the gate blocked 72 fixable findings and publication stayed skipped; remediated rerun remains pending |
+| Release workflow supply chain | full-SHA actions; known-safe Trivy Action `v0.35.0` + binary `v0.69.3`; real Taskiq source gate; exact scanned-image GHCR handoff; non-root image runtime smoke; run `30123023608` passed with fixable=0, frontend/nginx=0, backend=115 unresolved, three CycloneDX SBOMs, and publication skipped; strict schema-review hardening remains to rerun |
 | Production dependency lock | combined backend/OddsHarvester/penaltyblog/soccerdata Python 3.12 lock, **204 exact packages**; regeneration and strict dry-run passed |
 | Local production containers | remediated frontend build + UID 1001 + HTTP 200 PASS, with unused npm/Corepack tooling absent; backend 204-package build + UID 1001 + FastAPI import + bundled Chromium PASS; pinned nginx `1.30.4` build/runtime PASS and formerly fixable Alpine packages meet or exceed reported fixed versions. Explicit host-resolved mappings worked around rootless Podman container DNS |
 
@@ -257,7 +265,7 @@ confirmed.
 | QA-002 | Tenant | add cross-user isolation gates for jobs, predictions, WS, trading, bankroll, and settlement | COMPLETE-local — REST/settlement isolation plus user-scoped prediction WebSocket tests |
 | QA-003 | Browser | run all hybrid tests with retries disabled and eliminate flaky waits/cleanup ambiguity | COMPLETE-local — repeated retry-free Chromium gates |
 | OPS-002 | CI/CD | build, scan, publish, deploy, smoke, and retain immutable rollback artifacts | PARTIAL — exact scanned-image handoff, GHCR digest publication, keyless Cosign, GitHub attestations, non-overwrite, version promotion, and auto-rollback are implemented and contract-tested; protected tag/deploy execution remains external |
-| OPS-006 | CI supply chain | pin and validate actions/scanners, gate release tags on application tests, scan current source and images | PARTIAL-CANDIDATE — all actions are full-SHA pinned; digest-pinned services; known-safe Trivy; real Taskiq release gate; accepted gate retained complete JSON and correctly blocked 72 fixable findings; Vite/frontend runtime and nginx base remediation is locally green; final CI image scan remains required |
+| OPS-006 | CI supply chain | pin and validate actions/scanners, gate release tags on application tests, scan current source and images | PARTIAL-CANDIDATE — run `30123023608` proved complete JSON, fixable=0, frontend/nginx=0, backend=115 unresolved, and publication skipped; independent review's malformed-schema bypass is fixed locally with adversarial tests; final CI rerun remains required |
 | BE-004 | Container scraper runtime | make the production Chromium install available to the non-root backend runtime user | COMPLETE-local contract — shared `/ms-playwright` path and ownership; CI now launches Chromium in the built non-root image; execution awaits CI because local container DNS is unavailable |
 | BE-005 | Production dependencies | resolve backend plus all bridge projects from one exact Python 3.12 dependency graph | COMPLETE-local — 204-package uv lock, regeneration diff and strict dry-run green |
 | FE-007 | Container dependencies | pin pnpm and avoid a second mutable production dependency resolution | COMPLETE-local — `pnpm 10.34.5`, one frozen install, builder prune and copied production node_modules; SvelteKit `2.70.1`/Vite `8.1.5`; unused npm/Corepack removed from runtime; check, 121 unit tests, E2E typecheck, build, and High/Critical production dependency audit green |

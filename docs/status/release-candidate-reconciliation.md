@@ -1,6 +1,6 @@
 # Release Candidate Reconciliation Plan
 
-Updated: 2026-07-24T23:06:30+03:00
+Updated: 2026-07-24T23:33:07+03:00
 Branch: `agent/trivy-gate-pr`
 Status: **PR #8-#10 MERGED; CONTAINER POLICY ACCEPTED; FIXABLE FINDINGS REMEDIATED LOCALLY**
 
@@ -61,8 +61,19 @@ The recommended sequence below was executed, then hardened through CI:
     npm/Corepack tooling from the frontend runtime, and pins both nginx
     Dockerfiles to the current `1.30.4-alpine` digest. Local production builds,
     non-root/runtime smoke, dependency inventory, frontend checks, and focused
-    Hybrid browser tests are green. A final clean-revision CI scan remains
-    mandatory before merge.
+    Hybrid browser tests are green. The required clean-revision image scan is
+    recorded in the next step.
+18. PR #11 opened successfully. Backend, Frontend, Security, and Hybrid E2E
+    passed on `cc0645c`; evidence-only run `30123023608` passed source, build,
+    runtime smoke, three scans, the fixable gate, three CycloneDX SBOMs,
+    secret scan, and package upload. Backend retained 115 unresolved findings,
+    frontend/nginx retained zero, fixable findings were zero, and publication
+    was skipped.
+19. Independent review found a malformed-finding bypass in the Python gate.
+    The local follow-up now validates report identity/schema, non-empty
+    results, required finding fields, field types, and the High/Critical-only
+    severity contract. Four adversarial regression cases pass; final CI on
+    this review hardening is pending.
 
 No release tag or GHCR release artifact exists at this checkpoint.
 

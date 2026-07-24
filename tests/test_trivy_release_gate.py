@@ -15,6 +15,9 @@ def _run_gate(tmp_path: Path, vulnerabilities: object) -> subprocess.CompletedPr
     report.write_text(
         json.dumps(
             {
+                "SchemaVersion": 2,
+                "ArtifactName": "candidate-image",
+                "ArtifactType": "container_image",
                 "Results": [
                     {
                         "Target": "candidate-image",
@@ -41,7 +44,6 @@ def test_trivy_gate_retains_unfixed_findings_without_hiding_them(tmp_path: Path)
                 "VulnerabilityID": "CVE-UNFIXED",
                 "PkgName": "runtime-lib",
                 "InstalledVersion": "1.0",
-                "FixedVersion": "",
                 "Severity": "CRITICAL",
                 "Status": "affected",
             }
@@ -109,4 +111,88 @@ def test_trivy_gate_fails_closed_on_malformed_report(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 2
-    assert "must contain a Results array" in result.stderr
+    assert "SchemaVersion must be 2" in result.stderr
+
+
+def test_trivy_gate_fails_closed_when_severity_is_missing(tmp_path: Path) -> None:
+    result = _run_gate(
+        tmp_path,
+        [
+            {
+                "VulnerabilityID": "CVE-MALFORMED-SEVERITY",
+                "PkgName": "runtime-lib",
+                "InstalledVersion": "1.0",
+                "FixedVersion": "1.1",
+                "Status": "fixed",
+            }
+        ],
+    )
+
+    assert result.returncode == 2
+    assert "Severity must be a non-empty string" in result.stderr
+
+
+def test_trivy_gate_fails_closed_when_fixed_version_has_wrong_type(
+    tmp_path: Path,
+) -> None:
+    result = _run_gate(
+        tmp_path,
+        [
+            {
+                "VulnerabilityID": "CVE-MALFORMED-FIXED",
+                "PkgName": "runtime-lib",
+                "InstalledVersion": "1.0",
+                "FixedVersion": ["1.1"],
+                "Severity": "CRITICAL",
+                "Status": "affected",
+            }
+        ],
+    )
+
+    assert result.returncode == 2
+    assert "FixedVersion must be a string when present" in result.stderr
+
+
+def test_trivy_gate_fails_closed_on_unexpected_severity(tmp_path: Path) -> None:
+    result = _run_gate(
+        tmp_path,
+        [
+            {
+                "VulnerabilityID": "CVE-UNEXPECTED-SEVERITY",
+                "PkgName": "runtime-lib",
+                "InstalledVersion": "1.0",
+                "Severity": "MEDIUM",
+                "Status": "affected",
+            }
+        ],
+    )
+
+    assert result.returncode == 2
+    assert "expected a HIGH/CRITICAL-filtered report" in result.stderr
+
+
+def test_trivy_gate_fails_closed_when_result_target_is_missing(
+    tmp_path: Path,
+) -> None:
+    report = tmp_path / "report.json"
+    report.write_text(
+        json.dumps(
+            {
+                "SchemaVersion": 2,
+                "ArtifactName": "candidate-image",
+                "ArtifactType": "container_image",
+                "Results": [{}],
+            }
+        )
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(GATE), str(report)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "Target must be a non-empty string" in result.stderr
