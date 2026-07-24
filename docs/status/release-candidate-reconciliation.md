@@ -1,8 +1,8 @@
 # Release Candidate Reconciliation Plan
 
-Updated: 2026-07-24T13:03:01+03:00
-Branch: `agent/release-ruff-gate-2026-07-24`
-Status: **MAIN INTEGRATION COMPLETE; RELEASE-ONLY RUFF FIX OPEN IN PR #8**
+Updated: 2026-07-24T23:52:29+03:00
+Branch: `agent/trivy-gate-pr`
+Status: **PR #11 REVIEW-CLEAR AND FULLY GREEN; MERGE/MAIN EVIDENCE PENDING**
 
 This plan converted the intentionally dirty, locally verified MVP checkout into
 a reviewable release-candidate revision without losing existing work. The owner
@@ -40,8 +40,46 @@ The recommended sequence below was executed, then hardened through CI:
     `ruff: command not found` after successful checkout/toolchain/lock/Chromium/
     Alembic setup. No build/package/publish job ran.
 12. Fix `1131157` declares Ruff in `backend[dev]`; local install, Ruff and all
-    **532** backend tests passed. PR #8 is open and its Hybrid E2E gate was
-    still running when this checkpoint was recorded.
+    **532** backend tests passed. PR #8 merged as `c502200`.
+13. PR #9 merged portable OddsHarvester release setup, exact scrape-dataset
+    lineage, deduplication preservation, and browser timing fixes as `167aafb`.
+14. Evidence run `30114826097` then found the unfixed `ecdsa` vulnerability
+    inherited through `python-jose`; PR #10 replaced that HS256-only dependency
+    with PyJWT and merged as current `main` `3930d0e`.
+15. Evidence run `30116510025` passed the complete source gate, image builds,
+    and runtime smoke, then found 115 High/Critical OS findings without an
+    available fixed version. The current local patch preserves full JSON
+    reports, blocks every fixable High/Critical finding, fails closed on missing
+    evidence, and leaves unfixed risk behind explicit owner review under an
+    Accepted ADR; acceptance does not authorize a tag, registry publication,
+    deployment, or public launch.
+16. Candidate run `30120739636` passed source verification, all three image
+    builds, and runtime smoke. The new gate then correctly blocked **72
+    fixable High/Critical findings**, uploaded the complete reports, and kept
+    `publish-signed-images` skipped.
+17. The current branch upgrades SvelteKit/Svelte/Vite/PostCSS, removes unused
+    npm/Corepack tooling from the frontend runtime, and pins both nginx
+    Dockerfiles to the current `1.30.4-alpine` digest. Local production builds,
+    non-root/runtime smoke, dependency inventory, frontend checks, and focused
+    Hybrid browser tests are green. The required clean-revision image scan is
+    recorded in the next step.
+18. PR #11 opened successfully. Backend, Frontend, Security, and Hybrid E2E
+    passed on `cc0645c`; evidence-only run `30123023608` passed source, build,
+    runtime smoke, three scans, the fixable gate, three CycloneDX SBOMs,
+    secret scan, and package upload. Backend retained 115 unresolved findings,
+    frontend/nginx retained zero, fixable findings were zero, and publication
+    was skipped.
+19. Independent review found a malformed-finding bypass in the Python gate.
+    The local follow-up now validates report identity/schema, non-empty
+    results, required finding fields, field types, and the High/Critical-only
+    severity contract. Four adversarial regression cases pass.
+20. Code review concluded `APPROVE` with no remaining finding; architecture
+    concluded `CLEAR`. On exact hardening SHA `f897e6f`, Backend, Frontend,
+    Security, and Hybrid E2E passed, then evidence-only run `30124777407`
+    passed source verification, image build/runtime smoke, all three scans,
+    strict gate, SBOMs, secret scan, packaging, and artifact upload. Backend
+    retained 115 unresolved findings, frontend/nginx retained zero, fixable
+    findings were zero, and publication was skipped.
 
 No release tag or GHCR release artifact exists at this checkpoint.
 
@@ -137,15 +175,16 @@ YAML, shell and diff checks.
 The current Dockerfiles also have direct local build/runtime proof:
 
 - frontend image
-  `localhost/bet-frontend:mvp-validation-20260724`,
-  image ID `ad05990f46ef...`, local digest `sha256:6aaad448e85c...`;
-  production `/about` returned 200 as UID 1001;
+  `localhost/bet-frontend:local-trivy-fix`; production HTTP smoke and UID 1001
+  passed, and npm, npx, Corepack, esbuild, sigstore, and vulnerable tar/
+  brace-expansion packages are absent from the runtime;
 - backend image
   `localhost/bet-backend:mvp-validation-20260724`,
   image ID `91ba6a3e1c77...`, local digest `sha256:827552c95c94...`;
   UID 1001, FastAPI import, and bundled Chromium launch passed;
-- nginx image `localhost/bet-nginx:mvp-validation` previously passed
-  `nginx -t` with the production topology.
+- nginx image `localhost/bet-nginx:local-trivy-fix` runs nginx `1.30.4`; the
+  installed Alpine packages identified by run `30120739636` meet or exceed
+  Trivy's reported fixed versions.
 
 These are dirty-checkout local artifacts, not registry identities and not
 release evidence. The protected workflow must rebuild, scan, publish, sign and

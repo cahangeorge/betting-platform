@@ -1,4 +1,4 @@
-FROM nginx:1.27-alpine
+FROM nginx:1.30.4-alpine@sha256:97d490c12ba55b4946b01546d1c3ed324e8d41ab1c9fcb2a616aa470620e5b46
 
 RUN (getent group nginx || addgroup -S -g 101 nginx) && \
     (id -u nginx || adduser -S -D -H -u 101 -G nginx nginx)

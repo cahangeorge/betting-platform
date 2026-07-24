@@ -270,35 +270,58 @@ jobs:
             bet-nginx:${{ github.sha }} \
             > release-evidence/images.json
 
-      - name: Scan backend image
+      - name: Audit backend image vulnerabilities
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0 known-safe after GHSA-69fq-xp46-6x23
         with:
           scan-type: image
           image-ref: bet-api:${{ github.sha }}
           severity: HIGH,CRITICAL
-          exit-code: '1'
+          format: json
+          output: release-evidence/backend-vulnerabilities.json
+          exit-code: '0'
           ignore-unfixed: false
           version: v0.69.3
 
-      - name: Scan frontend image
+      - name: Audit frontend image vulnerabilities
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0 known-safe after GHSA-69fq-xp46-6x23
         with:
           scan-type: image
           image-ref: bet-frontend:${{ github.sha }}
           severity: HIGH,CRITICAL
-          exit-code: '1'
+          format: json
+          output: release-evidence/frontend-vulnerabilities.json
+          exit-code: '0'
           ignore-unfixed: false
           version: v0.69.3
 
-      - name: Scan nginx image
+      - name: Audit nginx image vulnerabilities
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0 known-safe after GHSA-69fq-xp46-6x23
         with:
           scan-type: image
           image-ref: bet-nginx:${{ github.sha }}
           severity: HIGH,CRITICAL
-          exit-code: '1'
+          format: json
+          output: release-evidence/nginx-vulnerabilities.json
+          exit-code: '0'
           ignore-unfixed: false
           version: v0.69.3
+
+      - name: Gate fixable High/Critical image vulnerabilities
+        if: always()
+        run: |
+          python scripts/release/gate_trivy_reports.py \
+            release-evidence/backend-vulnerabilities.json \
+            release-evidence/frontend-vulnerabilities.json \
+            release-evidence/nginx-vulnerabilities.json
+
+      - name: Preserve complete vulnerability evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vulnerability-evidence-${{ github.sha }}
+          path: release-evidence/*-vulnerabilities.json
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Generate backend SBOM
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0 known-safe after GHSA-69fq-xp46-6x23
@@ -337,7 +360,7 @@ jobs:
         run: |
           cp deploy/production/compose.yml release-evidence/compose.template.yml
           printf 'git_sha=%s\n' '${{ github.sha }}' > release-evidence/build.txt
-          printf '%s\n' 'CI built, smoked, scanned, and packaged local candidate images. Protected tag runs continue to digest-pinned GHCR publication; deployment remains separately approved.' >> release-evidence/build.txt
+          printf '%s\n' 'CI built, smoked, audited, and packaged local candidate images. Full High/Critical reports are retained; fixable findings block automatically and unresolved findings require explicit release risk review. Protected tag runs continue to digest-pinned GHCR publication; deployment remains separately approved.' >> release-evidence/build.txt
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-evidence-${{ github.sha }}
