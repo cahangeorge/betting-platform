@@ -206,6 +206,16 @@ class ProductionContractTests(unittest.TestCase):
         self.assertIn("submodules: recursive", release_workflow)
         self.assertIn("needs: verify-source", release_workflow)
         self.assertIn("Full Chromium hybrid gate", release_workflow)
+        self.assertIn("-e ../OddsHarvester", release_workflow)
+        self.assertIn("python -c 'import oddsharvester'", release_workflow)
+        self.assertIn(
+            "BET_ODDSHARVESTER_PYTHON=$(command -v python)",
+            release_workflow,
+        )
+        self.assertLess(
+            release_workflow.index("Verify portable bridge runtime"),
+            release_workflow.index("Full Chromium hybrid gate"),
+        )
         self.assertIn("Verify real Redis Taskiq worker and scheduler", release_workflow)
         self.assertIn("BET_TASK_QUEUE_BACKEND: taskiq", release_workflow)
         self.assertIn(

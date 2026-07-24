@@ -196,6 +196,7 @@ test('tickets sends the exact handoff subset and keeps draft activation or disca
 	assert.match(panelSource, /Renunță la lotul draft/);
 	assert.match(panelSource, /Confirmă renunțarea/);
 	assert.match(panelSource, /await ticketsApi\.getBatchTickets\(batchId\)/);
+	assert.match(panelSource, /await loadTickets\(\{ preserveReview: true \}\)/);
 	assert.match(panelSource, /async function pollVisibleTicketContext\(\)/);
 	assert.match(panelSource, /if \(document\.hidden\) return/);
 	assert.match(panelSource, /activeTab === 'history'/);

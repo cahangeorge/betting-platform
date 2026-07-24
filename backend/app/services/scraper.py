@@ -286,6 +286,23 @@ def _avoid_rescraping_requested(job: ScrapeJob) -> bool:
     return bool(params.get("dedup_skip_requested") or params.get("dedup_skip") or params.get("avoid_rescraping"))
 
 
+def _scrape_output_summary(job: ScrapeJob) -> dict[str, Any]:
+    output = getattr(job, "output", None)
+    if not isinstance(output, str) or not output:
+        return {}
+    try:
+        summary = json.loads(output)
+    except (TypeError, ValueError):
+        return {}
+    return summary if isinstance(summary, dict) else {}
+
+
+def _scrape_output_dataset_id(job: ScrapeJob) -> int | None:
+    summary = _scrape_output_summary(job)
+    dataset_id = _coerce_int(summary.get("dataset_id"))
+    return dataset_id if dataset_id is not None and dataset_id > 0 else None
+
+
 async def _find_completed_duplicate_scrape_job(db: AsyncSession, job: ScrapeJob) -> ScrapeJob | None:
     stmt = (
         select(ScrapeJob)
@@ -1243,6 +1260,12 @@ async def execute_scrape_job(db: AsyncSession, job_id: int) -> ScrapeJob:
                     "reason": "duplicate_completed_job",
                     "reused_job_id": duplicate.id,
                 }
+                duplicate_dataset_id = _scrape_output_dataset_id(duplicate)
+                if duplicate_dataset_id is not None:
+                    summary["dataset_id"] = duplicate_dataset_id
+                duplicate_report = _scrape_output_summary(duplicate).get("scrape_report")
+                if isinstance(duplicate_report, dict):
+                    summary["scrape_report"] = dict(duplicate_report)
                 job.status = "completed"
                 job.output = json.dumps(summary)
                 job.completed_at = datetime.now(timezone.utc)

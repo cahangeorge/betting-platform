@@ -823,7 +823,7 @@
 			tickets = [...response.tickets, ...tickets.filter((ticket) => !response.tickets.some((created) => created.id === ticket.id))];
 			activeTab = 'review';
 			generateMessage = `Lotul #${response.batch_id} a fost generat cu ${response.tickets.length} bilet${response.tickets.length === 1 ? '' : 'e'}. Revizuiește-l înainte de orice execuție.`;
-			void loadTickets();
+			await loadTickets({ preserveReview: true });
 		} catch (err) {
 			generateError = err instanceof ApiClientError && err.statusCode === 428
 				? 'Configurează mai întâi politica explicită de risc în Cont → Risk & limits.'
