@@ -244,6 +244,41 @@ class ProductionContractTests(unittest.TestCase):
             release_workflow,
         )
         self.assertNotIn("ignore-unfixed: true", release_workflow)
+        for image in ("backend", "frontend", "nginx"):
+            self.assertIn(
+                f"output: release-evidence/{image}-vulnerabilities.json",
+                release_workflow,
+            )
+        self.assertIn(
+            "python scripts/release/gate_trivy_reports.py",
+            release_workflow,
+        )
+        self.assertIn(
+            "Gate fixable High/Critical image vulnerabilities",
+            release_workflow,
+        )
+        self.assertIn("Preserve complete vulnerability evidence", release_workflow)
+        self.assertIn("name: vulnerability-evidence-${{ github.sha }}", release_workflow)
+        vulnerability_upload = release_workflow.split(
+            "- name: Preserve complete vulnerability evidence", 1
+        )[1].split("- name: Generate backend SBOM", 1)[0]
+        self.assertIn("if: always()", vulnerability_upload)
+        self.assertIn(
+            "path: release-evidence/*-vulnerabilities.json",
+            vulnerability_upload,
+        )
+        vulnerability_gate = release_workflow.split(
+            "- name: Gate fixable High/Critical image vulnerabilities", 1
+        )[1].split("- name: Preserve complete vulnerability evidence", 1)[0]
+        self.assertIn("if: always()", vulnerability_gate)
+        self.assertLess(
+            release_workflow.index("Audit backend image vulnerabilities"),
+            release_workflow.index("Generate backend SBOM"),
+        )
+        self.assertLess(
+            release_workflow.index("Gate fixable High/Critical image vulnerabilities"),
+            release_workflow.index("Generate backend SBOM"),
+        )
 
         workflow_text = "\n".join(
             path.read_text() for path in (ROOT / ".github/workflows").glob("*.yml")
