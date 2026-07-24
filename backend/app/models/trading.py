@@ -39,7 +39,10 @@ class TradingAccount(Base):
 
 class ExecutionIntent(Base):
     __tablename__ = "execution_intents"
-    __table_args__ = (UniqueConstraint("user_id", "idempotency_key", name="uq_execution_intents_user_key"),)
+    __table_args__ = (
+        UniqueConstraint("user_id", "idempotency_key", name="uq_execution_intents_user_key"),
+        UniqueConstraint("user_id", "ticket_id", name="uq_execution_intents_user_ticket"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)

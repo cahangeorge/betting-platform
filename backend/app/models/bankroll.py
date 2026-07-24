@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 
 class Bankroll(Base):
     __tablename__ = "bankrolls"
+    __table_args__ = (Index("ix_bankrolls_user_id", "user_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
@@ -45,6 +46,7 @@ class Bankroll(Base):
 
 class BookmakerAccount(Base):
     __tablename__ = "bookmaker_accounts"
+    __table_args__ = (Index("ix_bookmaker_accounts_bankroll_id", "bankroll_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     bankroll_id: Mapped[int] = mapped_column(ForeignKey("bankrolls.id", ondelete="CASCADE"), nullable=False)
@@ -61,7 +63,10 @@ class BookmakerAccount(Base):
 
 class LedgerEntry(Base):
     __tablename__ = "ledger_entries"
-    __table_args__ = (Index("ix_ledger_entries_bankroll_created_at", "bankroll_id", "created_at"),)
+    __table_args__ = (
+        Index("ix_ledger_entries_bankroll_id", "bankroll_id"),
+        Index("ix_ledger_entries_bankroll_created_at", "bankroll_id", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     bankroll_id: Mapped[int] = mapped_column(ForeignKey("bankrolls.id", ondelete="CASCADE"), nullable=False)

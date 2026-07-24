@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -72,6 +73,18 @@ def _event(
         message=message,
         payload=payload,
     )
+
+
+async def _fail_execution_intent(db: AsyncSession, intent: ExecutionIntent, message: str) -> ExecutionIntent:
+    previous = intent.status
+    intent.status = "failed"
+    intent.delivery_status = "completed"
+    intent.last_delivery_error = None
+    intent.error = message
+    intent.completed_at = datetime.now(timezone.utc)
+    db.add(_event(intent, "execution.failed", "failed", from_status=previous, message=message))
+    await db.flush()
+    return intent
 
 
 async def load_execution(db: AsyncSession, execution_id: int, user_id: int) -> ExecutionIntent | None:
@@ -210,13 +223,36 @@ async def create_execution_intent(
         delivery_status="pending",
         model_evaluation_id=(
             governance_assessment["model_evaluation_ids"][0]
-            if governance_assessment is not None
-            and len(governance_assessment["model_evaluation_ids"]) == 1
+            if governance_assessment is not None and len(governance_assessment["model_evaluation_ids"]) == 1
             else None
         ),
     )
-    db.add(intent)
-    await db.flush()
+    try:
+        async with db.begin_nested():
+            db.add(intent)
+            await db.flush()
+    except IntegrityError:
+        existing_key_result = await db.execute(
+            select(ExecutionIntent).where(
+                ExecutionIntent.user_id == user_id,
+                ExecutionIntent.idempotency_key == normalized_key,
+            )
+        )
+        existing_key = existing_key_result.scalar_one_or_none()
+        if existing_key is not None:
+            if existing_key.ticket_id != ticket_id or existing_key.trading_account_id != trading_account_id:
+                raise ValueError("Idempotency key is already used for a different execution") from None
+            return existing_key, False
+
+        existing_ticket_result = await db.execute(
+            select(ExecutionIntent).where(
+                ExecutionIntent.user_id == user_id,
+                ExecutionIntent.ticket_id == ticket_id,
+            )
+        )
+        if existing_ticket_result.scalar_one_or_none() is not None:
+            raise ValueError("A paper execution already exists for this ticket") from None
+        raise
     db.add(
         _event(
             intent,
@@ -258,40 +294,18 @@ async def execute_paper_intent(db: AsyncSession, execution_id: int) -> Execution
                 now=datetime.now(timezone.utc),
             )
         except ValueError as exc:
-            intent.status = "failed"
-            intent.delivery_status = "completed"
-            intent.error = str(exc)
-            intent.completed_at = datetime.now(timezone.utc)
-            db.add(_event(intent, "execution.failed", "failed", from_status="queued", message=intent.error))
-            await db.flush()
-            return intent
+            return await _fail_execution_intent(db, intent, str(exc))
 
     try:
         instruction = FluminePaperAdapter().build_back_limit(price=float(intent.limit_price), size=float(intent.stake))
     except (RuntimeError, ValueError) as exc:
-        intent.status = "failed"
-        intent.delivery_status = "completed"
-        intent.error = f"Flumine paper instruction rejected: {exc}"
-        intent.completed_at = datetime.now(timezone.utc)
-        db.add(_event(intent, "execution.failed", "failed", from_status="queued", message=intent.error))
-        await db.flush()
-        return intent
+        return await _fail_execution_intent(db, intent, f"Flumine paper instruction rejected: {exc}")
 
     account = await db.get(TradingAccount, intent.trading_account_id, with_for_update=True)
     if account is None or not account.enabled or account.mode != "paper" or account.provider != "paper-local":
-        intent.status = "failed"
-        intent.error = "Paper-local trading account is unavailable"
-        intent.completed_at = datetime.now(timezone.utc)
-        db.add(_event(intent, "execution.failed", "failed", from_status="queued", message=intent.error))
-        await db.flush()
-        return intent
+        return await _fail_execution_intent(db, intent, "Paper-local trading account is unavailable")
     if account.balance < intent.stake:
-        intent.status = "failed"
-        intent.error = "Insufficient paper trading balance"
-        intent.completed_at = datetime.now(timezone.utc)
-        db.add(_event(intent, "execution.failed", "failed", from_status="queued", message=intent.error))
-        await db.flush()
-        return intent
+        return await _fail_execution_intent(db, intent, "Insufficient paper trading balance")
 
     intent.status = "accepted"
     db.add(_event(intent, "execution.accepted", "accepted", from_status="queued"))
@@ -318,8 +332,7 @@ async def execute_paper_intent(db: AsyncSession, execution_id: int) -> Execution
             "filled",
             from_status="accepted",
             message=(
-                "Flumine BACK LIMIT contract filled locally at the persisted odds price; "
-                "no external order was sent."
+                "Flumine BACK LIMIT contract filled locally at the persisted odds price; no external order was sent."
             ),
             payload={
                 "framework": instruction.framework,

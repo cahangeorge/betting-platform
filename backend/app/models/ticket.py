@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Index, Integer, Numeric, String, func
+from sqlalchemy import JSON, DateTime, Float, ForeignKey, Index, Integer, Numeric, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models import Base
@@ -18,7 +18,13 @@ if TYPE_CHECKING:
 
 class Ticket(Base):
     __tablename__ = "tickets"
-    __table_args__ = (Index("ix_tickets_open_exposure", "bankroll_id", "status", "created_at"),)
+    __table_args__ = (
+        Index("ix_tickets_user_id", "user_id"),
+        Index("ix_tickets_bankroll_id", "bankroll_id"),
+        Index("ix_tickets_batch_id", "batch_id"),
+        Index("ix_tickets_user_status_created", "user_id", "status", "created_at"),
+        Index("ix_tickets_open_exposure", "bankroll_id", "status", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
@@ -54,12 +60,21 @@ class Ticket(Base):
 
 class TicketBatch(Base):
     __tablename__ = "ticket_batches"
-    __table_args__ = (Index("ix_ticket_batches_bankroll_revision", "bankroll_id", "revision"),)
+    __table_args__ = (
+        Index("ix_ticket_batches_bankroll_revision", "bankroll_id", "revision"),
+        UniqueConstraint("scheduled_job_run_id", name="uq_ticket_batches_scheduled_job_run"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     bankroll_id: Mapped[int | None] = mapped_column(ForeignKey("bankrolls.id", ondelete="SET NULL"), nullable=True)
     source_prediction_run_id: Mapped[int | None] = mapped_column(
         ForeignKey("prediction_runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    # A scheduled run may be delivered again after the business transaction
+    # commits but before the worker persists its terminal state. This durable
+    # key turns replay into a lookup instead of a second ticket batch.
+    scheduled_job_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("scheduled_job_runs.id", ondelete="SET NULL"), nullable=True, index=True
     )
     name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     strategy: Mapped[str | None] = mapped_column(String(100), nullable=True)
@@ -107,6 +122,11 @@ class TicketBatch(Base):
 
 class TicketLeg(Base):
     __tablename__ = "ticket_legs"
+    __table_args__ = (
+        Index("ix_ticket_legs_ticket_id", "ticket_id"),
+        Index("ix_ticket_legs_ticket_status", "ticket_id", "status"),
+        Index("ix_ticket_legs_model_prediction_id", "model_prediction_id"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     ticket_id: Mapped[int] = mapped_column(ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False)
@@ -142,6 +162,7 @@ class TicketLeg(Base):
 
 class BetPlacement(Base):
     __tablename__ = "bet_placements"
+    __table_args__ = (Index("ix_bet_placements_ticket_id", "ticket_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     ticket_id: Mapped[int] = mapped_column(ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False)

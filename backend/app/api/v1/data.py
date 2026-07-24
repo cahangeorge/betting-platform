@@ -1,4 +1,4 @@
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Response, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +21,11 @@ from app.schemas.data import (
     WorldCupPipelineRequest,
 )
 from app.schemas.job import ScheduledJobRunPageResponse, ScheduledJobRunResponse
+from app.services.job_creation_idempotency import (
+    create_idempotent_job,
+    normalize_idempotency_key,
+    request_fingerprint,
+)
 from app.services.run_authorization import can_read_run, can_read_scrape_job, stamp_owner
 from app.services.scheduled_jobs import (
     TaskEnqueueError,
@@ -57,10 +62,34 @@ async def _require_dataset_access(db: AsyncSession, dataset: ScrapedDataset, use
 @router.post("/scrape", response_model=ScrapeJobResponse, status_code=201)
 async def start_scrape_job(
     body: ScrapeJobCreateRequest,
+    response: Response,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    job = await create_scrape_job(db, body.job_type, body.league, stamp_owner(body.params, user.id))
+    async def create() -> ScrapeJob:
+        return await create_scrape_job(db, body.job_type, body.league, stamp_owner(body.params, user.id))
+
+    try:
+        key = normalize_idempotency_key(idempotency_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if key is None:
+        return await create()
+    try:
+        job, created = await create_idempotent_job(
+            db,
+            user_id=user.id,
+            operation="scrape_job_create",
+            idempotency_key=key,
+            fingerprint=request_fingerprint(body.model_dump(mode="json")),
+            job_model=ScrapeJob,
+            create=create,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    if not created:
+        response.status_code = status.HTTP_200_OK
     return job
 
 

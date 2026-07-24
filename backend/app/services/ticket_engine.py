@@ -541,9 +541,7 @@ def _evaluate_ticket_candidates(
             )
             if value
         )
-        candidate["league_ids"] = tuple(
-            value for value in (getattr(match, "competition", None),) if value
-        )
+        candidate["league_ids"] = tuple(value for value in (getattr(match, "competition", None),) if value)
         candidates.append(candidate)
         eligible_by_run[str(prediction.run_id)] += 1
 
@@ -981,9 +979,7 @@ async def preflight_ticket_generation(
                 ticket_format=normalized_format,
                 match_ids=frozenset(int(candidate["match_id"]) for candidate in selected),
                 team_ids=frozenset(team for candidate in selected for team in candidate.get("team_ids", ())),
-                league_ids=frozenset(
-                    league for candidate in selected for league in candidate.get("league_ids", ())
-                ),
+                league_ids=frozenset(league for candidate in selected for league in candidate.get("league_ids", ())),
                 league_kickoffs=_candidate_league_kickoffs(selected),
                 accumulator_risk_acknowledged=accumulator_risk_acknowledged,
                 is_automated=automated,
@@ -1388,9 +1384,7 @@ async def create_manual_ticket(
         )
     except StakingError as exc:
         risk_payload["allowed"] = False
-        risk_payload["blockers"].append(
-            {"code": exc.code, "message": str(exc), "scope": "staking"}
-        )
+        risk_payload["blockers"].append({"code": exc.code, "message": str(exc), "scope": "staking"})
         raise TicketManualRiskConflictError(
             "Manual ticket stake cannot be verified by the active staking policy",
             report,
@@ -1460,6 +1454,7 @@ async def generate_tickets(
     run_id: int | None = None,
     run_ids: list[int] | None = None,
     prediction_ids: list[int] | None = None,
+    scheduled_job_run_id: int | None = None,
 ) -> tuple[TicketBatch, list[Ticket]]:
     if ticket_count < 1:
         raise ValueError("ticket_count must be at least 1")
@@ -1484,13 +1479,23 @@ async def generate_tickets(
     if prediction_ids is not None and not prediction_ids:
         raise ValueError("prediction_ids must contain at least one prediction ID")
 
+    if scheduled_job_run_id is not None:
+        existing_result = await db.execute(
+            select(TicketBatch)
+            .options(selectinload(TicketBatch.tickets))
+            .where(TicketBatch.scheduled_job_run_id == scheduled_job_run_id)
+        )
+        existing_batch = existing_result.scalar_one_or_none()
+        if existing_batch is not None:
+            return existing_batch, list(existing_batch.tickets)
+
     normalized_format = (ticket_format or _format_from_difficulty(difficulty)).strip().lower()
     if normalized_format not in TICKET_FORMAT_LEGS:
         raise ValueError("ticket_format must be one of: single, double, treble")
     if difficulty is not None and _format_from_difficulty(difficulty) != normalized_format:
         raise ValueError("difficulty and ticket_format describe different ticket formats")
     legs_per_ticket = TICKET_FORMAT_LEGS[normalized_format]
-    difficulty = (difficulty or {"single": "safe", "double": "balanced", "treble": "aggressive"}[normalized_format])
+    difficulty = difficulty or {"single": "safe", "double": "balanced", "treble": "aggressive"}[normalized_format]
     normalized_markets = {str(market).strip().lower() for market in market_types}
     if not normalized_markets:
         raise ValueError("market_types must contain at least one market")
@@ -1819,6 +1824,7 @@ async def generate_tickets(
     batch = TicketBatch(
         bankroll_id=bankroll_id,
         source_prediction_run_id=selected_run_id,
+        scheduled_job_run_id=scheduled_job_run_id,
         name=f"Generated {normalized_format} tickets",
         strategy=normalized_format,
         tickets_count=0,
@@ -2043,8 +2049,7 @@ async def activate_ticket_batch(
             )
 
     uses_controlled_contract = bool(
-        getattr(batch, "risk_policy_id", None)
-        or int((report.get("quote_contract_version") or 0)) == 1
+        getattr(batch, "risk_policy_id", None) or int((report.get("quote_contract_version") or 0)) == 1
     )
     quote_updates: list[tuple[TicketLeg, object, float, float]] = []
     if uses_controlled_contract:
@@ -2079,9 +2084,8 @@ async def activate_ticket_batch(
         )
         if active_policy_row is None or active_policy is None:
             raise TicketActivationConflictError("Risk policy is no longer configured; refresh the batch")
-        if (
-            active_policy_row.id != getattr(batch, "risk_policy_id", None)
-            or active_policy_row.version != getattr(batch, "risk_policy_version", None)
+        if active_policy_row.id != getattr(batch, "risk_policy_id", None) or active_policy_row.version != getattr(
+            batch, "risk_policy_version", None
         ):
             raise TicketActivationConflictError("Risk policy changed; refresh and review the batch")
         accepted = set(accepted_warning_codes or [])
@@ -2117,9 +2121,7 @@ async def activate_ticket_batch(
                     team_ids=frozenset(team_scope),
                     league_ids=frozenset(league_scope),
                     league_kickoffs=_match_league_kickoffs(scoped_matches),
-                    accumulator_risk_acknowledged=bool(
-                        report.get("request", {}).get("accumulator_risk_acknowledged")
-                    ),
+                    accumulator_risk_acknowledged=bool(report.get("request", {}).get("accumulator_risk_acknowledged")),
                     is_automated=False,
                 ),
             )

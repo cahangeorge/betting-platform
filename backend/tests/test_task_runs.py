@@ -425,6 +425,46 @@ async def test_outbox_enqueue_failure_remains_retryable_then_publishes(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_stale_published_outbox_replays_only_an_unclaimed_queued_run(monkeypatch):
+    db = _FakeDb()
+    run = await create_task_run(db, task_type="scrape_job", scrape_job_id=45, transport="taskiq")
+    outbox = await create_task_outbox(db, run, task_name="scrape_job", transport="taskiq", max_attempts=3)
+    outbox.status = "published"
+    outbox.attempts = 1
+    outbox.published_at = datetime.now(timezone.utc) - timedelta(minutes=20)
+
+    async def replay_send(_run, _outbox):
+        return "task-replayed-2"
+
+    monkeypatch.setattr(scheduled_jobs, "_send_outbox_run", replay_send)
+
+    replayed = await scheduled_jobs._replay_stale_published_outbox_entry(db, outbox)
+
+    assert replayed is run
+    assert run.status == "queued"
+    assert outbox.status == "published"
+    assert outbox.attempts == 2
+    assert run.transport_task_id == "task-replayed-2"
+
+
+@pytest.mark.asyncio
+async def test_stale_published_outbox_exhaustion_marks_delivery_unconfirmed():
+    db = _FakeDb()
+    run = await create_task_run(db, task_type="scrape_job", scrape_job_id=46, transport="taskiq")
+    outbox = await create_task_outbox(db, run, task_name="scrape_job", transport="taskiq", max_attempts=2)
+    outbox.status = "published"
+    outbox.attempts = 2
+    outbox.published_at = datetime.now(timezone.utc) - timedelta(minutes=40)
+
+    replayed = await scheduled_jobs._replay_stale_published_outbox_entry(db, outbox)
+
+    assert replayed is None
+    assert outbox.status == "failed"
+    assert run.status == "timed_out"
+    assert run.detail == "task_delivery_unconfirmed"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("transport", ["inprocess", "taskiq"])
 async def test_common_executor_routes_both_transports_through_same_run_path(monkeypatch, transport):
     run = SimpleNamespace(id=77, scheduled_job_id=None, task_type="scrape_job", transport=transport)

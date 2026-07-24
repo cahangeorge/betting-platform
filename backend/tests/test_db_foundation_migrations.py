@@ -15,7 +15,11 @@ from app.models.risk import BankrollRiskPolicy, BankrollRiskState
 def test_foundation_revisions_form_one_linear_head() -> None:
     script = ScriptDirectory.from_config(Config("alembic.ini"))
 
-    assert script.get_heads() == ["021"]
+    assert script.get_heads() == ["025"]
+    assert script.get_revision("025").down_revision == "024"
+    assert script.get_revision("024").down_revision == "023"
+    assert script.get_revision("023").down_revision == "022"
+    assert script.get_revision("022").down_revision == "021"
     assert script.get_revision("021").down_revision == "020"
     assert script.get_revision("020").down_revision == "019"
     assert script.get_revision("019").down_revision == "018"
@@ -41,6 +45,40 @@ def test_foundation_models_create_on_clean_sqlite_schema() -> None:
         "model_monitoring_snapshots",
     }
     assert expected <= set(Base.metadata.tables)
+
+
+def test_execution_intents_allow_only_one_intent_per_user_ticket() -> None:
+    execution_intents = Base.metadata.tables["execution_intents"]
+    unique_columns = {
+        tuple(column.name for column in constraint.columns)
+        for constraint in execution_intents.constraints
+        if constraint.__class__.__name__ == "UniqueConstraint"
+    }
+
+    assert ("user_id", "idempotency_key") in unique_columns
+    assert ("user_id", "ticket_id") in unique_columns
+
+
+def test_scheduled_ticket_generation_has_one_database_enforced_batch_per_run() -> None:
+    ticket_batches = Base.metadata.tables["ticket_batches"]
+    unique_columns = {
+        tuple(column.name for column in constraint.columns)
+        for constraint in ticket_batches.constraints
+        if constraint.__class__.__name__ == "UniqueConstraint"
+    }
+
+    assert ("scheduled_job_run_id",) in unique_columns
+
+
+def test_job_creation_idempotency_is_scoped_to_user_and_operation() -> None:
+    records = Base.metadata.tables["job_creation_idempotency"]
+    unique_columns = {
+        tuple(column.name for column in constraint.columns)
+        for constraint in records.constraints
+        if constraint.__class__.__name__ == "UniqueConstraint"
+    }
+
+    assert ("user_id", "operation", "idempotency_key") in unique_columns
 
 
 def test_risk_policy_is_explicit_and_hard_caps_are_database_enforced() -> None:
@@ -126,6 +164,4 @@ def test_quote_snapshot_uses_decimal_prices_and_revisioned_append_only_stages() 
         "ix_ticket_leg_quote_snapshots_ticket_leg_id",
         "ix_ticket_leg_quote_snapshots_odds_snapshot_id",
     } <= {index.name for index in table.indexes}
-    assert "ix_ticket_leg_quote_snapshots_leg_stage_revision" not in {
-        index.name for index in table.indexes
-    }
+    assert "ix_ticket_leg_quote_snapshots_leg_stage_revision" not in {index.name for index in table.indexes}

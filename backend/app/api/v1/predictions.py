@@ -207,14 +207,14 @@ def _age_seconds(timestamp: datetime | None, now: datetime) -> int | None:
     return max(0, int((now - timestamp).total_seconds()))
 
 
-async def _broadcast_live_prediction_update_if_relevant(result: dict) -> None:
+async def _broadcast_live_prediction_update_if_relevant(result: dict, *, user_id: int) -> None:
     run_id = result.get("run_id")
     status = result.get("status")
     if not isinstance(run_id, int) or not isinstance(status, str):
         return
     if status not in LIVE_PREDICTION_BROADCAST_STATUSES:
         return
-    await broadcast_prediction_update(run_id=run_id, status=status)
+    await broadcast_prediction_update(run_id=run_id, status=status, user_id=user_id)
 
 
 def _build_value_candidates(
@@ -378,7 +378,7 @@ async def create_prediction_run(
         date_to=body.date_to,
         max_goals=body.max_goals,
     )
-    await _broadcast_live_prediction_update_if_relevant(result)
+    await _broadcast_live_prediction_update_if_relevant(result, user_id=user.id)
     return result
 
 
@@ -402,7 +402,7 @@ async def create_ensemble_run(
         target_mode=body.target_mode,
         max_goals=body.max_goals,
     )
-    await _broadcast_live_prediction_update_if_relevant(result)
+    await _broadcast_live_prediction_update_if_relevant(result, user_id=user.id)
     return result
 
 

@@ -1,13 +1,16 @@
+import asyncio
 from datetime import datetime, timezone
+from io import StringIO
 from types import SimpleNamespace
 
 import httpx
 import pytest
-from fastapi import HTTPException, Response
+from fastapi import HTTPException, Request, Response
 from pydantic import ValidationError
 
 from app.api.deps import get_current_user
 from app.api.v1 import auth as auth_api
+from app.config import Settings
 from app.database import get_db
 from app.main import app
 from app.models.user import Session, User
@@ -34,14 +37,16 @@ class _RefreshDb:
         self.consumable_sessions = consumable_sessions
         self.rotated_sessions = []
 
-    async def execute(self, _statement):
-        consumed = self.consumable_sessions > 0
-        if consumed:
-            self.consumable_sessions -= 1
+    async def execute(self, statement):
+        value = self.user if getattr(statement, "is_select", False) else None
+        if not getattr(statement, "is_select", False):
+            value = 1 if self.consumable_sessions > 0 else None
+            if value is not None:
+                self.consumable_sessions -= 1
 
         class _Result:
             def scalar_one_or_none(self):
-                return 1 if consumed else None
+                return value
 
         return _Result()
 
@@ -73,9 +78,7 @@ def _auth_user(*, user_id: int = 7, is_admin: bool = False):
 
 def _cookie_headers(response: Response) -> list[str]:
     return [
-        value.decode("latin-1")
-        for key, value in response.raw_headers
-        if key.decode("latin-1").lower() == "set-cookie"
+        value.decode("latin-1") for key, value in response.raw_headers if key.decode("latin-1").lower() == "set-cookie"
     ]
 
 
@@ -245,3 +248,210 @@ async def test_logout_revokes_the_presented_refresh_session_and_clears_cookies()
     headers = _cookie_headers(response)
     assert any(header.startswith('access_token=""') and "Max-Age=0" in header for header in headers)
     assert any(header.startswith('refresh_token=""') and "Max-Age=0" in header for header in headers)
+
+
+@pytest.mark.asyncio
+async def test_auth_rate_limit_uses_real_json_audit_sink_without_pii(monkeypatch):
+    await auth_api.auth_attempt_limiter.reset()
+    monkeypatch.setattr(auth_api, "settings", _rate_settings(identity_max=1, source_max=10))
+    sink = StringIO()
+    handler = next(handler for handler in auth_api.logger.handlers if getattr(handler, "_bet_auth_audit_sink", False))
+    original_stream = handler.setStream(sink)
+    request = Request({"type": "http", "client": ("198.51.100.17", 4567)})
+    try:
+        await auth_api._enforce_auth_rate_limit(action="login", request=request)
+        await auth_api._record_auth_failure(action="login", identity="audit@example.com")
+        with pytest.raises(HTTPException):
+            await auth_api._record_auth_failure(action="login", identity="audit@example.com")
+    finally:
+        handler.setStream(original_stream)
+
+    output = sink.getvalue()
+    assert '"event":"auth_audit"' in output
+    assert '"action":"login"' in output
+    assert '"outcome":"rate_limited"' in output
+    assert "198.51.100.17" not in output
+    assert "audit@example.com" not in output
+    await auth_api.auth_attempt_limiter.reset()
+
+
+def _rate_settings(*, identity_max: int = 10, source_max: int = 1000, max_sources: int = 10, max_identities: int = 10):
+    return SimpleNamespace(
+        auth_rate_limit_enabled=True,
+        auth_rate_limit_window_seconds=60,
+        auth_login_max_attempts=identity_max,
+        auth_signup_max_attempts=identity_max,
+        auth_source_max_attempts=source_max,
+        auth_rate_limit_max_sources=max_sources,
+        auth_rate_limit_max_identities=max_identities,
+        cookie_secure=False,
+        access_token_expire_minutes=30,
+        refresh_token_expire_days=7,
+    )
+
+
+@pytest.mark.asyncio
+async def test_successful_logins_do_not_consume_identity_failure_limit(monkeypatch):
+    await auth_api.auth_attempt_limiter.reset()
+    monkeypatch.setattr(auth_api, "settings", _rate_settings(identity_max=1, source_max=100))
+    user = SimpleNamespace(id=7, email="user@example.com", password_hash=auth_api.hash_password("password123"))
+
+    class Db:
+        async def execute(self, _statement):
+            return SimpleNamespace(scalar_one_or_none=lambda: user)
+
+        def add(self, _value):
+            return None
+
+        async def commit(self):
+            return None
+
+    request = Request({"type": "http", "client": ("127.0.0.1", 1234)})
+    body = LoginRequest(email="user@example.com", password="password123")
+    for _ in range(10):
+        await auth_api.login(body=body, request=request, response=Response(), db=Db())
+    assert not auth_api.auth_attempt_limiter._identities
+
+    with pytest.raises(HTTPException) as first_failure:
+        await auth_api.login(
+            body=LoginRequest(email="user@example.com", password="wrong-password"),
+            request=request,
+            response=Response(),
+            db=Db(),
+        )
+    assert first_failure.value.status_code == 401
+    with pytest.raises(HTTPException) as limited:
+        await auth_api.login(
+            body=LoginRequest(email="user@example.com", password="wrong-password"),
+            request=request,
+            response=Response(),
+            db=Db(),
+        )
+    assert limited.value.status_code == 429
+    await auth_api.auth_attempt_limiter.reset()
+
+
+@pytest.mark.asyncio
+async def test_source_spray_identity_bounds_and_expiry_are_fail_closed(monkeypatch):
+    limiter = auth_api.AuthAttemptLimiter()
+    monkeypatch.setattr(auth_api, "settings", _rate_settings(source_max=2, max_sources=1, max_identities=2))
+
+    assert await limiter.allow_source(action="signup", source="source-one")
+    assert await limiter.allow_source(action="signup", source="source-one")
+    assert not await limiter.allow_source(action="signup", source="source-one")
+    assert len(limiter._sources) == 1
+    assert await limiter.record_identity_failure(action="signup", identity="one@example.com")
+    assert await limiter.record_identity_failure(action="signup", identity="two@example.com")
+    assert not await limiter.record_identity_failure(action="signup", identity="three@example.com")
+    assert len(limiter._identities) == 2
+    assert all("@" not in key for key in limiter._identities)
+
+
+@pytest.mark.asyncio
+async def test_auth_rate_limit_heap_expiry_releases_bounded_bucket_capacity(monkeypatch):
+    limiter = auth_api.AuthAttemptLimiter()
+    monkeypatch.setattr(auth_api, "settings", _rate_settings(max_sources=1, max_identities=1))
+    assert await limiter.allow_source(action="login", source="source-one")
+    assert await limiter.record_identity_failure(action="login", identity="one@example.com")
+    limiter._prune_expired_buckets(now=float("inf"), window=60)
+
+    assert await limiter.allow_source(action="login", source="source-two")
+    assert await limiter.record_identity_failure(action="login", identity="two@example.com")
+    assert len(limiter._sources) == 1
+    assert len(limiter._identities) == 1
+
+
+@pytest.mark.asyncio
+async def test_auth_rate_limit_fails_closed_when_the_guard_is_unavailable(monkeypatch):
+    async def unavailable(**_kwargs):
+        raise RuntimeError("guard unavailable")
+
+    monkeypatch.setattr(auth_api.auth_attempt_limiter, "allow_source", unavailable)
+    request = Request({"type": "http", "client": ("198.51.100.18", 4567)})
+
+    with pytest.raises(HTTPException) as exc_info:
+        await auth_api._enforce_auth_rate_limit(action="signup", request=request)
+
+    assert exc_info.value.status_code == 503
+
+
+def test_secure_environments_require_auth_rate_limiting():
+    with pytest.raises(ValidationError, match="BET_AUTH_RATE_LIMIT_ENABLED"):
+        Settings(
+            environment="staging",
+            jwt_secret="x" * 32,
+            cookie_secure=True,
+            auth_rate_limit_enabled=False,
+        )
+
+
+class _SerializedSessionDb:
+    def __init__(self, user, *, pause_refresh: bool = False, pause_logout: bool = False):
+        self.user = user
+        self.sessions = {"sid"}
+        self.lock = asyncio.Lock()
+        self.pause_refresh = pause_refresh
+        self.pause_logout = pause_logout
+        self.refresh_delete_started = asyncio.Event()
+        self.logout_delete_started = asyncio.Event()
+        self.release_delete = asyncio.Event()
+
+    async def execute(self, statement):
+        if getattr(statement, "is_select", False):
+            await self.lock.acquire()
+            return SimpleNamespace(scalar_one_or_none=lambda: self.user)
+        sql = str(statement)
+        is_refresh_delete = "session_id" in sql
+        if is_refresh_delete:
+            self.refresh_delete_started.set()
+            if self.pause_refresh:
+                await self.release_delete.wait()
+            consumed = "sid" in self.sessions
+            self.sessions.discard("sid")
+            return SimpleNamespace(scalar_one_or_none=lambda: 1 if consumed else None)
+        self.logout_delete_started.set()
+        if self.pause_logout:
+            await self.release_delete.wait()
+        self.sessions.clear()
+        return SimpleNamespace(scalar_one_or_none=lambda: None)
+
+    def add(self, session):
+        self.sessions.add(session.session_id)
+
+    async def commit(self):
+        if self.lock.locked():
+            self.lock.release()
+
+
+@pytest.mark.asyncio
+async def test_refresh_then_logout_revokes_the_rotated_session_after_lock_interleaving():
+    user = _auth_user(user_id=7)
+    db = _SerializedSessionDb(user, pause_refresh=True)
+    token = create_refresh_token(user.id, "sid")
+    refresh_task = asyncio.create_task(auth_api.refresh_auth(Response(), token, db))
+    await db.refresh_delete_started.wait()
+    logout_task = asyncio.create_task(auth_api.logout(Response(), token, db))
+    await asyncio.sleep(0)
+    db.release_delete.set()
+    await refresh_task
+    await logout_task
+
+    assert db.sessions == set()
+
+
+@pytest.mark.asyncio
+async def test_logout_then_refresh_cannot_create_a_new_session_after_lock_interleaving():
+    user = _auth_user(user_id=7)
+    db = _SerializedSessionDb(user, pause_logout=True)
+    token = create_refresh_token(user.id, "sid")
+    logout_task = asyncio.create_task(auth_api.logout(Response(), token, db))
+    await db.logout_delete_started.wait()
+    refresh_task = asyncio.create_task(auth_api.refresh_auth(Response(), token, db))
+    await asyncio.sleep(0)
+    db.release_delete.set()
+    await logout_task
+    with pytest.raises(HTTPException) as refresh_error:
+        await refresh_task
+
+    assert refresh_error.value.status_code == 401
+    assert db.sessions == set()

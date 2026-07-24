@@ -2,13 +2,19 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
+from pydantic import ValidationError
 
+from app.api.v1 import jobs as jobs_api
 from app.models.job import ScheduledJob, ScheduledJobRun
+from app.schemas.job import ScheduledJobCreateRequest
 from app.services import scheduled_jobs
 from app.services.result_settlement import SettlementRunSummary
 from app.services.scheduled_jobs import (
     SCHEDULED_JOB_OWNER_CONFIG_KEY,
+    SCHEDULED_JOB_QUARANTINE_CONFIG_KEY,
     dispatch_scheduled_job,
+    enqueue_due_scheduled_jobs,
     next_run_from_cron,
     scheduled_job_due,
     stamp_created_by,
@@ -20,7 +26,8 @@ def test_next_run_from_ui_cron_patterns():
 
     assert next_run_from_cron("0 */6 * * *", after=base) == base + timedelta(hours=6)
     assert next_run_from_cron("0 0 */2 * *", after=base) == base + timedelta(days=2)
-    assert next_run_from_cron("invalid", after=base) == base + timedelta(hours=1)
+    with pytest.raises(ValueError, match="cron_expression"):
+        next_run_from_cron("invalid", after=base)
 
 
 def test_scheduled_job_due_requires_enabled_and_next_run():
@@ -37,6 +44,200 @@ def test_stamp_created_by_preserves_existing_config():
 
     assert config["area"] == "prediction"
     assert config[SCHEDULED_JOB_OWNER_CONFIG_KEY] == 12
+
+
+def test_create_request_rejects_spoofed_owner_and_invalid_task_input_before_persistence():
+    with pytest.raises(ValidationError, match="ownership"):
+        ScheduledJobCreateRequest(
+            name="spoof",
+            task_type="generate_tickets",
+            cron_expression="0 */6 * * *",
+            config={"_created_by_user_id": 999, "bankroll_id": 1},
+        )
+    with pytest.raises(ValidationError, match="Unsupported scheduled task type"):
+        ScheduledJobCreateRequest(name="bad", task_type="shell", cron_expression="0 */6 * * *", config={})
+    with pytest.raises(ValidationError, match="cron_expression"):
+        ScheduledJobCreateRequest(name="bad", task_type="scrape_odds", cron_expression="* * * * *", config={})
+
+
+def test_stamp_created_by_overwrites_a_cross_user_legacy_owner():
+    config = stamp_created_by({SCHEDULED_JOB_OWNER_CONFIG_KEY: 999, "user_id": 999}, 12)
+
+    assert config[SCHEDULED_JOB_OWNER_CONFIG_KEY] == 12
+    assert "user_id" not in config
+
+
+@pytest.mark.asyncio
+async def test_non_admin_run_due_requires_an_owned_job_selector():
+    with pytest.raises(HTTPException) as exc_info:
+        await jobs_api.run_due_jobs(
+            limit=10,
+            job_id=None,
+            db=SimpleNamespace(),
+            user=SimpleNamespace(id=7, is_admin=False),
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_run_due_scopes_non_admin_to_selected_owned_job(monkeypatch):
+    job = SimpleNamespace(id=41, config={SCHEDULED_JOB_OWNER_CONFIG_KEY: 7})
+
+    class _Db:
+        async def get(self, _model, job_id):
+            return job if job_id == job.id else None
+
+    async def fake_run_due(_db, *, limit, job_ids=None):
+        assert limit == 10
+        assert job_ids == [job.id]
+        return []
+
+    monkeypatch.setattr(jobs_api, "run_due_scheduled_jobs", fake_run_due)
+
+    result = await jobs_api.run_due_jobs(
+        limit=10,
+        job_id=job.id,
+        db=_Db(),
+        user=SimpleNamespace(id=7, is_admin=False),
+    )
+
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_non_admin_cannot_run_due_for_another_users_job(monkeypatch):
+    job = SimpleNamespace(id=42, config={SCHEDULED_JOB_OWNER_CONFIG_KEY: 8})
+
+    class _Db:
+        async def get(self, _model, _job_id):
+            return job
+
+    async def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("foreign job must not be enqueued")
+
+    monkeypatch.setattr(jobs_api, "run_due_scheduled_jobs", fail_if_called)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await jobs_api.run_due_jobs(
+            limit=10,
+            job_id=job.id,
+            db=_Db(),
+            user=SimpleNamespace(id=7, is_admin=False),
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_invalid_legacy_cron_is_quarantined_without_blocking_other_due_jobs(monkeypatch):
+    now = datetime(2026, 7, 24, 12, 0, tzinfo=timezone.utc)
+    invalid_job = SimpleNamespace(
+        id=41,
+        enabled=True,
+        cron_expression="* * * * *",
+        config={"area": "legacy"},
+        next_run=now - timedelta(minutes=1),
+        task_type="scrape_odds",
+        last_run=None,
+    )
+    valid_job = SimpleNamespace(
+        id=42,
+        enabled=True,
+        cron_expression="0 */6 * * *",
+        config={"area": "current"},
+        next_run=now - timedelta(minutes=1),
+        task_type="scrape_odds",
+        last_run=None,
+    )
+    run = SimpleNamespace(id=77, scheduled_job_id=valid_job.id, due_at=valid_job.next_run)
+
+    class _Result:
+        def scalars(self):
+            return self
+
+        def all(self):
+            return [invalid_job, valid_job]
+
+    class _Db:
+        commits = 0
+        flushes = 0
+
+        async def execute(self, _statement):
+            return _Result()
+
+        async def flush(self):
+            self.flushes += 1
+
+        async def commit(self):
+            self.commits += 1
+
+    async def create_run(*_args, **_kwargs):
+        return run
+
+    async def create_outbox(*_args, **_kwargs):
+        return SimpleNamespace()
+
+    async def publish(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(scheduled_jobs, "create_task_run", create_run)
+    monkeypatch.setattr(scheduled_jobs, "create_task_outbox", create_outbox)
+    monkeypatch.setattr(scheduled_jobs, "_publish_outbox_entry", publish)
+
+    db = _Db()
+    runs = await enqueue_due_scheduled_jobs(db, now=now, limit=10, transport="inprocess")
+
+    assert runs == [run]
+    assert invalid_job.enabled is False
+    assert invalid_job.next_run is None
+    assert invalid_job.config[SCHEDULED_JOB_QUARANTINE_CONFIG_KEY]["code"] == "invalid_cron_expression"
+    assert "cron_expression" in invalid_job.config[SCHEDULED_JOB_QUARANTINE_CONFIG_KEY]["detail"]
+    assert valid_job.next_run == now + timedelta(hours=6)
+    assert db.commits == 1
+
+
+@pytest.mark.asyncio
+async def test_downstream_value_error_does_not_quarantine_a_valid_scheduled_job(monkeypatch):
+    now = datetime(2026, 7, 24, 12, 0, tzinfo=timezone.utc)
+    job = SimpleNamespace(
+        id=43,
+        enabled=True,
+        cron_expression="0 */6 * * *",
+        config={"area": "current"},
+        next_run=now - timedelta(minutes=1),
+        task_type="scrape_odds",
+        last_run=None,
+    )
+
+    class _Result:
+        def scalars(self):
+            return self
+
+        def all(self):
+            return [job]
+
+    class _Db:
+        async def execute(self, _statement):
+            return _Result()
+
+        async def flush(self):
+            return None
+
+        async def commit(self):
+            raise AssertionError("valid downstream failures must not be committed as quarantines")
+
+    async def fail_create_run(*_args, **_kwargs):
+        raise ValueError("task payload is invalid")
+
+    monkeypatch.setattr(scheduled_jobs, "create_task_run", fail_create_run)
+
+    with pytest.raises(ValueError, match="task payload is invalid"):
+        await enqueue_due_scheduled_jobs(_Db(), now=now, limit=10, transport="inprocess")
+
+    assert job.enabled is True
+    assert job.config == {"area": "current"}
+    assert job.next_run == now - timedelta(minutes=1)
 
 
 @pytest.mark.asyncio
@@ -485,6 +686,30 @@ async def test_dispatch_ticket_generation_job_uses_ticket_engine(monkeypatch):
 
     assert result.status == "completed"
     assert result.detail == "ticket_batch:55; tickets:3"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_ticket_generation_uses_the_scheduled_run_as_the_idempotency_key(monkeypatch):
+    class FakeDb:
+        async def get(self, _model, user_id):
+            return SimpleNamespace(id=user_id)
+
+    async def fake_generate_tickets(**kwargs):
+        assert kwargs["scheduled_job_run_id"] == 812
+        return SimpleNamespace(id=55), [SimpleNamespace(id=1)]
+
+    monkeypatch.setattr(scheduled_jobs, "generate_tickets", fake_generate_tickets)
+    result = await dispatch_scheduled_job(
+        FakeDb(),
+        SimpleNamespace(
+            id=13,
+            task_type="generate_tickets",
+            config={SCHEDULED_JOB_OWNER_CONFIG_KEY: 21, "bankroll_id": 9, "market_types": ["1x2"]},
+        ),
+        scheduled_job_run_id=812,
+    )
+
+    assert result.status == "completed"
 
 
 @pytest.mark.asyncio

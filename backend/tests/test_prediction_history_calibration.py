@@ -54,7 +54,7 @@ async def test_execute_single_model_run_uses_one_year_before_earliest_target(mon
         return training
 
     async def fake_fetch_odds(*args, **kwargs):
-        observed_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+        observed_at = target.match_date - timedelta(minutes=1)
         return {
             91: [
                 SimpleNamespace(

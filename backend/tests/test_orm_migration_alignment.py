@@ -1,6 +1,7 @@
+from collections.abc import Iterable
 from decimal import Decimal
 
-from sqlalchemy import Numeric
+from sqlalchemy import Index, Numeric, UniqueConstraint
 from sqlalchemy.orm import configure_mappers
 
 from app.models import Base
@@ -85,9 +86,7 @@ def test_revision_020_monitoring_snapshots_have_explicit_tenant_ownership() -> N
         if constraint.__class__.__name__ == "UniqueConstraint"
     }
     assert ("user_id", "model_version_id", "scope_key", "window_ended_at") in unique_columns
-    assert "ix_model_monitoring_snapshots_user_version_scope" in {
-        index.name for index in monitoring.indexes
-    }
+    assert "ix_model_monitoring_snapshots_user_version_scope" in {index.name for index in monitoring.indexes}
 
 
 def test_new_lineage_relationships_can_be_configured_together() -> None:
@@ -108,3 +107,222 @@ def test_new_lineage_relationships_can_be_configured_together() -> None:
         class_name = mapper.class_.__name__
         if class_name in expected:
             assert expected[class_name] <= set(mapper.relationships.keys())
+
+
+def _predicate(index: Index) -> str | None:
+    predicate = index.dialect_options["postgresql"].get("where")
+    if predicate is None:
+        predicate = index.dialect_options["sqlite"].get("where")
+    return " ".join(str(predicate).split()) if predicate is not None else None
+
+
+def _index_inventory() -> dict[str, tuple[tuple[str, tuple[str, ...], bool, str | None], ...]]:
+    inventory: dict[str, list[tuple[str, tuple[str, ...], bool, str | None]]] = {}
+    for table in Base.metadata.tables.values():
+        inventory[table.name] = sorted(
+            (
+                index.name,
+                tuple(column.name for column in index.columns),
+                index.unique,
+                _predicate(index),
+            )
+            for index in table.indexes
+        )
+    return {table: tuple(indexes) for table, indexes in inventory.items()}
+
+
+def _unique_inventory() -> dict[str, set[tuple[str | None, tuple[str, ...]]]]:
+    return {
+        table.name: {
+            (constraint.name, tuple(constraint.columns.keys()))
+            for constraint in table.constraints
+            if isinstance(constraint, UniqueConstraint)
+        }
+        for table in Base.metadata.tables.values()
+    }
+
+
+def _assert_inventory_contains(
+    actual: dict[str, Iterable[tuple[str, tuple[str, ...], bool, str | None]]],
+    expected: dict[str, tuple[tuple[str, tuple[str, ...], bool, str | None], ...]],
+) -> None:
+    for table, specs in expected.items():
+        assert set(specs) <= set(actual[table]), table
+
+
+def test_historical_migration_indexes_are_declared_in_orm_metadata() -> None:
+    active_scrape = "scrape_job_id IS NOT NULL AND status IN ('queued', 'running')"
+    expected = {
+        # 001_initial
+        "sessions": (
+            ("ix_sessions_user_id", ("user_id",), False, None),
+            ("ix_sessions_expires_at", ("expires_at",), False, None),
+        ),
+        "matches": (
+            ("ix_matches_status", ("status",), False, None),
+            ("ix_matches_match_date", ("match_date",), False, None),
+            ("ix_matches_competition", ("competition",), False, None),
+        ),
+        "odds_entries": (
+            ("ix_odds_entries_match_id", ("match_id",), False, None),
+            ("ix_odds_entries_odds_snapshot_id", ("odds_snapshot_id",), False, None),
+        ),
+        "match_stats": (("ix_match_stats_match_id", ("match_id",), False, None),),
+        "match_sources": (("ix_match_sources_match_id", ("match_id",), False, None),),
+        "scrape_jobs": (
+            ("ix_scrape_jobs_status", ("status",), False, None),
+            ("ix_scrape_jobs_status_created", ("status", "created_at"), False, None),
+        ),
+        "scraped_datasets": (("ix_scraped_datasets_source", ("source",), False, None),),
+        "prediction_runs": (
+            ("ix_prediction_runs_user_id", ("user_id",), False, None),
+            ("ix_prediction_runs_user_status_created", ("user_id", "status", "created_at"), False, None),
+            ("ix_prediction_runs_model_version_id", ("model_version_id",), False, None),
+            ("ix_prediction_runs_training_fingerprint", ("training_data_fingerprint",), False, None),
+        ),
+        "bankrolls": (("ix_bankrolls_user_id", ("user_id",), False, None),),
+        "scheduled_jobs": (
+            ("ix_scheduled_jobs_enabled", ("enabled",), False, None),
+            ("ix_scheduled_jobs_enabled_next_run", ("enabled", "next_run"), False, None),
+        ),
+        "bookmaker_accounts": (("ix_bookmaker_accounts_bankroll_id", ("bankroll_id",), False, None),),
+        "tickets": (
+            ("ix_tickets_user_id", ("user_id",), False, None),
+            ("ix_tickets_bankroll_id", ("bankroll_id",), False, None),
+            ("ix_tickets_batch_id", ("batch_id",), False, None),
+            ("ix_tickets_user_status_created", ("user_id", "status", "created_at"), False, None),
+        ),
+        "ticket_legs": (
+            ("ix_ticket_legs_ticket_id", ("ticket_id",), False, None),
+            ("ix_ticket_legs_ticket_status", ("ticket_id", "status"), False, None),
+            ("ix_ticket_legs_model_prediction_id", ("model_prediction_id",), False, None),
+        ),
+        "bet_placements": (("ix_bet_placements_ticket_id", ("ticket_id",), False, None),),
+        "ledger_entries": (("ix_ledger_entries_bankroll_id", ("bankroll_id",), False, None),),
+        "model_predictions": (
+            ("ix_model_predictions_run_id", ("run_id",), False, None),
+            ("ix_model_predictions_match_id", ("match_id",), False, None),
+            ("ix_model_predictions_run_market", ("run_id", "market"), False, None),
+            ("ix_model_predictions_match_market", ("match_id", "market"), False, None),
+            ("ix_model_predictions_model_version_id", ("model_version_id",), False, None),
+            ("ix_model_predictions_odds_snapshot_id", ("odds_snapshot_id",), False, None),
+        ),
+        "execution_intents": (
+            ("ix_execution_intents_odds_snapshot_id", ("odds_snapshot_id",), False, None),
+            ("ix_execution_intents_model_evaluation_id", ("model_evaluation_id",), False, None),
+        ),
+        "ensemble_predictions": (
+            ("ix_ensemble_predictions_run_id", ("run_id",), False, None),
+            ("ix_ensemble_predictions_match_id", ("match_id",), False, None),
+        ),
+        "predictions": (("ix_predictions_session_id", ("session_id",), False, None),),
+        # 006_add_scheduled_job_runs
+        "scheduled_job_runs": (
+            ("ix_scheduled_job_runs_scheduled_job_id", ("scheduled_job_id",), False, None),
+            ("ix_scheduled_job_runs_scrape_job_id", ("scrape_job_id",), False, None),
+            ("ix_scheduled_job_runs_status", ("status",), False, None),
+            ("uq_scheduled_job_runs_active_scrape_task", ("task_type", "scrape_job_id"), True, active_scrape),
+            ("ix_scheduled_job_runs_job_created", ("scheduled_job_id", "created_at"), False, None),
+            ("uq_scheduled_job_runs_idempotency_key", ("idempotency_key",), True, None),
+            ("ix_scheduled_job_runs_model_evaluation_id", ("model_evaluation_id",), False, None),
+        ),
+        "scrape_job_logs": (
+            ("ix_scrape_job_logs_job_id", ("job_id",), False, None),
+            ("ix_scrape_job_logs_job_created", ("job_id", "created_at"), False, None),
+        ),
+        # 008_add_football_league_catalog
+        "football_league_catalog": (
+            ("ix_football_league_catalog_scrape_slug", ("scrape_slug",), False, None),
+            ("ix_football_league_catalog_country_slug", ("country_slug",), False, None),
+            ("ix_football_league_catalog_status", ("status",), False, None),
+        ),
+        # 009_add_async_task_delivery
+        "task_outbox": (
+            ("ix_task_outbox_run_id", ("run_id",), False, None),
+            ("ix_task_outbox_status", ("status",), False, None),
+            ("ix_task_outbox_pending", ("status", "available_at"), False, None),
+        ),
+        # 017_add_odds_quote_lineage
+        "odds_snapshots": (
+            ("ix_odds_snapshots_match_observed", ("match_id", "observed_at"), False, None),
+            ("ix_odds_snapshots_dataset_id", ("dataset_id",), False, None),
+            ("ix_odds_snapshots_scrape_job_id", ("scrape_job_id",), False, None),
+        ),
+        "ticket_leg_quote_snapshots": (
+            ("ix_ticket_leg_quote_snapshots_ticket_leg_id", ("ticket_leg_id",), False, None),
+            ("ix_ticket_leg_quote_snapshots_odds_snapshot_id", ("odds_snapshot_id",), False, None),
+            ("ix_ticket_leg_quote_snapshots_recorded_at", ("recorded_at",), False, None),
+        ),
+        # 019_add_model_governance and 020_add_monitoring_snapshot_ownership
+        "model_versions": (
+            ("ix_model_versions_model_key_status", ("model_key", "status"), False, None),
+            ("ix_model_versions_training_fingerprint", ("training_data_fingerprint",), False, None),
+        ),
+        "model_evaluations": (
+            ("ix_model_evaluations_version_scope", ("model_version_id", "scope_key", "created_at"), False, None),
+            ("ix_model_evaluations_status", ("status",), False, None),
+        ),
+        "model_evaluation_folds": (("ix_model_evaluation_folds_evaluation_id", ("evaluation_id",), False, None),),
+        "model_evaluation_predictions": (
+            ("ix_model_evaluation_predictions_fold_id", ("fold_id",), False, None),
+            ("ix_model_evaluation_predictions_match_market", ("match_id", "market"), False, None),
+        ),
+        "prediction_outcomes": (
+            ("ix_prediction_outcomes_model_version_id", ("model_version_id",), False, None),
+            ("ix_prediction_outcomes_resolved_at", ("resolved_at",), False, None),
+        ),
+        "model_certifications": (
+            ("ix_model_certifications_version_scope_status", ("model_version_id", "scope_key", "status"), False, None),
+            ("ix_model_certifications_valid_until", ("valid_until",), False, None),
+        ),
+        "model_monitoring_snapshots": (
+            (
+                "ix_model_monitoring_snapshots_version_scope",
+                ("model_version_id", "scope_key", "window_ended_at"),
+                False,
+                None,
+            ),
+            ("ix_model_monitoring_snapshots_severity", ("severity",), False, None),
+            (
+                "ix_model_monitoring_snapshots_user_version_scope",
+                ("user_id", "model_version_id", "scope_key", "window_ended_at"),
+                False,
+                None,
+            ),
+        ),
+    }
+
+    _assert_inventory_contains(_index_inventory(), expected)
+
+
+def test_historical_migration_unique_constraints_are_declared_in_orm_metadata() -> None:
+    expected = {
+        "users": {(None, ("email",))},
+        "sessions": {(None, ("session_id",))},
+        "football_league_catalog": {(None, ("scrape_slug",))},
+        "task_outbox": {("uq_task_outbox_run_id", ("run_id",))},
+        "odds_snapshots": {("uq_odds_snapshots_source_key", ("source", "source_key"))},
+        "ticket_leg_quote_snapshots": {
+            ("uq_ticket_leg_quote_snapshots_leg_stage_revision", ("ticket_leg_id", "stage", "revision"))
+        },
+        "model_versions": {
+            (
+                "uq_model_versions_identity",
+                ("model_key", "version", "strategy_config_hash", "training_data_fingerprint"),
+            )
+        },
+        "model_evaluation_folds": {("uq_model_evaluation_folds_number", ("evaluation_id", "fold_number"))},
+        "model_evaluation_predictions": {
+            ("uq_model_evaluation_predictions_target", ("fold_id", "match_id", "market", "selection"))
+        },
+        "prediction_outcomes": {("uq_prediction_outcomes_model_prediction_id", ("model_prediction_id",))},
+        "model_monitoring_snapshots": {
+            (
+                "uq_model_monitoring_snapshots_tenant_window",
+                ("user_id", "model_version_id", "scope_key", "window_ended_at"),
+            )
+        },
+    }
+    actual = _unique_inventory()
+    for table, constraints in expected.items():
+        assert constraints <= actual[table], table

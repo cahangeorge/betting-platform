@@ -8,7 +8,7 @@ class Base(DeclarativeBase):
 # ruff: noqa: E402
 from app.models.bankroll import Bankroll, BookmakerAccount, LedgerEntry
 from app.models.football_catalog import FootballLeagueCatalog
-from app.models.job import ScheduledJob, ScheduledJobRun, TaskOutbox
+from app.models.job import JobCreationIdempotency, ScheduledJob, ScheduledJobRun, TaskOutbox
 from app.models.match import Match, MatchResultCorrection, MatchSource, MatchStat, OddsEntry
 from app.models.model_governance import (
     ModelCertification,
@@ -66,6 +66,7 @@ __all__ = [
     "BankrollRiskPolicy",
     "BankrollRiskState",
     "ScheduledJob",
+    "JobCreationIdempotency",
     "ScheduledJobRun",
     "TaskOutbox",
     "Strategy",

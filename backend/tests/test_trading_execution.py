@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from app.adapters.betfair_readonly import BetfairReadOnlyAdapter
 from app.adapters.flumine_paper import FluminePaperAdapter
@@ -53,6 +54,16 @@ class _FakeDb:
             if getattr(value, "id", None) is None:
                 value.id = self.next_id
                 self.next_id += 1
+
+    def begin_nested(self):
+        class _Nested:
+            async def __aenter__(self):
+                return None
+
+            async def __aexit__(self, *_args):
+                return False
+
+        return _Nested()
 
 
 def _paper_domain():
@@ -155,6 +166,92 @@ async def test_idempotency_returns_existing_intent_without_new_work():
     assert created is False
     assert returned is existing
     assert db.added == []
+
+
+@pytest.mark.asyncio
+async def test_concurrent_ticket_execution_conflict_is_reported_without_second_intent():
+    user_id, account, ticket, odds = _paper_domain()
+    winner = ExecutionIntent(
+        id=34,
+        user_id=user_id,
+        trading_account_id=account.id,
+        ticket_id=ticket.id,
+        odds_entry_id=odds.id,
+        idempotency_key="winner-key",
+        market="1x2",
+        selection="home",
+        stake=10,
+        limit_price=2.25,
+    )
+
+    class _RacingDb(_FakeDb):
+        def __init__(self):
+            super().__init__(account=account, ticket=ticket, odds=odds)
+            self.conflict_raised = False
+
+        async def execute(self, statement):
+            if self.conflict_raised:
+                if "idempotency_key_1" in statement.compile().params:
+                    return _ScalarResult(None)
+                return _ScalarResult(winner)
+            return await super().execute(statement)
+
+        async def flush(self):
+            pending_intent = next(
+                (value for value in self.added if isinstance(value, ExecutionIntent) and value.id is None),
+                None,
+            )
+            if pending_intent is not None:
+                self.conflict_raised = True
+                raise IntegrityError("INSERT INTO execution_intents", {}, RuntimeError("unique conflict"))
+            await super().flush()
+
+    db = _RacingDb()
+    with pytest.raises(ValueError, match="already exists for this ticket"):
+        await create_execution_intent(
+            db,
+            user_id=user_id,
+            trading_account_id=account.id,
+            ticket_id=ticket.id,
+            idempotency_key="loser-key",
+            side="BACK",
+            order_type="LIMIT",
+            settings=Settings(trading_enabled=True, trading_paper_enabled=True),
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["account", "balance"])
+async def test_terminal_execution_failures_complete_delivery(failure):
+    user_id, account, ticket, odds = _paper_domain()
+    intent = ExecutionIntent(
+        id=33,
+        user_id=user_id,
+        trading_account_id=account.id,
+        ticket_id=ticket.id,
+        odds_entry_id=odds.id,
+        idempotency_key=f"terminal-{failure}",
+        mode="paper",
+        market="1x2",
+        selection="home",
+        side="BACK",
+        order_type="LIMIT",
+        stake=110 if failure == "balance" else 10,
+        limit_price=2.25,
+        status="queued",
+        delivery_status="publishing",
+    )
+    db = _FakeDb(account=account, ticket=ticket, odds=odds)
+    db.responses = [intent]
+    if failure == "account":
+        account.enabled = False
+
+    result = await execute_paper_intent(db, intent.id)
+
+    assert result.status == "failed"
+    assert result.delivery_status == "completed"
+    assert result.last_delivery_error is None
+    assert result.completed_at is not None
 
 
 @pytest.mark.asyncio

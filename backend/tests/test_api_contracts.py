@@ -126,7 +126,8 @@ async def test_signup_returns_tokens_and_sets_auth_cookies():
     response = Response()
     body = SignupRequest(email="  NewUser@Example.com  ", password="password123", name="New User")
 
-    token = await auth_api.signup(body=body, response=response, db=_FakeAuthDb())
+    request = Request({"type": "http", "client": ("198.51.100.1", 1234)})
+    token = await auth_api.signup(body=body, request=request, response=response, db=_FakeAuthDb())
 
     assert token.access_token
     set_cookie_values = _set_cookie_header_values(response)
@@ -144,7 +145,8 @@ async def test_login_normalizes_email_and_sets_auth_cookies():
     response = Response()
     body = LoginRequest(email="  TEST@EXAMPLE.COM  ", password="password123")
 
-    token = await auth_api.login(body=body, response=response, db=_FakeAuthDb(existing_user=fake_user))
+    request = Request({"type": "http", "client": ("198.51.100.2", 1234)})
+    token = await auth_api.login(body=body, request=request, response=response, db=_FakeAuthDb(existing_user=fake_user))
 
     assert token.access_token
     set_cookie_values = _set_cookie_header_values(response)
@@ -543,6 +545,8 @@ async def test_scrape_start_returns_created_job(monkeypatch):
 
     result = await data_api.start_scrape_job(
         body=ScrapeJobCreateRequest(job_type="oddsportal", league="Premier League", params={"sport": "football"}),
+        response=Response(),
+        idempotency_key=None,
         db=object(),
         user=SimpleNamespace(id=12),
     )

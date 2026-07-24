@@ -81,11 +81,31 @@ async def test_readiness_returns_non_secret_503_when_database_is_unavailable(mon
     assert "secret-password" not in response.body.decode()
 
 
+@pytest.mark.asyncio
+async def test_taskiq_readiness_requires_fresh_worker_and_scheduler_heartbeats(monkeypatch):
+    connection = _Connection()
+    monkeypatch.setattr(main, "engine", _Engine(_ConnectionContext(connection=connection)))
+    monkeypatch.setattr(main.settings, "task_queue_backend", "taskiq")
+    from app.tasks import runtime
+
+    async def ready_queue(*_args):
+        return None
+
+    checked_roles: list[str] = []
+
+    async def ready_role(role):
+        checked_roles.append(role)
+
+    monkeypatch.setattr(runtime, "task_queue_probe", ready_queue)
+    monkeypatch.setattr(runtime, "verify_any_runtime_role", ready_role)
+
+    response = await main.readiness()
+
+    assert response["task_runtime"] == "ready"
+    assert checked_roles == ["worker", "scheduler"]
+
+
 def test_readiness_is_available_at_root_and_api_alias():
-    readiness_paths = {
-        route.path
-        for route in main.app.routes
-        if getattr(route, "endpoint", None) is main.readiness
-    }
+    readiness_paths = {route.path for route in main.app.routes if getattr(route, "endpoint", None) is main.readiness}
 
     assert readiness_paths == {"/ready", "/api/v1/ready"}

@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import JSON, DateTime, Float, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models import Base
@@ -14,6 +14,11 @@ if TYPE_CHECKING:
 
 class Match(Base):
     __tablename__ = "matches"
+    __table_args__ = (
+        Index("ix_matches_status", "status"),
+        Index("ix_matches_match_date", "match_date"),
+        Index("ix_matches_competition", "competition"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -76,6 +81,7 @@ class MatchResultCorrection(Base):
 
 class OddsEntry(Base):
     __tablename__ = "odds_entries"
+    __table_args__ = (Index("ix_odds_entries_match_id", "match_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     match_id: Mapped[int] = mapped_column(ForeignKey("matches.id", ondelete="CASCADE"), nullable=False)
@@ -97,6 +103,7 @@ class OddsEntry(Base):
 
 class MatchStat(Base):
     __tablename__ = "match_stats"
+    __table_args__ = (Index("ix_match_stats_match_id", "match_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     match_id: Mapped[int] = mapped_column(ForeignKey("matches.id", ondelete="CASCADE"), nullable=False)
@@ -123,6 +130,7 @@ class MatchStat(Base):
 
 class MatchSource(Base):
     __tablename__ = "match_sources"
+    __table_args__ = (Index("ix_match_sources_match_id", "match_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     match_id: Mapped[int] = mapped_column(ForeignKey("matches.id", ondelete="CASCADE"), nullable=False)

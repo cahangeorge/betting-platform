@@ -38,6 +38,8 @@ async def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found",
         )
+    if payload.get("sv") != getattr(user, "session_version", 0):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session revoked")
     return user
 
 
@@ -53,7 +55,10 @@ async def get_current_user_optional(
     if payload is None or payload.get("type") != "access":
         return None
     user_id = int(payload["sub"])
-    return await db.get(User, user_id)
+    user = await db.get(User, user_id)
+    if user is None or payload.get("sv") != getattr(user, "session_version", 0):
+        return None
+    return user
 
 
 async def get_current_admin(user: User = Depends(get_current_user)) -> User:

@@ -399,7 +399,9 @@ async def _broadcast_live_prediction_update_if_relevant(run: PredictionRun) -> N
         return
     if run.status not in LIVE_PREDICTION_BROADCAST_STATUSES:
         return
-    await broadcast_prediction_update(run_id=run.id, status=run.status)
+    if run.user_id is None:
+        return
+    await broadcast_prediction_update(run_id=run.id, status=run.status, user_id=run.user_id)
 
 
 @router.get("", response_model=list[StrategyResponse])
@@ -523,10 +525,7 @@ async def run_strategy_batch(
                 run_response = StrategyRunResponse(
                     run_id=0,
                     status="failed",
-                    error=(
-                        f"Unexpected strategy execution error: {exc}; "
-                        f"failed to persist attempt: {persistence_exc}"
-                    ),
+                    error=(f"Unexpected strategy execution error: {exc}; failed to persist attempt: {persistence_exc}"),
                     strategy_id=strategy.id,
                     dataset_id=dataset_id,
                 )

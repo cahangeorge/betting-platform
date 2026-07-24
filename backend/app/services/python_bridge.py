@@ -126,12 +126,17 @@ async def run_penaltyblog(payload: dict) -> dict:
 
 async def run_soccerdata(payload: dict) -> dict:
     _require_provider_runtime("soccerdata")
+    soccerdata_dir = Path(os.environ.get("SOCCERDATA_DIR", TEMP_DIR / "soccerdata"))
+    soccerdata_dir.mkdir(parents=True, exist_ok=True)
     return await run_bridge(
         payload,
         settings.resolved_soccerdata_python,
         settings.resolved_soccerdata_bridge,
         label="soccerdata",
-        extra_env={"BET_SOCCERDATA_ROOT": settings.resolved_soccerdata_root},
+        extra_env={
+            "BET_SOCCERDATA_ROOT": settings.resolved_soccerdata_root,
+            "SOCCERDATA_DIR": str(soccerdata_dir),
+        },
     )
 
 

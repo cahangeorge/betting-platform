@@ -1,6 +1,8 @@
 import asyncio
 import json
+import logging
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -11,7 +13,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_current_user
 from app.config import get_settings
-from app.database import get_db
+from app.database import async_session_factory, get_db
 from app.models.match import Match, MatchSource, MatchStat, OddsEntry
 from app.models.prediction import ModelPrediction, PredictionRun
 from app.models.scrape import ScrapeJob
@@ -22,8 +24,10 @@ from app.schemas.match import (
     LiveOverviewResponse,
     LiveValueCandidateResponse,
 )
+from app.services.auth import decode_token
 
 router = APIRouter(tags=["live"])
+logger = logging.getLogger(__name__)
 
 LIVE_STALE_SECONDS = 90
 LIVE_BETSLIP_MAX_DATA_AGE_SECONDS = 30
@@ -271,19 +275,36 @@ async def _load_live_prediction_map(
     if not match_ids:
         return {}
 
-    run_stmt = (
-        select(PredictionRun)
-        .where(PredictionRun.user_id == user.id, PredictionRun.status == "completed")
-        .order_by(PredictionRun.created_at.desc())
-        .limit(1)
+    eligible_runs = (
+        select(
+            ModelPrediction.match_id.label("match_id"),
+            PredictionRun.id.label("run_id"),
+            PredictionRun.created_at.label("run_created_at"),
+        )
+        .join(PredictionRun, PredictionRun.id == ModelPrediction.run_id)
+        .where(
+            PredictionRun.user_id == user.id,
+            PredictionRun.status == "completed",
+            ModelPrediction.match_id.in_(match_ids),
+        )
+        .distinct()
+        .subquery()
     )
-    run_result = await db.execute(run_stmt)
-    run = run_result.scalar_one_or_none()
-    if not run:
-        return {}
-
-    prediction_stmt = select(ModelPrediction).where(
-        ModelPrediction.run_id == run.id, ModelPrediction.match_id.in_(match_ids)
+    ranked_runs = select(
+        eligible_runs.c.match_id,
+        eligible_runs.c.run_id,
+        func.row_number()
+        .over(
+            partition_by=eligible_runs.c.match_id,
+            order_by=(eligible_runs.c.run_created_at.desc(), eligible_runs.c.run_id.desc()),
+        )
+        .label("run_rank"),
+    ).subquery()
+    prediction_stmt = select(ModelPrediction).join(
+        ranked_runs,
+        (ranked_runs.c.match_id == ModelPrediction.match_id)
+        & (ranked_runs.c.run_id == ModelPrediction.run_id)
+        & (ranked_runs.c.run_rank == 1),
     )
     prediction_result = await db.execute(prediction_stmt)
     mapped: dict[int, list[ModelPrediction]] = {}
@@ -517,10 +538,32 @@ async def live_overview(
 
 
 # Connection manager for active WebSocket clients
+async def _load_user_session_versions(user_ids: set[int]) -> dict[int, int]:
+    if not user_ids:
+        return {}
+    async with async_session_factory() as db:
+        result = await db.execute(select(User.id, User.session_version).where(User.id.in_(user_ids)))
+        return {user_id: session_version for user_id, session_version in result.all()}
+
+
+async def _close_websocket(websocket: WebSocket, *, code: int, reason: str) -> None:
+    try:
+        await asyncio.wait_for(
+            websocket.close(code=code, reason=reason), timeout=get_settings().websocket_send_timeout_seconds
+        )
+    except TimeoutError:
+        logger.warning("websocket_close_timeout", extra={"websocket_close_code": code})
+    except Exception:
+        logger.warning("websocket_close_failed", extra={"websocket_close_code": code}, exc_info=True)
+
+
 class ConnectionManager:
     def __init__(self):
         self.active_connections: list[WebSocket] = []
         self._subscriptions: dict[WebSocket, set[str]] = {}
+        self._user_ids: dict[WebSocket, int] = {}
+        self._user_versions: dict[WebSocket, int] = {}
+        self._pending_connections: dict[WebSocket, tuple[int, int]] = {}
         self._lock = asyncio.Lock()
 
     @staticmethod
@@ -546,17 +589,51 @@ class ConnectionManager:
 
         return normalized or {"all"}
 
-    async def connect(self, websocket: WebSocket):
-        await websocket.accept()
+    async def connect(self, websocket: WebSocket, *, user_id: int, session_version: int = 0) -> str | None:
+        """Reserve capacity under lock, then accept outside it without leaking reservations."""
+        current = get_settings()
         async with self._lock:
-            self.active_connections.append(websocket)
-            self._subscriptions[websocket] = {"all"}
+            reserved = len(self.active_connections) + len(self._pending_connections)
+            if reserved >= current.websocket_max_connections:
+                return "global_capacity"
+            user_connections = sum(1 for value in self._user_ids.values() if value == user_id) + sum(
+                1 for pending_user_id, _ in self._pending_connections.values() if pending_user_id == user_id
+            )
+            if user_connections >= current.websocket_max_connections_per_user:
+                return "user_capacity"
+            self._pending_connections[websocket] = (user_id, session_version)
+
+        promoted = False
+        try:
+            try:
+                await asyncio.wait_for(websocket.accept(), timeout=current.websocket_send_timeout_seconds)
+            except TimeoutError:
+                return "accept_timeout"
+            async with self._lock:
+                reservation = self._pending_connections.pop(websocket, None)
+                if reservation is not None:
+                    self.active_connections.append(websocket)
+                    self._subscriptions[websocket] = {"all"}
+                    self._user_ids[websocket] = user_id
+                    self._user_versions[websocket] = session_version
+                    promoted = True
+            if not promoted:
+                await _close_websocket(websocket, code=4401, reason="Session revoked")
+                return "revoked"
+            return None
+        finally:
+            if not promoted:
+                async with self._lock:
+                    self._pending_connections.pop(websocket, None)
 
     async def disconnect(self, websocket: WebSocket):
         async with self._lock:
             if websocket in self.active_connections:
                 self.active_connections.remove(websocket)
+            self._pending_connections.pop(websocket, None)
             self._subscriptions.pop(websocket, None)
+            self._user_ids.pop(websocket, None)
+            self._user_versions.pop(websocket, None)
 
     async def set_subscriptions(self, websocket: WebSocket, raw_channels: Any) -> list[str]:
         channels = self._normalize_channels(raw_channels)
@@ -570,29 +647,80 @@ class ConnectionManager:
         async with self._lock:
             return sorted(self._subscriptions.get(websocket, {"all"}))
 
-    async def broadcast(self, message: dict[str, Any], *, channel: str = "all", match_id: int | None = None):
-        disconnected = []
+    async def broadcast(
+        self,
+        message: dict[str, Any],
+        *,
+        channel: str = "all",
+        match_id: int | None = None,
+        recipient_user_id: int | None = None,
+    ):
         normalized_channel = channel.strip().lower()
         async with self._lock:
             connections = [
                 conn
                 for conn in self.active_connections
-                if self._should_receive(
-                    self._subscriptions.get(conn, {"all"}),
-                    channel=normalized_channel,
-                    match_id=match_id,
+                if (recipient_user_id is None or self._user_ids.get(conn) == recipient_user_id)
+                and self._should_receive(
+                    self._subscriptions.get(conn, {"all"}), channel=normalized_channel, match_id=match_id
                 )
             ]
+            connection_users = {conn: self._user_ids[conn] for conn in connections}
+            expected_versions = {conn: self._user_versions.get(conn, 0) for conn in connections}
+            user_ids = set(connection_users.values())
+        current_versions = await _load_user_session_versions(user_ids)
+        revoked = [
+            conn for conn in connections if current_versions.get(connection_users[conn]) != expected_versions[conn]
+        ]
+        disconnected = list(revoked)
         for conn in connections:
+            if conn in revoked:
+                continue
+            async with self._lock:
+                still_active = (
+                    conn in self.active_connections
+                    and self._user_ids.get(conn) == connection_users[conn]
+                    and self._user_versions.get(conn) == expected_versions[conn]
+                )
+            if not still_active:
+                continue
             try:
-                await conn.send_text(json.dumps(message))
+                await asyncio.wait_for(
+                    conn.send_text(json.dumps(message)),
+                    timeout=get_settings().websocket_send_timeout_seconds,
+                )
             except Exception:
                 disconnected.append(conn)
+        for revoked_socket in revoked:
+            await _close_websocket(revoked_socket, code=4401, reason="Session revoked")
+        for disconnected_socket in disconnected:
+            if disconnected_socket not in revoked:
+                await _close_websocket(disconnected_socket, code=1013, reason="Slow consumer")
         async with self._lock:
             for d in disconnected:
                 if d in self.active_connections:
                     self.active_connections.remove(d)
                 self._subscriptions.pop(d, None)
+                self._user_ids.pop(d, None)
+                self._user_versions.pop(d, None)
+
+    async def revoke_user(self, user_id: int) -> None:
+        async with self._lock:
+            connections = [conn for conn in self.active_connections if self._user_ids.get(conn) == user_id]
+            pending = [
+                conn for conn, (pending_user_id, _) in self._pending_connections.items() if pending_user_id == user_id
+            ]
+            for connection in pending:
+                self._pending_connections.pop(connection, None)
+        for connection in connections:
+            await _close_websocket(connection, code=4401, reason="Session revoked")
+        async with self._lock:
+            for connection in connections:
+                if connection in self.active_connections:
+                    self.active_connections.remove(connection)
+                self._subscriptions.pop(connection, None)
+                self._user_ids.pop(connection, None)
+                self._user_versions.pop(connection, None)
 
     @staticmethod
     def _should_receive(subscriptions: set[str], *, channel: str, match_id: int | None) -> bool:
@@ -606,29 +734,100 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+def _websocket_origin_is_allowed(websocket: WebSocket, *, using_cookie: bool) -> bool:
+    origin = websocket.headers.get("origin", "")
+    if not origin:
+        return not using_cookie
+    allowed_origins = set(get_settings().cors_origin_list)
+    return "*" in allowed_origins or origin in allowed_origins
+
+
+async def _authenticate_live_websocket(websocket: WebSocket, db: AsyncSession) -> tuple[User, float, int] | None:
+    auth_header = websocket.headers.get("authorization", "")
+    using_cookie = not auth_header.startswith("Bearer ")
+    token = websocket.cookies.get("access_token") if using_cookie else auth_header[7:]
+    if not token:
+        return None
+    if not _websocket_origin_is_allowed(websocket, using_cookie=using_cookie):
+        return None
+    payload = decode_token(token)
+    if payload is None or payload.get("type") != "access":
+        return None
+    try:
+        user_id = int(payload["sub"])
+        expires_at = float(payload["exp"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    user_result = await db.execute(select(User).where(User.id == user_id).execution_options(populate_existing=True))
+    user = user_result.scalar_one_or_none()
+    if user is None or payload.get("sv") != getattr(user, "session_version", 0):
+        return None
+    return user, expires_at, int(payload.get("sv", -1))
+
+
+async def _send_live_message(websocket: WebSocket, message: dict[str, Any]) -> None:
+    await asyncio.wait_for(
+        websocket.send_text(json.dumps(message)),
+        timeout=get_settings().websocket_send_timeout_seconds,
+    )
+
+
 @router.websocket("/ws")
-async def live_websocket(websocket: WebSocket):
-    await manager.connect(websocket)
+async def live_websocket(websocket: WebSocket, db: AsyncSession = Depends(get_db)):
+    authentication = await _authenticate_live_websocket(websocket, db)
+    if authentication is None:
+        await _close_websocket(websocket, code=4401, reason="Not authenticated")
+        return
+    user, token_expires_at, token_session_version = authentication
+    rejection_reason = await manager.connect(websocket, user_id=user.id, session_version=token_session_version)
+    if rejection_reason is not None:
+        await _close_websocket(websocket, code=1013, reason="Connection capacity reached")
+        return
     try:
         while True:
-            # Keep connection alive and listen for client messages
-            data = await websocket.receive_text()
+            remaining_token_seconds = token_expires_at - time.time()
+            if remaining_token_seconds <= 0:
+                await _close_websocket(websocket, code=4401, reason="Access token expired")
+                return
+            receive_timeout = min(remaining_token_seconds, get_settings().websocket_receive_timeout_seconds)
+            try:
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=receive_timeout)
+            except TimeoutError:
+                if token_expires_at <= time.time():
+                    await _close_websocket(websocket, code=4401, reason="Access token expired")
+                else:
+                    await _close_websocket(websocket, code=1001, reason="Idle timeout")
+                return
+            current_result = await db.execute(
+                select(User).where(User.id == user.id).execution_options(populate_existing=True)
+            )
+            current_user = current_result.scalar_one_or_none()
+            if current_user is None or getattr(current_user, "session_version", 0) != token_session_version:
+                await _close_websocket(websocket, code=4401, reason="Session revoked")
+                return
+            if len(data.encode("utf-8")) > get_settings().websocket_max_message_bytes:
+                await _close_websocket(websocket, code=1009, reason="Message too large")
+                return
             try:
                 msg = json.loads(data)
                 action = msg.get("action")
                 if action == "subscribe":
                     raw_channels = msg.get("channels", msg.get("channel", "all"))
                     subscriptions = await manager.set_subscriptions(websocket, raw_channels)
-                    await websocket.send_text(json.dumps({"type": "subscribed", "channels": subscriptions}))
+                    await _send_live_message(websocket, {"type": "subscribed", "channels": subscriptions})
                 elif action == "ping":
-                    await websocket.send_text(json.dumps({"type": "pong"}))
+                    await _send_live_message(websocket, {"type": "pong"})
                 else:
-                    await websocket.send_text(json.dumps({"type": "error", "message": f"Unknown action: {action}"}))
+                    await _send_live_message(websocket, {"type": "error", "message": f"Unknown action: {action}"})
             except json.JSONDecodeError:
-                await websocket.send_text(json.dumps({"type": "error", "message": "Invalid JSON"}))
+                await _send_live_message(websocket, {"type": "error", "message": "Invalid JSON"})
             except ValueError as exc:
-                await websocket.send_text(json.dumps({"type": "error", "message": str(exc)}))
+                await _send_live_message(websocket, {"type": "error", "message": str(exc)})
+    except TimeoutError:
+        await _close_websocket(websocket, code=1013, reason="Slow consumer")
     except WebSocketDisconnect:
+        pass
+    finally:
         await manager.disconnect(websocket)
 
 
@@ -646,7 +845,13 @@ async def broadcast_odds_update(match_id: int, odds: dict[str, Any]):
     )
 
 
-async def broadcast_prediction_update(run_id: int, status: str, progress: float | None = None):
+async def broadcast_prediction_update(
+    run_id: int,
+    status: str,
+    progress: float | None = None,
+    *,
+    user_id: int,
+):
     """Broadcast prediction run status update."""
     await manager.broadcast(
         {
@@ -657,6 +862,7 @@ async def broadcast_prediction_update(run_id: int, status: str, progress: float 
             "timestamp": asyncio.get_event_loop().time(),
         },
         channel="predictions",
+        recipient_user_id=user_id,
     )
 
 

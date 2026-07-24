@@ -1,4 +1,3 @@
-import re
 import warnings
 from contextlib import asynccontextmanager
 from typing import Any
@@ -20,9 +19,7 @@ settings = get_settings()
 
 
 class FlexibleCORSMiddleware(BaseHTTPMiddleware):
-    """Custom CORS that allows any *.trycloudflare.com + configured origins."""
-
-    TUNNEL_PATTERN = re.compile(r"^https://[a-zA-Z0-9-]+\.trycloudflare\.com$")
+    """Credentialed CORS restricted to explicitly configured origins."""
 
     def __init__(self, app: Any, allowed_origins: list[str]):
         super().__init__(app)
@@ -32,8 +29,6 @@ class FlexibleCORSMiddleware(BaseHTTPMiddleware):
         if "*" in self.allowed_origins:
             return True
         if origin in self.allowed_origins:
-            return True
-        if self.TUNNEL_PATTERN.match(origin):
             return True
         return False
 
@@ -63,9 +58,6 @@ class FlexibleCORSMiddleware(BaseHTTPMiddleware):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    if settings.jwt_secret in ("dev-secret-change-in-production", "dev-jwt-secret-change-in-production"):
-        warnings.warn("BET_JWT_SECRET is not set — using insecure dev fallback. Set BET_JWT_SECRET in production.")
-
     await ensure_schema()
     await ensure_dev_admin()
 
@@ -73,12 +65,20 @@ async def lifespan(app: FastAPI):
         warnings.warn(f"OddsHarvester runtime prerequisite issue: {issue}")
 
     app.state.bridge_runtime = bridge_runtime_summary()
+    taskiq_broker = None
+    if settings.task_queue_backend == "taskiq":
+        from app.tasks.broker import broker
+
+        taskiq_broker = broker
+        await taskiq_broker.startup()
     if settings.scheduled_jobs_enabled and settings.task_queue_backend == "inprocess":
         start_scheduler(interval_seconds=settings.scheduled_jobs_interval_seconds)
     try:
         yield
     finally:
         await stop_scheduler()
+        if taskiq_broker is not None:
+            await taskiq_broker.shutdown()
 
 
 app = FastAPI(
@@ -121,7 +121,53 @@ async def readiness():
             content={"status": "unavailable", "database": "unavailable"},
         )
 
-    return {"status": "ready", "database": "ready", "schema": "ready"}
+    response = {"status": "ready", "database": "ready", "schema": "ready"}
+    if settings.is_secure_environment and settings.bridge_validation_issues():
+        return JSONResponse(
+            status_code=503,
+            content={
+                **response,
+                "status": "unavailable",
+                "bridge_runtime": "unavailable",
+            },
+        )
+    if settings.is_secure_environment:
+        response["bridge_runtime"] = "ready"
+
+    if settings.task_queue_backend == "taskiq":
+        from app.tasks.runtime import task_queue_probe, verify_any_runtime_role
+
+        try:
+            await task_queue_probe(
+                settings.resolved_taskiq_broker_url,
+                settings.resolved_taskiq_result_backend_url,
+            )
+        except (OSError, RuntimeError):
+            return JSONResponse(
+                status_code=503,
+                content={
+                    **response,
+                    "status": "unavailable",
+                    "task_queue": "unavailable",
+                },
+            )
+        try:
+            await verify_any_runtime_role("worker")
+            await verify_any_runtime_role("scheduler")
+        except (OSError, RuntimeError):
+            return JSONResponse(
+                status_code=503,
+                content={
+                    **response,
+                    "status": "unavailable",
+                    "task_queue": "ready",
+                    "task_runtime": "unavailable",
+                },
+            )
+        response["task_queue"] = "ready"
+        response["task_runtime"] = "ready"
+
+    return response
 
 
 @app.get("/api/v1/health")

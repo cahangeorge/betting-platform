@@ -169,9 +169,7 @@ async def test_manual_ticket_requires_bankroll_and_explicit_policy_before_any_cr
             legs_data=[{"match_id": 10, "market": "1x2", "selection": "home", "odds": 2.0}],
         )
 
-    assert exc_info.value.report["risk_assessment"]["blockers"] == [
-        {"code": "risk_policy_required", "scope": "policy"}
-    ]
+    assert exc_info.value.report["risk_assessment"]["blockers"] == [{"code": "risk_policy_required", "scope": "policy"}]
     assert create_calls == []
 
 
@@ -230,9 +228,7 @@ async def test_manual_ticket_blocks_pause_hard_cap_and_existing_portfolio_exposu
             legs_data=[{"match_id": 10, "market": "1x2", "selection": "home", "odds": 2.0}],
         )
 
-    blocker_codes = {
-        blocker["code"] for blocker in exc_info.value.report["risk_assessment"]["blockers"]
-    }
+    blocker_codes = {blocker["code"] for blocker in exc_info.value.report["risk_assessment"]["blockers"]}
     assert expected_code in blocker_codes
     assert create_calls == []
 
@@ -984,11 +980,7 @@ async def test_batch_revalidation_reloads_versioned_run_governance(monkeypatch):
     db = _FakeGenerateSession([_FakeExecuteResult(rows=[run])])
     now = datetime(2026, 7, 16, 10, 0, tzinfo=timezone.utc)
     batch = SimpleNamespace(
-        generation_report={
-            "governance_assessment": {
-                "runs": [{"run_id": 22, "model_version_id": 9, "allowed": True}]
-            }
-        }
+        generation_report={"governance_assessment": {"runs": [{"run_id": 22, "model_version_id": 9, "allowed": True}]}}
     )
 
     async def current_governance(*_args, **kwargs):
@@ -1060,6 +1052,31 @@ async def test_generate_tickets_uses_latest_eligible_prediction_run_by_default(m
     assert "FROM prediction_runs" in db.statements[0]
     assert "ORDER BY prediction_runs.completed_at DESC NULLS LAST" in db.statements[0]
     assert "model_predictions.run_id = 22" in db.statements[1]
+
+
+@pytest.mark.asyncio
+async def test_generate_tickets_replays_a_committed_scheduled_run_without_creating_another_batch():
+    existing_ticket = SimpleNamespace(id=88)
+    existing_batch = SimpleNamespace(id=55, tickets=[existing_ticket])
+    db = _FakeGenerateSession([_FakeExecuteResult(scalar=existing_batch)])
+
+    batch, tickets = await generate_tickets(
+        db=db,
+        user_id=7,
+        bankroll_id=None,
+        ticket_count=1,
+        difficulty="safe",
+        market_types=["1x2"],
+        min_odds=1.5,
+        max_odds=2.5,
+        stake=10.0,
+        scheduled_job_run_id=812,
+    )
+
+    assert batch is existing_batch
+    assert tickets == [existing_ticket]
+    assert len(db.statements) == 1
+    assert "ticket_batches.scheduled_job_run_id = 812" in db.statements[0]
 
 
 @pytest.mark.asyncio

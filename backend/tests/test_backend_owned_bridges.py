@@ -114,3 +114,31 @@ async def test_penaltyblog_wrapper_checks_only_its_provider_at_use_site(monkeypa
 
     assert response["operation"] == "catalog"
     assert captured["kwargs"]["extra_env"] == {"BET_PENALTYBLOG_ROOT": str(tmp_path)}
+
+
+@pytest.mark.asyncio
+async def test_soccerdata_wrapper_uses_a_writable_default_cache(monkeypatch, tmp_path):
+    runtime = tmp_path / "runtime"
+    runtime.write_text("placeholder", encoding="utf-8")
+    monkeypatch.setattr(python_bridge.settings, "soccerdata_python", str(runtime))
+    monkeypatch.setattr(python_bridge.settings, "soccerdata_bridge", str(runtime))
+    monkeypatch.setattr(python_bridge.settings, "soccerdata_root", str(tmp_path))
+    monkeypatch.setattr(python_bridge, "TEMP_DIR", tmp_path / "bridge-temp")
+    monkeypatch.delenv("SOCCERDATA_DIR", raising=False)
+    captured: dict[str, object] = {}
+
+    async def fake_run_bridge(payload, python_bin, bridge_script, **kwargs):
+        captured.update(payload=payload, python_bin=python_bin, bridge_script=bridge_script, kwargs=kwargs)
+        return {"operation": "catalog", "result": {}}
+
+    monkeypatch.setattr(python_bridge, "run_bridge", fake_run_bridge)
+
+    response = await python_bridge.run_soccerdata({"operation": "catalog"})
+
+    expected_cache = tmp_path / "bridge-temp" / "soccerdata"
+    assert response["operation"] == "catalog"
+    assert expected_cache.is_dir()
+    assert captured["kwargs"]["extra_env"] == {
+        "BET_SOCCERDATA_ROOT": str(tmp_path),
+        "SOCCERDATA_DIR": str(expected_cache),
+    }

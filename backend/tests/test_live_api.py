@@ -41,10 +41,18 @@ class _DBSequence:
         return self._results.pop(0)
 
 
+class _CapturingDB:
+    def __init__(self, result):
+        self.result = result
+        self.statement = None
+
+    async def execute(self, statement):
+        self.statement = statement
+        return self.result
+
+
 async def _serialize_live_overview_response(overview):
-    route = next(
-        route for route in app.routes if isinstance(route, APIRoute) and route.path == "/api/v1/live/overview"
-    )
+    route = next(route for route in app.routes if isinstance(route, APIRoute) and route.path == "/api/v1/live/overview")
     return await serialize_response(
         field=route.response_field,
         response_content=overview,
@@ -106,6 +114,25 @@ def _make_prediction(now: datetime, *, created_at: datetime | None = None, home_
         away_prob=0.22,
         created_at=created_at,
     )
+
+
+@pytest.mark.asyncio
+async def test_live_prediction_map_selects_latest_completed_run_per_match():
+    predictions = [SimpleNamespace(match_id=101), SimpleNamespace(match_id=102)]
+    db = _CapturingDB(_MatchesResult(predictions))
+
+    mapped = await live_api._load_live_prediction_map(
+        db,
+        match_ids=[101, 102],
+        user=SimpleNamespace(id=7),
+    )
+
+    sql = str(db.statement)
+    assert "row_number() OVER" in sql
+    assert "PARTITION BY" in sql
+    assert "prediction_runs.user_id" in sql
+    assert "prediction_runs.status" in sql
+    assert mapped == {101: [predictions[0]], 102: [predictions[1]]}
 
 
 def test_live_value_candidate_is_only_betslip_eligible_when_trust_signals_are_green():

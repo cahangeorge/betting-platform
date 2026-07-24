@@ -16,6 +16,8 @@ if TYPE_CHECKING:
 class PredictionRun(Base):
     __tablename__ = "prediction_runs"
     __table_args__ = (
+        Index("ix_prediction_runs_user_id", "user_id"),
+        Index("ix_prediction_runs_user_status_created", "user_id", "status", "created_at"),
         Index(
             "uq_prediction_runs_active_dedupe",
             "user_id",
@@ -67,6 +69,12 @@ class PredictionRun(Base):
 
 class ModelPrediction(Base):
     __tablename__ = "model_predictions"
+    __table_args__ = (
+        Index("ix_model_predictions_run_id", "run_id"),
+        Index("ix_model_predictions_match_id", "match_id"),
+        Index("ix_model_predictions_run_market", "run_id", "market"),
+        Index("ix_model_predictions_match_market", "match_id", "market"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     run_id: Mapped[int] = mapped_column(ForeignKey("prediction_runs.id", ondelete="CASCADE"), nullable=False)
@@ -101,6 +109,10 @@ class ModelPrediction(Base):
 
 class EnsemblePrediction(Base):
     __tablename__ = "ensemble_predictions"
+    __table_args__ = (
+        Index("ix_ensemble_predictions_run_id", "run_id"),
+        Index("ix_ensemble_predictions_match_id", "match_id"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     run_id: Mapped[int] = mapped_column(ForeignKey("prediction_runs.id", ondelete="CASCADE"), nullable=False)
@@ -132,6 +144,7 @@ class PredictionSession(Base):
 
 class Prediction(Base):
     __tablename__ = "predictions"
+    __table_args__ = (Index("ix_predictions_session_id", "session_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     session_id: Mapped[int] = mapped_column(ForeignKey("prediction_sessions.id", ondelete="CASCADE"), nullable=False)
