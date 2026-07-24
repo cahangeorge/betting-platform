@@ -1,9 +1,9 @@
 # MVP Readiness Program
 
-Updated: 2026-07-25T02:01:58+03:00
+Updated: 2026-07-25T02:10:30+03:00
 Repository: `/home/gion/Projects/bet`
 Branch: `agent/post-merge-trivy-status-2026-07-24`
-Program status: **ACTIVE — PR #12 remediation checks running; public MVP launch HOLD**
+Program status: **ACTIVE — PR #12 green/mergeable; public MVP launch HOLD**
 
 This is the durable execution register for reaching a verified MVP. It records
 project status, expert findings, phases, task dependencies, verification gates,
@@ -65,7 +65,7 @@ The program can be marked **MVP GO** only when:
 | `flumine/` | EXCLUDED | post-MVP paper execution | accepted ADR excludes paper execution from public MVP |
 | PWA | LOCAL GATES GREEN | installable shell | production HTTPS offline/recovery/update suite passed; installed-device lifecycle remains |
 | Mobile/desktop design | LOCAL GATES GREEN | operator UI | 320–1920 plus landscape/safe-area/touch/forced-colors browser gates passed; hardware/manual zoom remains |
-| DevOps/release | PR #12 OPEN / LOCAL BACKEND REMEDIATION GREEN | deployment | runtime commit `6c33259` is pushed to PR #12; local applicability review removed packages responsible for 77 prior entries and expanded image smoke passed; Security is green while Backend, Frontend, and Hybrid E2E are running; clean merged-main image report, signed tag, secrets, public TLS, off-host backup, monitoring and canary remain |
+| DevOps/release | PR #12 GREEN / MERGEABLE | deployment | published head `0d9c9b9` passed Backend, Frontend, Security, and Hybrid E2E (7m05s); applicability review removed packages responsible for 77 prior entries and expanded image smoke passed; separate merge authorization, clean merged-main image report, signed tag, secrets, public TLS, off-host backup, monitoring and canary remain |
 | QA | LOCAL GATES GREEN / STAGING HOLD | release evidence | real protected two-user staging lifecycle is absent |
 | `betfront/` | ARCHIVED/DIRTY | none | preserve; do not include in current MVP |
 
@@ -273,7 +273,7 @@ confirmed.
 | QA-002 | Tenant | add cross-user isolation gates for jobs, predictions, WS, trading, bankroll, and settlement | COMPLETE-local — REST/settlement isolation plus user-scoped prediction WebSocket tests |
 | QA-003 | Browser | run all hybrid tests with retries disabled and eliminate flaky waits/cleanup ambiguity | COMPLETE-local — repeated retry-free Chromium gates |
 | OPS-002 | CI/CD | build, scan, publish, deploy, smoke, and retain immutable rollback artifacts | PARTIAL — exact scanned-image handoff, GHCR digest publication, keyless Cosign, GitHub attestations, non-overwrite, version promotion, and auto-rollback are implemented and contract-tested; protected tag/deploy execution remains external |
-| OPS-006 | CI supply chain | pin and validate actions/scanners, gate release tags on application tests, scan current source and images | COMPLETE-MAIN / PR #12 REMEDIATION PUBLISHED / PRE-TAG HOLD — main `e2ea635` passed Backend, Frontend, Security plus run `30126304645`; complete JSON, fixable=0, frontend/nginx=0, backend=115 unresolved, three SBOMs, publication skipped. Applicability review is complete and runtime commit `6c33259` removes packages responsible for 77 prior entries, expands the CI image smoke, and is under PR checks. Clean merged-main image evidence and protected tag evidence remain |
+| OPS-006 | CI supply chain | pin and validate actions/scanners, gate release tags on application tests, scan current source and images | COMPLETE-MAIN / PR #12 GREEN / PRE-TAG HOLD — main `e2ea635` passed Backend, Frontend, Security plus run `30126304645`; complete JSON, fixable=0, frontend/nginx=0, backend=115 unresolved, three SBOMs, publication skipped. Applicability review is complete and PR #12 removes packages responsible for 77 prior entries, expands the CI image smoke, and passes all PR checks. Clean merged-main image evidence and protected tag evidence remain |
 | BE-004 | Container scraper runtime | make the production Chromium install available to the non-root backend runtime user | COMPLETE-local contract — shared `/ms-playwright` path and ownership; CI now launches Chromium in the built non-root image; execution awaits CI because local container DNS is unavailable |
 | BE-005 | Production dependencies | resolve backend plus all bridge projects from one exact Python 3.12 dependency graph | COMPLETE-local — 204-package uv lock, regeneration diff and strict dry-run green |
 | FE-007 | Container dependencies | pin pnpm and avoid a second mutable production dependency resolution | COMPLETE-local — `pnpm 10.34.5`, one frozen install, builder prune and copied production node_modules; SvelteKit `2.70.1`/Vite `8.1.5`; unused npm/Corepack removed from runtime; check, 121 unit tests, E2E typecheck, build, and High/Critical production dependency audit green |
@@ -381,8 +381,8 @@ leak, duplicate financial mutation, stale queue state, or unexplained fixture.
 ### Phase 5 — release candidate and MVP decision
 
 Status: **IN PROGRESS — PR #11 and prior merged-main evidence complete; PR #12
-backend remediation checks, clean merged-main image evidence, signed tag, and
-external gates remain**
+green/mergeable; separate merge authorization, clean merged-main image
+evidence, signed tag, and external gates remain**
 
 - [x] Clean/reconciled Git revision and pinned nested dependencies — PR #7
       merged as signed `main` commit `881a436`; tracked submodules unchanged.
@@ -492,11 +492,9 @@ placement must remain disabled.
 
 ## Immediate execution order
 
-1. Inspect PR #12 Backend, Frontend, Security, and Hybrid E2E checks on the
-   latest pushed head and remediate any failure.
-2. After separate merge authorization and a green PR, merge PR #12 and run an
-   evidence-only release workflow on exact `main`; inspect the new backend
-   Trivy report and all three SBOMs.
+1. Obtain separate authorization to merge green, mergeable PR #12.
+2. After the authorized merge, run an evidence-only release workflow on exact
+   `main`; inspect the new backend Trivy report and all three SBOMs.
 3. Only after new explicit approval naming an exact tag and GHCR destination,
    execute and verify the protected signed release.
 4. Execute protected staging lifecycle/two-user, off-host backup/restore,
@@ -515,8 +513,9 @@ placement must remain disabled.
   `2026-07-23-exclude-paper-execution-from-mvp.md`.
 - PR #11 merged into `main` as `e2ea635`; Backend, Frontend, Security, and
   evidence-only run `30126304645` are green.
-- Runtime hardening commit `6c33259` is pushed to open PR #12. Security passed;
-  Backend, Frontend, and Hybrid E2E were in progress at the last refresh.
+- Runtime hardening commit `6c33259` is included in open PR #12. Published head
+  `0d9c9b9` passed Backend, Frontend, Security, and Hybrid E2E (**7m05s**);
+  GitHub reports it mergeable with merge state `CLEAN`.
 - The exact prior backend report retains 115 unresolved findings without fixed
   versions. Applicability review and local package-removal remediation are
   complete: the rebuilt image removes packages responsible for 77 prior
@@ -530,9 +529,9 @@ placement must remain disabled.
 
 ## Exact next step
 
-Inspect PR #12 checks on the latest pushed head and remediate any failure. Do
-not merge without separate authorization. After a green authorized merge,
-require an evidence-only release run on exact `main` and inspect its new backend
-Trivy report before any separately authorized tag. Do not tag, publish, or
-deploy without new explicit approval. Keep public release/MVP launch HOLD until
-the external release gates in the verification refresh are evidenced.
+Obtain separate authorization to merge green, mergeable PR #12. After the
+authorized merge, require an evidence-only release run on exact `main` and
+inspect its new backend Trivy report before any separately authorized tag. Do
+not tag, publish, or deploy without new explicit approval. Keep public
+release/MVP launch HOLD until the external release gates in the verification
+refresh are evidenced.
