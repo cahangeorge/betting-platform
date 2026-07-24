@@ -46,6 +46,15 @@ test('account page uses the authenticated user bankroll context', async ({ page,
 				initial_balance: 500
 			})
 		});
+		await poll(
+			async () =>
+				await backendProbe(`/api/v1/bankroll/${secondaryBankroll.id}`, {
+					headers: withBearerToken(session.token.access_token)
+				}),
+			(result) => result.status === 200,
+			10_000,
+			250
+		);
 		await backendRequest(`/api/v1/bankroll/${secondaryBankroll.id}/accounts`, {
 			method: 'POST',
 			headers: {
