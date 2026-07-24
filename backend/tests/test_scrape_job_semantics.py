@@ -190,7 +190,7 @@ async def test_execute_scrape_job_skips_duplicate_when_avoid_rescraping_requeste
         status="completed",
         league="world-cup",
         params={"command": "historic", "season": "2022", "leagues": ["world-cup"], "sport": "football"},
-        output='{"dataset_id": 17}',
+        output='{"dataset_id": 17, "scrape_report": {"health": "degraded", "failure_count": 1}}',
     )
     job = SimpleNamespace(
         id=9,
@@ -225,10 +225,26 @@ async def test_execute_scrape_job_skips_duplicate_when_avoid_rescraping_requeste
         "skipped": True,
         "reason": "duplicate_completed_job",
         "reused_job_id": 3,
+        "dataset_id": 17,
+        "scrape_report": {"health": "degraded", "failure_count": 1},
     }
     assert job.completed_at is not None
     log_actions = [obj.action for obj in db.added if obj.__class__.__name__ == "ScrapeJobLog"]
     assert log_actions == ["job_started", "rescrape_skipped"]
+
+
+@pytest.mark.parametrize(
+    ("output", "expected"),
+    [
+        ('{"dataset_id": "17"}', 17),
+        ('{"dataset_id": 0}', None),
+        ('{"dataset_id": "invalid"}', None),
+        ('{"reused_job_id": 3}', None),
+        ("not-json", None),
+    ],
+)
+def test_scrape_output_dataset_id_fails_closed(output, expected):
+    assert scraper._scrape_output_dataset_id(SimpleNamespace(output=output)) == expected
 
 
 def test_build_oddsharvester_args_supports_historic_all_markets():

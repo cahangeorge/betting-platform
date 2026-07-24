@@ -118,6 +118,23 @@ class ScheduledJobRunResult:
     artifacts: dict[str, Any] | None = None
 
 
+def _merge_run_artifacts(*results: ScheduledJobRunResult) -> dict[str, Any] | None:
+    merged: dict[str, Any] = {}
+    for result in results:
+        for key, value in (result.artifacts or {}).items():
+            if isinstance(value, list):
+                existing = merged.setdefault(key, [])
+                if not isinstance(existing, list):
+                    merged[key] = list(value)
+                    continue
+                for item in value:
+                    if item not in existing:
+                        existing.append(item)
+            else:
+                merged[key] = value
+    return merged or None
+
+
 def _summarize_prediction_statuses(statuses: list[str]) -> str:
     counts: dict[str, int] = {}
     for status in statuses:
@@ -155,7 +172,20 @@ def _scrape_job_artifacts(job: Any) -> dict[str, Any]:
         summary = json.loads(output)
     except (TypeError, ValueError):
         return artifacts
-    report = summary.get("scrape_report") if isinstance(summary, dict) else None
+    if not isinstance(summary, dict):
+        return artifacts
+
+    dataset_id = summary.get("dataset_id")
+    if dataset_id not in (None, ""):
+        try:
+            parsed_dataset_id = int(dataset_id)
+        except (TypeError, ValueError):
+            pass
+        else:
+            if parsed_dataset_id > 0:
+                artifacts["dataset_ids"] = [parsed_dataset_id]
+
+    report = summary.get("scrape_report")
     if isinstance(report, dict):
         artifacts["scrape_report"] = report
     return artifacts
@@ -313,7 +343,10 @@ async def initialize_next_run(db: AsyncSession, job: ScheduledJob, *, now: datet
 
 async def _run_scrape_job(db: AsyncSession, job: ScheduledJob) -> ScheduledJobRunResult:
     config = job.config or {}
-    params = config.get("params") if isinstance(config.get("params"), dict) else dict(config)
+    params = dict(config["params"]) if isinstance(config.get("params"), dict) else dict(config)
+    owner_id = config.get(SCHEDULED_JOB_OWNER_CONFIG_KEY) or config.get("user_id")
+    if owner_id is not None:
+        params[SCHEDULED_JOB_OWNER_CONFIG_KEY] = int(owner_id)
     league = config.get("league") if isinstance(config.get("league"), str) else params.get("league")
     task_type = job.task_type or "scrape_odds"
 
@@ -364,6 +397,7 @@ async def _run_prediction_job(
     filters_payload = config.get("filters") if isinstance(config.get("filters"), dict) else {}
     request = StrategyRunRequest(
         match_ids=[int(value) for value in config.get("match_ids") or []],
+        dataset_id=_optional_int_config(config, "dataset_id"),
         markets=list(config.get("markets") or []),
         filters=StrategyRunFilters(**filters_payload) if filters_payload else None,
         autopredict=True,
@@ -397,6 +431,24 @@ def _prediction_run_id_for_ticket_generation(prediction_result: ScheduledJobRunR
     return None
 
 
+def _scrape_dataset_id_for_prediction(scrape_result: ScheduledJobRunResult) -> int | None:
+    raw_dataset_ids = (scrape_result.artifacts or {}).get("dataset_ids") or []
+    if not isinstance(raw_dataset_ids, (list, tuple, set)):
+        return None
+    dataset_ids: list[int] = []
+    for dataset_id in raw_dataset_ids:
+        try:
+            parsed_dataset_id = int(dataset_id)
+        except (TypeError, ValueError):
+            continue
+        if parsed_dataset_id > 0:
+            dataset_ids.append(parsed_dataset_id)
+    unique_dataset_ids = sorted(set(dataset_ids))
+    if len(unique_dataset_ids) == 1:
+        return unique_dataset_ids[0]
+    return None
+
+
 async def _run_scrape_then_predict_job(db: AsyncSession, job: ScheduledJob) -> ScheduledJobRunResult:
     config = dict(job.config or {})
     owner_id = config.get(SCHEDULED_JOB_OWNER_CONFIG_KEY) or config.get("user_id")
@@ -417,6 +469,7 @@ async def _run_scrape_then_predict_job(db: AsyncSession, job: ScheduledJob) -> S
             "id": job.id,
             "task_type": "scrape_odds",
             "config": {
+                SCHEDULED_JOB_OWNER_CONFIG_KEY: owner_id,
                 "league": selected_scrape_config.get("league"),
                 "params": selected_scrape_config.get("params")
                 if isinstance(selected_scrape_config.get("params"), dict)
@@ -429,7 +482,18 @@ async def _run_scrape_then_predict_job(db: AsyncSession, job: ScheduledJob) -> S
     if scrape_result.status != "completed":
         return scrape_result
 
+    scrape_dataset_id = _scrape_dataset_id_for_prediction(scrape_result)
+    if scrape_dataset_id is None:
+        return ScheduledJobRunResult(
+            job_id=job.id,
+            task_type=job.task_type,
+            status="partial",
+            detail=f"{scrape_result.detail}; predictions:missing_or_ambiguous_scrape_dataset_id",
+            artifacts=scrape_result.artifacts,
+        )
+
     merged_prediction_config = _stamp_owner_if_missing(prediction_config or config, owner_id)
+    merged_prediction_config["dataset_id"] = scrape_dataset_id
     prediction_result = await _run_prediction_job(db, job, config_override=merged_prediction_config)
     if prediction_result.status != "completed":
         return ScheduledJobRunResult(
@@ -437,6 +501,7 @@ async def _run_scrape_then_predict_job(db: AsyncSession, job: ScheduledJob) -> S
             task_type=job.task_type,
             status=prediction_result.status,
             detail=f"{scrape_result.detail}; {prediction_result.detail}",
+            artifacts=_merge_run_artifacts(scrape_result, prediction_result),
         )
 
     return ScheduledJobRunResult(
@@ -444,6 +509,7 @@ async def _run_scrape_then_predict_job(db: AsyncSession, job: ScheduledJob) -> S
         task_type=job.task_type,
         status="completed",
         detail=f"{scrape_result.detail}; predictions:{prediction_result.detail}",
+        artifacts=_merge_run_artifacts(scrape_result, prediction_result),
     )
 
 
@@ -513,6 +579,10 @@ async def _run_ticket_generation_job(
         task_type=job.task_type,
         status="completed",
         detail=f"ticket_batch:{batch.id}; tickets:{len(tickets)}",
+        artifacts={
+            "ticket_batch_ids": [int(batch.id)],
+            "ticket_ids": [int(ticket.id) for ticket in tickets],
+        },
     )
 
 
@@ -534,6 +604,7 @@ async def _run_prediction_then_ticket_job(
             task_type=job.task_type,
             status="partial",
             detail=f"predictions:{prediction_result.detail}; tickets:missing_or_ambiguous_prediction_run_id",
+            artifacts=prediction_result.artifacts,
         )
 
     ticket_config = _stamp_owner_if_missing(_dict_config(config, "tickets") or config, owner_id)
@@ -548,6 +619,7 @@ async def _run_prediction_then_ticket_job(
             task_type=job.task_type,
             status=ticket_result.status,
             detail=f"predictions:{prediction_result.detail}; {ticket_result.detail}",
+            artifacts=_merge_run_artifacts(prediction_result, ticket_result),
         )
 
     return ScheduledJobRunResult(
@@ -555,6 +627,7 @@ async def _run_prediction_then_ticket_job(
         task_type=job.task_type,
         status="completed",
         detail=f"predictions:{prediction_result.detail}; {ticket_result.detail}",
+        artifacts=_merge_run_artifacts(prediction_result, ticket_result),
     )
 
 
@@ -580,6 +653,7 @@ async def _run_scrape_predict_tickets_job(
             "id": job.id,
             "task_type": "scrape_odds",
             "config": {
+                SCHEDULED_JOB_OWNER_CONFIG_KEY: owner_id,
                 "league": selected_scrape_config.get("league"),
                 "params": selected_scrape_config.get("params")
                 if isinstance(selected_scrape_config.get("params"), dict)
@@ -592,7 +666,18 @@ async def _run_scrape_predict_tickets_job(
     if scrape_result.status != "completed":
         return scrape_result
 
+    scrape_dataset_id = _scrape_dataset_id_for_prediction(scrape_result)
+    if scrape_dataset_id is None:
+        return ScheduledJobRunResult(
+            job_id=job.id,
+            task_type=job.task_type,
+            status="partial",
+            detail=f"{scrape_result.detail}; predictions:missing_or_ambiguous_scrape_dataset_id",
+            artifacts=scrape_result.artifacts,
+        )
+
     merged_prediction_config = _stamp_owner_if_missing(prediction_config or config, owner_id)
+    merged_prediction_config["dataset_id"] = scrape_dataset_id
     prediction_result = await _run_prediction_job(db, job, config_override=merged_prediction_config)
     if prediction_result.status != "completed":
         return ScheduledJobRunResult(
@@ -600,6 +685,7 @@ async def _run_scrape_predict_tickets_job(
             task_type=job.task_type,
             status=prediction_result.status,
             detail=f"{scrape_result.detail}; predictions:{prediction_result.detail}",
+            artifacts=_merge_run_artifacts(scrape_result, prediction_result),
         )
 
     prediction_run_id = _prediction_run_id_for_ticket_generation(prediction_result)
@@ -613,6 +699,7 @@ async def _run_scrape_predict_tickets_job(
             task_type=job.task_type,
             status="partial",
             detail=detail,
+            artifacts=_merge_run_artifacts(scrape_result, prediction_result),
         )
 
     merged_ticket_config = _stamp_owner_if_missing(ticket_config or config, owner_id)
@@ -627,6 +714,7 @@ async def _run_scrape_predict_tickets_job(
             task_type=job.task_type,
             status=ticket_result.status,
             detail=f"{scrape_result.detail}; predictions:{prediction_result.detail}; {ticket_result.detail}",
+            artifacts=_merge_run_artifacts(scrape_result, prediction_result, ticket_result),
         )
 
     return ScheduledJobRunResult(
@@ -634,6 +722,7 @@ async def _run_scrape_predict_tickets_job(
         task_type=job.task_type,
         status="completed",
         detail=f"{scrape_result.detail}; predictions:{prediction_result.detail}; {ticket_result.detail}",
+        artifacts=_merge_run_artifacts(scrape_result, prediction_result, ticket_result),
     )
 
 
