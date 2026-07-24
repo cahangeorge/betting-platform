@@ -1,8 +1,8 @@
 # Release Candidate Reconciliation Plan
 
-Updated: 2026-07-24T22:35:55+03:00
+Updated: 2026-07-24T23:06:30+03:00
 Branch: `agent/trivy-gate-pr`
-Status: **PR #8-#10 MERGED; CONTAINER POLICY ACCEPTED; GATE PATCH CANDIDATE**
+Status: **PR #8-#10 MERGED; CONTAINER POLICY ACCEPTED; FIXABLE FINDINGS REMEDIATED LOCALLY**
 
 This plan converted the intentionally dirty, locally verified MVP checkout into
 a reviewable release-candidate revision without losing existing work. The owner
@@ -53,6 +53,16 @@ The recommended sequence below was executed, then hardened through CI:
     evidence, and leaves unfixed risk behind explicit owner review under an
     Accepted ADR; acceptance does not authorize a tag, registry publication,
     deployment, or public launch.
+16. Candidate run `30120739636` passed source verification, all three image
+    builds, and runtime smoke. The new gate then correctly blocked **72
+    fixable High/Critical findings**, uploaded the complete reports, and kept
+    `publish-signed-images` skipped.
+17. The current branch upgrades SvelteKit/Svelte/Vite/PostCSS, removes unused
+    npm/Corepack tooling from the frontend runtime, and pins both nginx
+    Dockerfiles to the current `1.30.4-alpine` digest. Local production builds,
+    non-root/runtime smoke, dependency inventory, frontend checks, and focused
+    Hybrid browser tests are green. A final clean-revision CI scan remains
+    mandatory before merge.
 
 No release tag or GHCR release artifact exists at this checkpoint.
 
@@ -148,15 +158,16 @@ YAML, shell and diff checks.
 The current Dockerfiles also have direct local build/runtime proof:
 
 - frontend image
-  `localhost/bet-frontend:mvp-validation-20260724`,
-  image ID `ad05990f46ef...`, local digest `sha256:6aaad448e85c...`;
-  production `/about` returned 200 as UID 1001;
+  `localhost/bet-frontend:local-trivy-fix`; production HTTP smoke and UID 1001
+  passed, and npm, npx, Corepack, esbuild, sigstore, and vulnerable tar/
+  brace-expansion packages are absent from the runtime;
 - backend image
   `localhost/bet-backend:mvp-validation-20260724`,
   image ID `91ba6a3e1c77...`, local digest `sha256:827552c95c94...`;
   UID 1001, FastAPI import, and bundled Chromium launch passed;
-- nginx image `localhost/bet-nginx:mvp-validation` previously passed
-  `nginx -t` with the production topology.
+- nginx image `localhost/bet-nginx:local-trivy-fix` runs nginx `1.30.4`; the
+  installed Alpine packages identified by run `30120739636` meet or exceed
+  Trivy's reported fixed versions.
 
 These are dirty-checkout local artifacts, not registry identities and not
 release evidence. The protected workflow must rebuild, scan, publish, sign and

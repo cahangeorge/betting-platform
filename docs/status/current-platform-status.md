@@ -1,14 +1,15 @@
 # Current Platform Status
 
-Updated: 2026-07-24T22:39:14+03:00
+Updated: 2026-07-24T23:06:30+03:00
 Repository/branch: `/home/gion/Projects/bet` / `agent/trivy-gate-pr`
 Dirty state at this handoff refresh:
 
 ```text
 The branch was created cleanly from current `origin/main` (`3930d0e`). Its
-candidate contains exactly nine intended release-audit/handoff paths: the
-workflow, gate script, three test files, accepted ADR, and the three canonical
-status documents. The previous pre-sync tracked modifications remain
+candidate contains exactly 14 intended release-audit, runtime-remediation, and
+handoff paths: the workflow, gate script, three test files, accepted ADR, three
+canonical status documents, frontend runtime/dependency files, and both nginx
+Dockerfiles. The previous pre-sync tracked modifications remain
 preserved reversibly in the stash named
 `pre-main-sync-mvp-audit-2026-07-24`; they were superseded by the more complete
 PR #9 implementation already on `main`. Playwright result metadata is not part
@@ -44,8 +45,8 @@ Current program state:
 - Phase 0 durable checkpoint and baseline: **complete**.
 - Phase 1 reproducible development runtime: **complete locally**.
 - Phase 2 security/release foundation: **application/source gates green;
-  container residual-risk policy accepted and patch local; external release
-  gates pending**.
+  container residual-risk policy accepted; fixable runtime findings remediated
+  locally; final CI evidence pending**.
 - Phase 3 product/UX: **local implemented scope and browser/PWA gates green**.
 - Phase 4 adversarial QA/staging: **local and branch E2E gates green; protected staging and external operations evidence pending**.
 - Phase 5 release candidate: **PR #8 through #10 merged; evidence-only source,
@@ -83,13 +84,29 @@ This section supersedes the older PR #8 continuation instructions below.
   owner risk review before an RC tag can be approved. The decision is recorded
   as **Accepted** in
   [`2026-07-24-auditable-container-vulnerability-gate.md`](../adr/2026-07-24-auditable-container-vulnerability-gate.md).
+- Evidence-only release run
+  [30120739636](https://github.com/cahangeorge/betting-platform/actions/runs/30120739636)
+  then proved the new contract end to end: `verify-source`, all three image
+  builds, and runtime smoke passed; the auditable gate stopped on **72 fixable
+  High/Critical findings** and uploaded the complete vulnerability reports.
+  `publish-signed-images` was skipped and nothing was published.
+- The current remediation upgrades the frontend toolchain to SvelteKit
+  `2.70.1`, Svelte `5.56.7`, Vite `8.1.5`, the Vite Svelte plugin `7.2.0`, and
+  PostCSS `8.5.23`; removes unused npm/Corepack tooling from the non-root
+  frontend runtime image; and pins both nginx images to
+  `nginx:1.30.4-alpine@sha256:97d490c...`. Local image inspection confirmed
+  that the formerly reported fixable packages are absent or at/above Trivy's
+  fixed versions. The final clean-revision Trivy proof must still come from CI:
+  the local Trivy binary checksum passed, but its database resolver could not
+  reach the registry from this host.
 - Fresh local verification on the synced tree:
   - backend Ruff and **545/545** pytest;
   - root release/security contracts **25/25**, Ruff, tracked/untracked secret
     scan, actionlint `1.7.12` with verified checksum, workflow YAML, shell
     syntax, and `git diff --check`;
   - frontend `pnpm check` 0 diagnostics, unit **121/121**, E2E TypeScript, and
-    production build;
+    production build on Vite `8.1.5`; production dependency audit has only one
+    Low finding and no High/Critical finding;
   - Chromium hybrid **56/56**, one worker, zero retries, **3.7m**;
   - after workflow-dispatch run `30120738580` exposed a duplicated transient
     lock/banner assertion, the two affected live-state tests passed **2/2**
@@ -107,11 +124,12 @@ Exact continuation order:
 1. The product owner accepted the auditable container vulnerability policy on
    2026-07-24. This does not authorize a tag, GHCR publication, deployment, or
    public launch.
-2. The nine-path candidate is committed and pushed on `agent/trivy-gate-pr`.
-   GitHub currently returns HTTP 500 when creating any new PR in this
-   repository; retry the PR operation without bypassing review.
-3. After the PR opens, require Backend, Frontend, Security, and Hybrid E2E
-   green.
+2. Commit and push the six-file runtime remediation plus its updated contract,
+   then retry PR creation on `agent/trivy-gate-pr`. GitHub previously returned
+   HTTP 500 when creating any new PR in this repository; do not bypass review.
+3. Dispatch Security, Hybrid E2E, and evidence-only `Release Build and
+   Evidence` on the final SHA. Require Backend, Frontend, Security, and Hybrid
+   E2E green plus a successful fixable-finding image gate.
 4. Merge only after the PR is green, then rerun evidence-only `Release Build
    and Evidence` on the resulting `main`. Require `verify-source`,
    `build-scan-and-package`, three complete JSON vulnerability reports, three

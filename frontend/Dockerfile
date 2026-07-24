@@ -17,7 +17,13 @@ FROM node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb
 
 WORKDIR /app
 
-RUN addgroup -S -g 1001 nodeuser \
+RUN rm -rf \
+        /usr/local/lib/node_modules/corepack \
+        /usr/local/lib/node_modules/npm \
+        /usr/local/bin/corepack \
+        /usr/local/bin/npm \
+        /usr/local/bin/npx \
+    && addgroup -S -g 1001 nodeuser \
     && adduser -S -u 1001 -G nodeuser nodeuser
 
 COPY --from=builder /app/build ./build

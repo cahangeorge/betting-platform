@@ -474,6 +474,17 @@ class ProductionContractTests(unittest.TestCase):
         self.assertEqual(frontend.count("pnpm install --frozen-lockfile"), 1)
         self.assertIn("pnpm build && pnpm prune --prod", frontend)
         self.assertIn("COPY --from=builder /app/node_modules ./node_modules", frontend)
+        for bundled_tool in (
+            "/usr/local/lib/node_modules/corepack",
+            "/usr/local/lib/node_modules/npm",
+            "/usr/local/bin/corepack",
+            "/usr/local/bin/npm",
+            "/usr/local/bin/npx",
+        ):
+            self.assertIn(bundled_tool, frontend)
+        self.assertIn('"@sveltejs/vite-plugin-svelte": "^7.2.0"', package)
+        self.assertIn('"postcss": "^8.5.23"', package)
+        self.assertIn('"vite": "^8.1.5"', package)
 
         release = (ROOT / ".github/workflows/release.yml").read_text()
         smoke = release.index("name: Smoke built production images")
@@ -508,9 +519,16 @@ class ProductionContractTests(unittest.TestCase):
 
     def test_tls_edge_rate_limits_auth_and_proxies_websockets(self) -> None:
         nginx = (ROOT / "deploy/production/nginx/nginx.conf").read_text()
+        nginx_runtime_dockerfile = (ROOT / "nginx/Dockerfile").read_text()
         nginx_dockerfile = (ROOT / "nginx/Dockerfile.production").read_text()
         compose = (ROOT / "deploy/production/compose.yml").read_text()
 
+        pinned_nginx_base = (
+            "FROM nginx:1.30.4-alpine@sha256:"
+            "97d490c12ba55b4946b01546d1c3ed324e8d41ab1c9fcb2a616aa470620e5b46"
+        )
+        self.assertIn(pinned_nginx_base, nginx_runtime_dockerfile)
+        self.assertIn(pinned_nginx_base, nginx_dockerfile)
         self.assertIn("listen 8080", nginx)
         self.assertIn("listen 8443 ssl", nginx)
         self.assertIn("USER nginx", nginx_dockerfile)
