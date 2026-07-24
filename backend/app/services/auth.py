@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import bcrypt
-from jose import JWTError, jwt
+import jwt
 
 from app.config import get_settings
 from app.models.user import Session
@@ -54,5 +54,5 @@ def decode_token(token: str) -> dict | None:
     try:
         payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
         return payload
-    except JWTError:
+    except jwt.PyJWTError:
         return None
