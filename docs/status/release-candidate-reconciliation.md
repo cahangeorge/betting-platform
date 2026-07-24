@@ -1,7 +1,7 @@
 # Release Candidate Reconciliation Plan
 
-Updated: 2026-07-24T22:33:40+03:00
-Branch: `agent/trivy-risk-policy`
+Updated: 2026-07-24T22:35:55+03:00
+Branch: `agent/trivy-gate-pr`
 Status: **PR #8-#10 MERGED; CONTAINER POLICY ACCEPTED; GATE PATCH CANDIDATE**
 
 This plan converted the intentionally dirty, locally verified MVP checkout into

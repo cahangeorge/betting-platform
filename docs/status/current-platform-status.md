@@ -1,7 +1,7 @@
 # Current Platform Status
 
-Updated: 2026-07-24T22:33:40+03:00
-Repository/branch: `/home/gion/Projects/bet` / `agent/trivy-risk-policy`
+Updated: 2026-07-24T22:35:55+03:00
+Repository/branch: `/home/gion/Projects/bet` / `agent/trivy-gate-pr`
 Dirty state at this handoff refresh:
 
 ```text

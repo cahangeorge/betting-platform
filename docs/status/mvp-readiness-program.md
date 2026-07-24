@@ -1,8 +1,8 @@
 # MVP Readiness Program
 
-Updated: 2026-07-24T22:33:40+03:00
+Updated: 2026-07-24T22:35:55+03:00
 Repository: `/home/gion/Projects/bet`
-Branch: `agent/trivy-risk-policy`
+Branch: `agent/trivy-gate-pr`
 Program status: **ACTIVE — local validation and container policy GO; CI integration/public MVP launch HOLD**
 
 This is the durable execution register for reaching a verified MVP. It records
