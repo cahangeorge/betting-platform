@@ -71,11 +71,7 @@ def serialize_value(value):
         return value
 
     if hasattr(value, "__dict__"):
-        return {
-            key: serialize_value(item)
-            for key, item in value.__dict__.items()
-            if not key.startswith("_")
-        }
+        return {key: serialize_value(item) for key, item in value.__dict__.items() if not key.startswith("_")}
 
     return str(value)
 
@@ -149,22 +145,62 @@ def catalog(payload=None):  # noqa: ARG001 — payload accepted for uniform disp
                 "id": "models",
                 "label": "Models",
                 "operations": [
-                    {"id": "model_fit_predict", "label": "Fit + Predict", "description": "Fit a penaltyblog goals model and produce a probability grid."},
-                    {"id": "goal_expectancy", "label": "Goal Expectancy", "description": "Infer implied goal expectancies from 1X2 probabilities."},
-                    {"id": "goal_expectancy_extended", "label": "Goal Expectancy Extended", "description": "Infer goal expectancies and rho from 1X2 and O/U 2.5 probabilities."},
-                    {"id": "dixon_coles_weights", "label": "Dixon-Coles Weights", "description": "Generate time-decay weights from dates."},
+                    {
+                        "id": "model_fit_predict",
+                        "label": "Fit + Predict",
+                        "description": "Fit a penaltyblog goals model and produce a probability grid.",
+                    },
+                    {
+                        "id": "goal_expectancy",
+                        "label": "Goal Expectancy",
+                        "description": "Infer implied goal expectancies from 1X2 probabilities.",
+                    },
+                    {
+                        "id": "goal_expectancy_extended",
+                        "label": "Goal Expectancy Extended",
+                        "description": "Infer goal expectancies and rho from 1X2 and O/U 2.5 probabilities.",
+                    },
+                    {
+                        "id": "dixon_coles_weights",
+                        "label": "Dixon-Coles Weights",
+                        "description": "Generate time-decay weights from dates.",
+                    },
                 ],
             },
             {
                 "id": "betting",
                 "label": "Betting",
                 "operations": [
-                    {"id": "calculate_implied", "label": "Calculate Implied", "description": "Convert odds into implied probabilities."},
-                    {"id": "kelly_criterion", "label": "Kelly Criterion", "description": "Compute optimal Kelly stake for one bet."},
-                    {"id": "multiple_kelly_criterion", "label": "Multiple Kelly", "description": "Compute Kelly stakes for a portfolio."},
-                    {"id": "identify_value_bet", "label": "Identify Value Bet", "description": "Compare model probabilities to bookmaker odds."},
-                    {"id": "find_arbitrage_opportunities", "label": "Find Arbitrage", "description": "Scan multi-bookmaker odds for arbitrage."},
-                    {"id": "arbitrage_hedge", "label": "Arbitrage Hedge", "description": "Compute hedge stakes for an existing position."},
+                    {
+                        "id": "calculate_implied",
+                        "label": "Calculate Implied",
+                        "description": "Convert odds into implied probabilities.",
+                    },
+                    {
+                        "id": "kelly_criterion",
+                        "label": "Kelly Criterion",
+                        "description": "Compute optimal Kelly stake for one bet.",
+                    },
+                    {
+                        "id": "multiple_kelly_criterion",
+                        "label": "Multiple Kelly",
+                        "description": "Compute Kelly stakes for a portfolio.",
+                    },
+                    {
+                        "id": "identify_value_bet",
+                        "label": "Identify Value Bet",
+                        "description": "Compare model probabilities to bookmaker odds.",
+                    },
+                    {
+                        "id": "find_arbitrage_opportunities",
+                        "label": "Find Arbitrage",
+                        "description": "Scan multi-bookmaker odds for arbitrage.",
+                    },
+                    {
+                        "id": "arbitrage_hedge",
+                        "label": "Arbitrage Hedge",
+                        "description": "Compute hedge stakes for an existing position.",
+                    },
                     {"id": "convert_odds", "label": "Convert Odds", "description": "Convert odds into decimal format."},
                 ],
             },
@@ -172,82 +208,186 @@ def catalog(payload=None):  # noqa: ARG001 — payload accepted for uniform disp
                 "id": "ratings",
                 "label": "Ratings",
                 "operations": [
-                    {"id": "elo_ratings", "label": "Elo", "description": "Run Elo updates and optional match prediction."},
-                    {"id": "pi_ratings", "label": "Pi Ratings", "description": "Run Pi updates and optional match prediction."},
-                    {"id": "colley_ratings", "label": "Colley", "description": "Compute Colley team ratings from results."},
-                    {"id": "massey_ratings", "label": "Massey", "description": "Compute Massey team ratings from results."},
+                    {
+                        "id": "elo_ratings",
+                        "label": "Elo",
+                        "description": "Run Elo updates and optional match prediction.",
+                    },
+                    {
+                        "id": "pi_ratings",
+                        "label": "Pi Ratings",
+                        "description": "Run Pi updates and optional match prediction.",
+                    },
+                    {
+                        "id": "colley_ratings",
+                        "label": "Colley",
+                        "description": "Compute Colley team ratings from results.",
+                    },
+                    {
+                        "id": "massey_ratings",
+                        "label": "Massey",
+                        "description": "Compute Massey team ratings from results.",
+                    },
                 ],
             },
             {
                 "id": "metrics",
                 "label": "Metrics",
                 "operations": [
-                    {"id": "score_predictions", "label": "Score Predictions", "description": "Calculate Brier, RPS, and ignorance scores."},
+                    {
+                        "id": "score_predictions",
+                        "label": "Score Predictions",
+                        "description": "Calculate Brier, RPS, and ignorance scores.",
+                    },
                 ],
             },
             {
                 "id": "backtest",
                 "label": "Backtest",
                 "operations": [
-                    {"id": "backtest_run", "label": "Backtest Strategy", "description": "Run a simple model-driven backtest over dated fixtures."},
+                    {
+                        "id": "backtest_run",
+                        "label": "Backtest Strategy",
+                        "description": "Run a simple model-driven backtest over dated fixtures.",
+                    },
                 ],
             },
             {
                 "id": "scrapers",
                 "label": "Scrapers",
                 "operations": [
-                    {"id": "scraper_footballdata_fixtures", "label": "FootballData Fixtures", "description": "Fetch football-data.co.uk fixtures."},
-                    {"id": "scraper_fbref_fixtures", "label": "FBRef Fixtures", "description": "Fetch FBRef fixtures/results."},
-                    {"id": "scraper_fbref_stats", "label": "FBRef Stats", "description": "Fetch FBRef squad and player stats."},
-                    {"id": "scraper_understat_fixtures", "label": "Understat Fixtures", "description": "Fetch Understat fixtures with xG."},
-                    {"id": "scraper_understat_shots", "label": "Understat Shots", "description": "Fetch Understat shot events for one match."},
-                    {"id": "scraper_clubelo_by_date", "label": "ClubElo by Date", "description": "Fetch ClubElo ratings by date."},
-                    {"id": "scraper_clubelo_by_team", "label": "ClubElo by Team", "description": "Fetch ClubElo team history."},
-                    {"id": "scraper_clubelo_team_names", "label": "ClubElo Team Names", "description": "Fetch ClubElo team catalogue."},
+                    {
+                        "id": "scraper_footballdata_fixtures",
+                        "label": "FootballData Fixtures",
+                        "description": "Fetch football-data.co.uk fixtures.",
+                    },
+                    {
+                        "id": "scraper_fbref_fixtures",
+                        "label": "FBRef Fixtures",
+                        "description": "Fetch FBRef fixtures/results.",
+                    },
+                    {
+                        "id": "scraper_fbref_stats",
+                        "label": "FBRef Stats",
+                        "description": "Fetch FBRef squad and player stats.",
+                    },
+                    {
+                        "id": "scraper_understat_fixtures",
+                        "label": "Understat Fixtures",
+                        "description": "Fetch Understat fixtures with xG.",
+                    },
+                    {
+                        "id": "scraper_understat_shots",
+                        "label": "Understat Shots",
+                        "description": "Fetch Understat shot events for one match.",
+                    },
+                    {
+                        "id": "scraper_clubelo_by_date",
+                        "label": "ClubElo by Date",
+                        "description": "Fetch ClubElo ratings by date.",
+                    },
+                    {
+                        "id": "scraper_clubelo_by_team",
+                        "label": "ClubElo by Team",
+                        "description": "Fetch ClubElo team history.",
+                    },
+                    {
+                        "id": "scraper_clubelo_team_names",
+                        "label": "ClubElo Team Names",
+                        "description": "Fetch ClubElo team catalogue.",
+                    },
                 ],
             },
             {
                 "id": "fpl",
                 "label": "Fantasy Premier League",
                 "operations": [
-                    {"id": "fpl_current_gameweek", "label": "Current Gameweek", "description": "Fetch the active FPL gameweek."},
-                    {"id": "fpl_gameweek_info", "label": "Gameweek Info", "description": "Fetch FPL gameweek metadata."},
-                    {"id": "fpl_player_id_mappings", "label": "Player ID Mappings", "description": "Fetch FPL player ID mappings."},
+                    {
+                        "id": "fpl_current_gameweek",
+                        "label": "Current Gameweek",
+                        "description": "Fetch the active FPL gameweek.",
+                    },
+                    {
+                        "id": "fpl_gameweek_info",
+                        "label": "Gameweek Info",
+                        "description": "Fetch FPL gameweek metadata.",
+                    },
+                    {
+                        "id": "fpl_player_id_mappings",
+                        "label": "Player ID Mappings",
+                        "description": "Fetch FPL player ID mappings.",
+                    },
                     {"id": "fpl_player_data", "label": "Player Data", "description": "Fetch FPL player stats."},
-                    {"id": "fpl_player_history", "label": "Player History", "description": "Fetch FPL history for one player."},
+                    {
+                        "id": "fpl_player_history",
+                        "label": "Player History",
+                        "description": "Fetch FPL history for one player.",
+                    },
                     {"id": "fpl_rankings", "label": "Rankings", "description": "Fetch FPL rankings page."},
-                    {"id": "fpl_entry_picks", "label": "Entry Picks", "description": "Fetch FPL entry picks for a gameweek."},
+                    {
+                        "id": "fpl_entry_picks",
+                        "label": "Entry Picks",
+                        "description": "Fetch FPL entry picks for a gameweek.",
+                    },
                 ],
             },
             {
                 "id": "matchflow",
                 "label": "Matchflow Pipeline",
                 "operations": [
-                    {"id": "matchflow_execute", "label": "Execute Pipeline", "description": "Run a matchflow data pipeline and collect results."},
-                    {"id": "matchflow_schema", "label": "Infer Schema", "description": "Infer field types from pipeline output."},
-                    {"id": "matchflow_explain", "label": "Explain Plan", "description": "Show the optimized execution plan."},
+                    {
+                        "id": "matchflow_execute",
+                        "label": "Execute Pipeline",
+                        "description": "Run a matchflow data pipeline and collect results.",
+                    },
+                    {
+                        "id": "matchflow_schema",
+                        "label": "Infer Schema",
+                        "description": "Infer field types from pipeline output.",
+                    },
+                    {
+                        "id": "matchflow_explain",
+                        "label": "Explain Plan",
+                        "description": "Show the optimized execution plan.",
+                    },
                 ],
             },
             {
                 "id": "visualization",
                 "label": "Visualization",
                 "operations": [
-                    {"id": "pitch_render", "label": "Pitch Visualization", "description": "Render a football pitch with data layers."},
-                    {"id": "bayesian_diagnostic_plots", "label": "Bayesian Diagnostic Plots", "description": "Generate MCMC diagnostic plots."},
+                    {
+                        "id": "pitch_render",
+                        "label": "Pitch Visualization",
+                        "description": "Render a football pitch with data layers.",
+                    },
+                    {
+                        "id": "bayesian_diagnostic_plots",
+                        "label": "Bayesian Diagnostic Plots",
+                        "description": "Generate MCMC diagnostic plots.",
+                    },
                 ],
             },
             {
                 "id": "opta",
                 "label": "Opta",
                 "operations": [
-                    {"id": "opta_mappings", "label": "Event & Qualifier Mappings", "description": "Get Opta event type and qualifier definitions."},
+                    {
+                        "id": "opta_mappings",
+                        "label": "Event & Qualifier Mappings",
+                        "description": "Get Opta event type and qualifier definitions.",
+                    },
                 ],
             },
             {
                 "id": "bayesian",
                 "label": "Bayesian Diagnostics",
                 "operations": [
-                    {"id": "bayesian_diagnostics", "label": "Numerical Diagnostics", "description": "Compute R-hat, ESS, and autocorrelation for Bayesian models."},
+                    {
+                        "id": "bayesian_diagnostics",
+                        "label": "Numerical Diagnostics",
+                        "description": "Compute R-hat, ESS, and autocorrelation for Bayesian models.",
+                    },
                 ],
             },
         ]
@@ -301,6 +441,7 @@ def run_model_fit_predict(payload):
 
     # Per-team match counts for diagnostics
     from collections import Counter
+
     all_teams_list = list(teams_home) + list(teams_away)
     team_counts = Counter(all_teams_list)
 
@@ -617,9 +758,7 @@ def run_pi_ratings(payload):
     }
     prediction = payload.get("prediction")
     if prediction:
-        result["prediction"] = system.calculate_match_probabilities(
-            prediction["home"], prediction["away"]
-        )
+        result["prediction"] = system.calculate_match_probabilities(prediction["home"], prediction["away"])
     return result
 
 
@@ -671,11 +810,14 @@ def run_backtest(payload):
 
     model_name = payload.get("model", "PoissonGoalsModel")
     market = payload.get("market", "home_win")
-    odds_field = payload.get("odds_field", {
-        "home_win": "home_odds",
-        "draw": "draw_odds",
-        "away_win": "away_odds",
-    }.get(market, "home_odds"))
+    odds_field = payload.get(
+        "odds_field",
+        {
+            "home_win": "home_odds",
+            "draw": "draw_odds",
+            "away_win": "away_odds",
+        }.get(market, "home_odds"),
+    )
     threshold = float(payload.get("threshold", 0.45))
     bankroll = float(payload.get("bankroll", 1000.0))
     stake = float(payload.get("stake", 50.0))
@@ -847,9 +989,7 @@ def run_fpl_rankings(payload):
 def run_fpl_entry_picks(payload):
     import penaltyblog as pb
 
-    return pb.fpl.get_entry_picks_by_gameweek(
-        payload["entry_id"], gameweek=int(payload.get("gameweek", 1))
-    )
+    return pb.fpl.get_entry_picks_by_gameweek(payload["entry_id"], gameweek=int(payload.get("gameweek", 1)))
 
 
 # ── Matchflow operations ──────────────────────────────────────────────────────
@@ -951,6 +1091,7 @@ def _apply_steps(flow, steps):
         elif op == "opta_filter":
             # Filter by Opta event type IDs and/or qualifier IDs
             from penaltyblog.matchflow import get_opta_mappings
+
             mappings = get_opta_mappings()
             event_ids = step.get("event_type_ids", [])
             qualifier_ids = step.get("qualifier_ids", [])
@@ -1013,9 +1154,11 @@ def run_matchflow_schema(payload):
 def run_matchflow_explain(payload):
     """Return the optimized plan for a pipeline."""
     import io
+
     flow = _run_matchflow_pipeline(payload["pipeline"])
     buf = io.StringIO()
     import contextlib
+
     with contextlib.redirect_stdout(buf):
         flow.explain()
     return {"plan": buf.getvalue()}

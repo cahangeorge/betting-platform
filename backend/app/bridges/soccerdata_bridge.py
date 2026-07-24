@@ -40,10 +40,7 @@ def serialize_value(value):
 
 
 def serialize_records(records):
-    return [
-        {key: serialize_value(value) for key, value in record.items()}
-        for record in records
-    ]
+    return [{key: serialize_value(value) for key, value in record.items()} for record in records]
 
 
 def load_soccerdata_paths():
@@ -180,6 +177,7 @@ def get_team_mapping(_payload):
     """Read the teamname_replacements.json config file."""
     from soccerdata._config import CONFIG_DIR
     import json as _json
+
     f = CONFIG_DIR / "teamname_replacements.json"
     if f.is_file():
         with f.open(encoding="utf8") as fh:
@@ -191,6 +189,7 @@ def set_team_mapping(payload):
     """Write the teamname_replacements.json config file."""
     from soccerdata._config import CONFIG_DIR
     import json as _json
+
     f = CONFIG_DIR / "teamname_replacements.json"
     mappings = payload.get("mappings", {})
     f.parent.mkdir(parents=True, exist_ok=True)
@@ -587,16 +586,18 @@ def get_sofascore_schedule(payload):
     df = df.reset_index()
     rows = []
     for record in serialize_records(df.to_dict(orient="records")):
-        rows.append({
-            "game": record.get("game"),
-            "date": record.get("date"),
-            "homeTeam": record.get("home_team"),
-            "awayTeam": record.get("away_team"),
-            "homeScore": record.get("home_score"),
-            "awayScore": record.get("away_score"),
-            "status": record.get("status"),
-            "round": record.get("round"),
-        })
+        rows.append(
+            {
+                "game": record.get("game"),
+                "date": record.get("date"),
+                "homeTeam": record.get("home_team"),
+                "awayTeam": record.get("away_team"),
+                "homeScore": record.get("home_score"),
+                "awayScore": record.get("away_score"),
+                "status": record.get("status"),
+                "round": record.get("round"),
+            }
+        )
     return {"rows": rows, "summary": {"league": league, "season": season, "count": len(rows), "source": "Sofascore"}}
 
 
@@ -616,18 +617,20 @@ def get_understat_schedule(payload):
     df = df.reset_index()
     rows = []
     for record in serialize_records(df.to_dict(orient="records")):
-        rows.append({
-            "game": record.get("game"),
-            "gameId": record.get("game_id"),
-            "date": record.get("date"),
-            "homeTeam": record.get("home_team"),
-            "awayTeam": record.get("away_team"),
-            "homeGoals": record.get("home_goals"),
-            "awayGoals": record.get("away_goals"),
-            "homeXg": record.get("home_xg"),
-            "awayXg": record.get("away_xg"),
-            "isResult": record.get("is_result"),
-        })
+        rows.append(
+            {
+                "game": record.get("game"),
+                "gameId": record.get("game_id"),
+                "date": record.get("date"),
+                "homeTeam": record.get("home_team"),
+                "awayTeam": record.get("away_team"),
+                "homeGoals": record.get("home_goals"),
+                "awayGoals": record.get("away_goals"),
+                "homeXg": record.get("home_xg"),
+                "awayXg": record.get("away_xg"),
+                "isResult": record.get("is_result"),
+            }
+        )
     return {"rows": rows, "summary": {"league": league, "season": season, "count": len(rows), "source": "Understat"}}
 
 
@@ -647,22 +650,24 @@ def get_understat_team_match_stats(payload):
     df = _flatten_columns(df.reset_index())
     rows = []
     for record in serialize_records(df.to_dict(orient="records")):
-        rows.append({
-            "game": record.get("game"),
-            "date": record.get("date"),
-            "homeTeam": record.get("home_team"),
-            "awayTeam": record.get("away_team"),
-            "homeXg": record.get("home_xg"),
-            "awayXg": record.get("away_xg"),
-            "homeNpXg": record.get("home_np_xg"),
-            "awayNpXg": record.get("away_np_xg"),
-            "homePpda": record.get("home_ppda"),
-            "awayPpda": record.get("away_ppda"),
-            "homeDeep": record.get("home_deep_completions"),
-            "awayDeep": record.get("away_deep_completions"),
-            "homeGoals": record.get("home_goals"),
-            "awayGoals": record.get("away_goals"),
-        })
+        rows.append(
+            {
+                "game": record.get("game"),
+                "date": record.get("date"),
+                "homeTeam": record.get("home_team"),
+                "awayTeam": record.get("away_team"),
+                "homeXg": record.get("home_xg"),
+                "awayXg": record.get("away_xg"),
+                "homeNpXg": record.get("home_np_xg"),
+                "awayNpXg": record.get("away_np_xg"),
+                "homePpda": record.get("home_ppda"),
+                "awayPpda": record.get("away_ppda"),
+                "homeDeep": record.get("home_deep_completions"),
+                "awayDeep": record.get("away_deep_completions"),
+                "homeGoals": record.get("home_goals"),
+                "awayGoals": record.get("away_goals"),
+            }
+        )
     return {"rows": rows, "summary": {"league": league, "season": season, "count": len(rows), "source": "Understat"}}
 
 
@@ -682,22 +687,24 @@ def get_understat_player_season_stats(payload):
     df = _flatten_columns(df.reset_index())
     rows = []
     for record in serialize_records(df.to_dict(orient="records")):
-        rows.append({
-            "player": record.get("player"),
-            "team": record.get("team"),
-            "games": record.get("games"),
-            "goals": record.get("goals"),
-            "assists": record.get("assists"),
-            "xg": record.get("xg"),
-            "xa": record.get("xa"),
-            "shots": record.get("shots"),
-            "keyPasses": record.get("key_passes"),
-            "yellowCards": record.get("yellow_cards"),
-            "redCards": record.get("red_cards"),
-            "minutes": record.get("minutes"),
-            "npg": record.get("npg"),
-            "npxg": record.get("npxg"),
-        })
+        rows.append(
+            {
+                "player": record.get("player"),
+                "team": record.get("team"),
+                "games": record.get("games"),
+                "goals": record.get("goals"),
+                "assists": record.get("assists"),
+                "xg": record.get("xg"),
+                "xa": record.get("xa"),
+                "shots": record.get("shots"),
+                "keyPasses": record.get("key_passes"),
+                "yellowCards": record.get("yellow_cards"),
+                "redCards": record.get("red_cards"),
+                "minutes": record.get("minutes"),
+                "npg": record.get("npg"),
+                "npxg": record.get("npxg"),
+            }
+        )
     return {"rows": rows, "summary": {"league": league, "season": season, "count": len(rows), "source": "Understat"}}
 
 
@@ -720,20 +727,25 @@ def get_understat_shot_events(payload):
     df = df.reset_index().head(limit)
     rows = []
     for record in serialize_records(df.to_dict(orient="records")):
-        rows.append({
-            "game": record.get("game"),
-            "player": record.get("player"),
-            "team": record.get("team"),
-            "minute": record.get("minute"),
-            "xg": record.get("xg"),
-            "result": record.get("result"),
-            "situation": record.get("situation"),
-            "shotType": record.get("shot_type"),
-            "x": record.get("x"),
-            "y": record.get("y"),
-            "lastAction": record.get("last_action"),
-        })
-    return {"rows": rows, "summary": {"league": league, "season": season, "matchId": match_id, "count": len(rows), "source": "Understat"}}
+        rows.append(
+            {
+                "game": record.get("game"),
+                "player": record.get("player"),
+                "team": record.get("team"),
+                "minute": record.get("minute"),
+                "xg": record.get("xg"),
+                "result": record.get("result"),
+                "situation": record.get("situation"),
+                "shotType": record.get("shot_type"),
+                "x": record.get("x"),
+                "y": record.get("y"),
+                "lastAction": record.get("last_action"),
+            }
+        )
+    return {
+        "rows": rows,
+        "summary": {"league": league, "season": season, "matchId": match_id, "count": len(rows), "source": "Understat"},
+    }
 
 
 def get_fbref_player_season_stats(payload):
@@ -750,11 +762,17 @@ def get_fbref_player_season_stats(payload):
     df = reader.read_player_season_stats(stat_type=stat_type)
 
     if df.empty:
-        return {"rows": [], "summary": {"league": league, "season": season, "statType": stat_type, "count": 0, "source": "FBref"}}
+        return {
+            "rows": [],
+            "summary": {"league": league, "season": season, "statType": stat_type, "count": 0, "source": "FBref"},
+        }
 
     df = _flatten_columns(df.reset_index())
     rows = serialize_records(df.head(500).to_dict(orient="records"))
-    return {"rows": rows, "summary": {"league": league, "season": season, "statType": stat_type, "count": len(rows), "source": "FBref"}}
+    return {
+        "rows": rows,
+        "summary": {"league": league, "season": season, "statType": stat_type, "count": len(rows), "source": "FBref"},
+    }
 
 
 def get_fbref_team_match_stats(payload):
@@ -772,11 +790,17 @@ def get_fbref_team_match_stats(payload):
     df = reader.read_team_match_stats(stat_type=stat_type, team=team)
 
     if df.empty:
-        return {"rows": [], "summary": {"league": league, "season": season, "statType": stat_type, "count": 0, "source": "FBref"}}
+        return {
+            "rows": [],
+            "summary": {"league": league, "season": season, "statType": stat_type, "count": 0, "source": "FBref"},
+        }
 
     df = _flatten_columns(df.reset_index())
     rows = serialize_records(df.head(500).to_dict(orient="records"))
-    return {"rows": rows, "summary": {"league": league, "season": season, "statType": stat_type, "count": len(rows), "source": "FBref"}}
+    return {
+        "rows": rows,
+        "summary": {"league": league, "season": season, "statType": stat_type, "count": len(rows), "source": "FBref"},
+    }
 
 
 def get_espn_matchsheet(payload):
@@ -793,7 +817,10 @@ def get_espn_matchsheet(payload):
     df = reader.read_matchsheet(match_id=match_id_int)
 
     if df.empty:
-        return {"rows": [], "summary": {"league": league, "season": season, "matchId": match_id, "count": 0, "source": "ESPN"}}
+        return {
+            "rows": [],
+            "summary": {"league": league, "season": season, "matchId": match_id, "count": 0, "source": "ESPN"},
+        }
 
     df = _flatten_columns(df.reset_index())
     # Drop the 'roster' column — it contains the full raw ESPN roster JSON
@@ -803,7 +830,10 @@ def get_espn_matchsheet(payload):
             df = df.drop(columns=[col])
     df = df.head(limit)
     rows = serialize_records(df.to_dict(orient="records"))
-    return {"rows": rows, "summary": {"league": league, "season": season, "matchId": match_id, "count": len(rows), "source": "ESPN"}}
+    return {
+        "rows": rows,
+        "summary": {"league": league, "season": season, "matchId": match_id, "count": len(rows), "source": "ESPN"},
+    }
 
 
 def get_espn_lineup(payload):
@@ -820,7 +850,10 @@ def get_espn_lineup(payload):
     df = reader.read_lineup(match_id=match_id_int)
 
     if df.empty:
-        return {"rows": [], "summary": {"league": league, "season": season, "matchId": match_id, "count": 0, "source": "ESPN"}}
+        return {
+            "rows": [],
+            "summary": {"league": league, "season": season, "matchId": match_id, "count": 0, "source": "ESPN"},
+        }
 
     df = _flatten_columns(df.reset_index())
     for col in ("roster",):
@@ -828,7 +861,10 @@ def get_espn_lineup(payload):
             df = df.drop(columns=[col])
     df = df.head(limit)
     rows = serialize_records(df.to_dict(orient="records"))
-    return {"rows": rows, "summary": {"league": league, "season": season, "matchId": match_id, "count": len(rows), "source": "ESPN"}}
+    return {
+        "rows": rows,
+        "summary": {"league": league, "season": season, "matchId": match_id, "count": len(rows), "source": "ESPN"},
+    }
 
 
 def get_fbref_team_season_stats(payload):
@@ -847,11 +883,17 @@ def get_fbref_team_season_stats(payload):
     df = reader.read_team_season_stats(stat_type=stat_type, opponent_stats=opponent_stats)
 
     if df.empty:
-        return {"rows": [], "summary": {"league": league, "season": season, "statType": stat_type, "count": 0, "source": "FBref"}}
+        return {
+            "rows": [],
+            "summary": {"league": league, "season": season, "statType": stat_type, "count": 0, "source": "FBref"},
+        }
 
     df = _flatten_columns(df.reset_index()).head(limit)
     rows = serialize_records(df.to_dict(orient="records"))
-    return {"rows": rows, "summary": {"league": league, "season": season, "statType": stat_type, "count": len(rows), "source": "FBref"}}
+    return {
+        "rows": rows,
+        "summary": {"league": league, "season": season, "statType": stat_type, "count": len(rows), "source": "FBref"},
+    }
 
 
 def get_fbref_player_match_stats(payload):
@@ -870,11 +912,31 @@ def get_fbref_player_match_stats(payload):
     df = reader.read_player_match_stats(stat_type=stat_type, match_id=match_id)
 
     if df.empty:
-        return {"rows": [], "summary": {"league": league, "season": season, "statType": stat_type, "matchId": match_id, "count": 0, "source": "FBref"}}
+        return {
+            "rows": [],
+            "summary": {
+                "league": league,
+                "season": season,
+                "statType": stat_type,
+                "matchId": match_id,
+                "count": 0,
+                "source": "FBref",
+            },
+        }
 
     df = _flatten_columns(df.reset_index()).head(limit)
     rows = serialize_records(df.to_dict(orient="records"))
-    return {"rows": rows, "summary": {"league": league, "season": season, "statType": stat_type, "matchId": match_id, "count": len(rows), "source": "FBref"}}
+    return {
+        "rows": rows,
+        "summary": {
+            "league": league,
+            "season": season,
+            "statType": stat_type,
+            "matchId": match_id,
+            "count": len(rows),
+            "source": "FBref",
+        },
+    }
 
 
 def get_fbref_lineup(payload):
@@ -892,11 +954,17 @@ def get_fbref_lineup(payload):
     df = reader.read_lineup(match_id=match_id)
 
     if df.empty:
-        return {"rows": [], "summary": {"league": league, "season": season, "matchId": match_id, "count": 0, "source": "FBref"}}
+        return {
+            "rows": [],
+            "summary": {"league": league, "season": season, "matchId": match_id, "count": 0, "source": "FBref"},
+        }
 
     df = _flatten_columns(df.reset_index()).head(limit)
     rows = serialize_records(df.to_dict(orient="records"))
-    return {"rows": rows, "summary": {"league": league, "season": season, "matchId": match_id, "count": len(rows), "source": "FBref"}}
+    return {
+        "rows": rows,
+        "summary": {"league": league, "season": season, "matchId": match_id, "count": len(rows), "source": "FBref"},
+    }
 
 
 def get_fbref_events(payload):
@@ -914,11 +982,17 @@ def get_fbref_events(payload):
     df = reader.read_events(match_id=match_id)
 
     if df.empty:
-        return {"rows": [], "summary": {"league": league, "season": season, "matchId": match_id, "count": 0, "source": "FBref"}}
+        return {
+            "rows": [],
+            "summary": {"league": league, "season": season, "matchId": match_id, "count": 0, "source": "FBref"},
+        }
 
     df = _flatten_columns(df.reset_index()).head(limit)
     rows = serialize_records(df.to_dict(orient="records"))
-    return {"rows": rows, "summary": {"league": league, "season": season, "matchId": match_id, "count": len(rows), "source": "FBref"}}
+    return {
+        "rows": rows,
+        "summary": {"league": league, "season": season, "matchId": match_id, "count": len(rows), "source": "FBref"},
+    }
 
 
 def get_understat_player_match_stats(payload):
@@ -942,11 +1016,17 @@ def get_understat_player_match_stats(payload):
     df = reader.read_player_match_stats(match_id=match_id_val)
 
     if df.empty:
-        return {"rows": [], "summary": {"league": league, "season": season, "matchId": match_id, "count": 0, "source": "Understat"}}
+        return {
+            "rows": [],
+            "summary": {"league": league, "season": season, "matchId": match_id, "count": 0, "source": "Understat"},
+        }
 
     df = _flatten_columns(df.reset_index()).head(limit)
     rows = serialize_records(df.to_dict(orient="records"))
-    return {"rows": rows, "summary": {"league": league, "season": season, "matchId": match_id, "count": len(rows), "source": "Understat"}}
+    return {
+        "rows": rows,
+        "summary": {"league": league, "season": season, "matchId": match_id, "count": len(rows), "source": "Understat"},
+    }
 
 
 def get_sofifa_leagues(payload):
@@ -1199,6 +1279,7 @@ WHOSCORED_BROWSER = "/usr/bin/chromium"
 
 def _make_whoscored_reader(leagues, seasons, payload):
     import soccerdata as sd
+
     return sd.WhoScored(
         leagues=leagues,
         seasons=seasons,
@@ -1302,11 +1383,17 @@ def get_whoscored_missing_players(payload):
     df = reader.read_missing_players(match_id=match_id_val, force_cache=not refresh)
 
     if df.empty:
-        return {"rows": [], "summary": {"league": league, "season": season, "matchId": match_id, "count": 0, "source": "WhoScored"}}
+        return {
+            "rows": [],
+            "summary": {"league": league, "season": season, "matchId": match_id, "count": 0, "source": "WhoScored"},
+        }
 
     df = _flatten_columns(df.reset_index())
     rows = serialize_records(df.to_dict(orient="records"))
-    return {"rows": rows, "summary": {"league": league, "season": season, "matchId": match_id, "count": len(rows), "source": "WhoScored"}}
+    return {
+        "rows": rows,
+        "summary": {"league": league, "season": season, "matchId": match_id, "count": len(rows), "source": "WhoScored"},
+    }
 
 
 def get_whoscored_events(payload):
@@ -1327,11 +1414,17 @@ def get_whoscored_events(payload):
     df = reader.read_events(match_id=match_id_val, force_cache=not refresh, output_fmt="events")
 
     if df is None or df.empty:
-        return {"rows": [], "summary": {"league": league, "season": season, "matchId": match_id, "count": 0, "source": "WhoScored"}}
+        return {
+            "rows": [],
+            "summary": {"league": league, "season": season, "matchId": match_id, "count": 0, "source": "WhoScored"},
+        }
 
     df = _flatten_columns(df.reset_index()).head(limit)
     rows = serialize_records(df.to_dict(orient="records"))
-    return {"rows": rows, "summary": {"league": league, "season": season, "matchId": match_id, "count": len(rows), "source": "WhoScored"}}
+    return {
+        "rows": rows,
+        "summary": {"league": league, "season": season, "matchId": match_id, "count": len(rows), "source": "WhoScored"},
+    }
 
 
 def main():

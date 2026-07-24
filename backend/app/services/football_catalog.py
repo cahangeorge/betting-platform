@@ -179,14 +179,9 @@ async def validate_pending_football_catalog(
     result = await db.execute(stmt)
     rows = list(result.scalars().all())
     if not rows:
-        return FootballCatalogValidationResponse(
-            requested=0, checked=0, results_page_ok=0, unavailable=0, pending=0
-        )
+        return FootballCatalogValidationResponse(requested=0, checked=0, results_page_ok=0, unavailable=0, pending=0)
 
-    validator_payload = [
-        {"scrape_slug": row.scrape_slug, "source_url": row.source_url}
-        for row in rows
-    ]
+    validator_payload = [{"scrape_slug": row.scrape_slug, "source_url": row.source_url} for row in rows]
     results = await validate_oddsharvester_football_catalog(validator_payload)
     response = apply_football_catalog_validation(rows, results)
     await db.flush()
@@ -194,9 +189,7 @@ async def validate_pending_football_catalog(
 
 
 def _country_key(value: str) -> str:
-    ascii_value = unicodedata.normalize("NFKD", value.strip().casefold()).encode(
-        "ascii", "ignore"
-    ).decode()
+    ascii_value = unicodedata.normalize("NFKD", value.strip().casefold()).encode("ascii", "ignore").decode()
     return re.sub(r"[^a-z0-9]+", "-", ascii_value).strip("-")
 
 
@@ -210,17 +203,13 @@ def filter_discovered_football_leagues(payload: dict, countries: list[str]) -> l
         country_slug = str(item.get("country_slug") or "")
         country_name = str(item.get("country_name") or "")
         scrape_slug = str(item.get("scrape_slug") or "")
-        if not scrape_slug or not (
-            _country_key(country_slug) in selected or _country_key(country_name) in selected
-        ):
+        if not scrape_slug or not (_country_key(country_slug) in selected or _country_key(country_name) in selected):
             continue
         filtered[scrape_slug] = {**item, "status": "validation_pending"}
     return list(filtered.values())
 
 
-async def _load_catalog_rows_by_slugs(
-    db: AsyncSession, slugs: list[str]
-) -> list[FootballLeagueCatalog]:
+async def _load_catalog_rows_by_slugs(db: AsyncSession, slugs: list[str]) -> list[FootballLeagueCatalog]:
     if not slugs:
         return []
     result = await db.execute(
@@ -240,10 +229,7 @@ async def _validate_catalog_rows(
     checked = 0
     for start in range(0, len(rows), batch_size):
         batch = rows[start : start + batch_size]
-        validator_payload = [
-            {"scrape_slug": row.scrape_slug, "source_url": row.source_url}
-            for row in batch
-        ]
+        validator_payload = [{"scrape_slug": row.scrape_slug, "source_url": row.source_url} for row in batch]
         results = await validate_oddsharvester_football_catalog(validator_payload)
         checked += apply_football_catalog_validation(batch, results).checked
         await db.flush()
@@ -278,9 +264,7 @@ async def discover_and_validate_football_catalog(
             )
 
         slugs = [str(candidate["scrape_slug"]) for candidate in candidates]
-        existing = {
-            row.scrape_slug: row for row in await _load_catalog_rows_by_slugs(db, slugs)
-        }
+        existing = {row.scrape_slug: row for row in await _load_catalog_rows_by_slugs(db, slugs)}
         discovery_inputs = [
             FootballLeagueDiscoveryInput.model_validate(
                 {

@@ -57,9 +57,7 @@ class JobCreationIdempotency(Base):
     scheduled_job_id: Mapped[int | None] = mapped_column(
         ForeignKey("scheduled_jobs.id", ondelete="SET NULL"), nullable=True
     )
-    scrape_job_id: Mapped[int | None] = mapped_column(
-        ForeignKey("scrape_jobs.id", ondelete="SET NULL"), nullable=True
-    )
+    scrape_job_id: Mapped[int | None] = mapped_column(ForeignKey("scrape_jobs.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 

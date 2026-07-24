@@ -87,9 +87,7 @@ def test_scoreless_live_refresh_cannot_regress_a_final_score():
 def test_conflicting_completed_refresh_cannot_overwrite_a_final_score(caplog):
     stored = SimpleNamespace(id=31, home_score=2, away_score=1, status="finished")
 
-    status, home_score, away_score = scraper._resolve_match_result(
-        stored, {"home_score": "0", "away_score": "3"}, None
-    )
+    status, home_score, away_score = scraper._resolve_match_result(stored, {"home_score": "0", "away_score": "3"}, None)
 
     assert (status, home_score, away_score) == ("finished", 2, 1)
     assert "Ignored conflicting final score refresh for match_id=31" in caplog.text

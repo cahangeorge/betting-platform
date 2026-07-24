@@ -175,6 +175,7 @@ async def test_analysis_endpoints_map_dataset_authorization_failure_to_403(monke
     monkeypatch.setattr(strategies_api, "resolve_dataset_match_ids", fake_resolve)
 
     if endpoint == "batch":
+
         async def fake_load(_db, _strategy_ids):
             return [SimpleNamespace(id=5, name="Poisson", model_type="poisson", parameters={}, is_active=True)]
 

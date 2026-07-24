@@ -48,11 +48,14 @@ def test_expensive_upcoming_world_cup_scrapes_get_longer_timeout():
     assert world_cup_pipeline._world_cup_upcoming_timeout(all_markets=True, odds_history=False) == 1800
     assert world_cup_pipeline._world_cup_upcoming_timeout(all_markets=False, odds_history=True) == 1800
     assert world_cup_pipeline._world_cup_upcoming_timeout(all_markets=False, odds_history=False) is None
-    assert world_cup_pipeline._world_cup_upcoming_timeout(
-        all_markets=True,
-        odds_history=True,
-        timeout_seconds=900,
-    ) == 900
+    assert (
+        world_cup_pipeline._world_cup_upcoming_timeout(
+            all_markets=True,
+            odds_history=True,
+            timeout_seconds=900,
+        )
+        == 900
+    )
 
 
 def test_world_cup_historic_pages_uses_safe_minimum():

@@ -81,9 +81,7 @@ async def test_historic_scrape_validates_the_exact_season_and_passes_the_rendere
     resolution = await _runtime_catalog_league_env(_DB([_row()]), job)
 
     assert json.loads(resolution.env["ODDSHARVESTER_RUNTIME_FOOTBALL_HISTORIC_URLS"]) == {
-        "argentina-primera-c": {
-            "2023-2024": "https://www.oddsportal.com/football/argentina/primera-c-2023/results/"
-        }
+        "argentina-primera-c": {"2023-2024": "https://www.oddsportal.com/football/argentina/primera-c-2023/results/"}
     }
     assert resolution.league_override == ["argentina-primera-c"]
 
@@ -111,9 +109,7 @@ async def test_historic_scrape_skips_only_dynamic_leagues_without_a_validated_se
         ]
 
     monkeypatch.setattr("app.services.scraper.validate_oddsharvester_football_catalog", fake_validate)
-    resolution = await _runtime_catalog_league_env(
-        _DB([_row(), _row("argentina-liga-profesional")]), job
-    )
+    resolution = await _runtime_catalog_league_env(_DB([_row(), _row("argentina-liga-profesional")]), job)
 
     assert resolution.league_override == ["argentina-primera-c"]
     assert resolution.skipped_historic_leagues == ["argentina-liga-profesional"]

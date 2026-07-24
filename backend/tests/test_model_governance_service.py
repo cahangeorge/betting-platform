@@ -318,12 +318,8 @@ async def test_versioned_run_gate_distinguishes_manual_scheduled_and_critical_dr
         training_data_fingerprint="training-hash",
     )
 
-    manual = await assess_prediction_runs_governance(
-        object(), user_id=7, runs=[run], automated=False, now=now
-    )
-    scheduled = await assess_prediction_runs_governance(
-        object(), user_id=7, runs=[run], automated=True, now=now
-    )
+    manual = await assess_prediction_runs_governance(object(), user_id=7, runs=[run], automated=False, now=now)
+    scheduled = await assess_prediction_runs_governance(object(), user_id=7, runs=[run], automated=True, now=now)
 
     assert manual["allowed"] is True
     assert manual["model_evaluation_ids"] == [21]
@@ -338,9 +334,7 @@ async def test_versioned_run_gate_distinguishes_manual_scheduled_and_critical_dr
         }
     )
     evidence = (version, evaluation, certification, SimpleNamespace(severity="critical"), critical_gate)
-    critical = await assess_prediction_runs_governance(
-        object(), user_id=7, runs=[run], automated=False, now=now
-    )
+    critical = await assess_prediction_runs_governance(object(), user_id=7, runs=[run], automated=False, now=now)
     assert critical["allowed"] is False
     assert critical["runs"][0]["reason"] == "critical_monitoring_drift"
 
@@ -374,9 +368,7 @@ async def test_versioned_run_gate_rejects_immutable_fingerprint_mismatch(monkeyp
         training_data_fingerprint="training",
     )
 
-    result = await assess_prediction_runs_governance(
-        object(), user_id=7, runs=[run], automated=False, now=now
-    )
+    result = await assess_prediction_runs_governance(object(), user_id=7, runs=[run], automated=False, now=now)
 
     assert result["allowed"] is False
     assert result["runs"][0]["reason"] == "run_model_version_fingerprint_mismatch"

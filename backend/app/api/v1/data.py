@@ -351,17 +351,10 @@ async def list_datasets(
     datasets = list(result.scalars().all())
     if not getattr(user, "is_admin", False):
         job_ids = list(
-            dict.fromkeys(
-                job_id
-                for dataset in datasets
-                if (job_id := _dataset_scrape_job_id(dataset)) is not None
-            )
+            dict.fromkeys(job_id for dataset in datasets if (job_id := _dataset_scrape_job_id(dataset)) is not None)
         )
         jobs_result = await db.execute(select(ScrapeJob).where(ScrapeJob.id.in_(job_ids))) if job_ids else None
-        jobs_by_id = {
-            job.id: job
-            for job in (jobs_result.scalars().all() if jobs_result is not None else [])
-        }
+        jobs_by_id = {job.id: job for job in (jobs_result.scalars().all() if jobs_result is not None else [])}
         datasets = [
             dataset
             for dataset in datasets

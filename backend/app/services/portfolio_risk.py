@@ -250,9 +250,7 @@ class RiskCandidate:
         normalized_kickoffs: dict[RiskKey, tuple[datetime, ...]] = {}
         for league_id, kickoffs in self.league_kickoffs.items():
             normalized_kickoffs[league_id] = tuple(
-                sorted(
-                    {_aware_datetime(kickoff, field=f"league_kickoffs[{league_id}]") for kickoff in kickoffs}
-                )
+                sorted({_aware_datetime(kickoff, field=f"league_kickoffs[{league_id}]") for kickoff in kickoffs})
             )
         object.__setattr__(self, "league_kickoffs", MappingProxyType(normalized_kickoffs))
 

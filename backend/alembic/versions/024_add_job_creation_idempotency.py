@@ -40,9 +40,7 @@ def upgrade() -> None:
             name="uq_job_creation_idempotency_user_operation_key",
         ),
     )
-    op.create_index(
-        "ix_job_creation_idempotency_scheduled_job_id", "job_creation_idempotency", ["scheduled_job_id"]
-    )
+    op.create_index("ix_job_creation_idempotency_scheduled_job_id", "job_creation_idempotency", ["scheduled_job_id"])
     op.create_index("ix_job_creation_idempotency_scrape_job_id", "job_creation_idempotency", ["scrape_job_id"])
 
 

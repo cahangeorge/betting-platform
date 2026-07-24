@@ -152,7 +152,7 @@ def selected_world_cup_seasons(
     seasons = recent_world_cup_seasons(history_years, today=today)
     if max_historic_seasons is None:
         return seasons
-    return seasons[:max(max_historic_seasons, 0)]
+    return seasons[: max(max_historic_seasons, 0)]
 
 
 def _world_cup_historic_max_pages(max_historic_pages: int | None) -> int:

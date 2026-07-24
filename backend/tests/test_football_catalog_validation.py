@@ -83,9 +83,7 @@ def test_discovery_filter_accepts_country_names_or_slugs_and_deduplicates():
         ]
     }
 
-    result = filter_discovered_football_leagues(
-        payload, ["Argentina", "North & Central America", "Curaçao"]
-    )
+    result = filter_discovered_football_leagues(payload, ["Argentina", "North & Central America", "Curaçao"])
 
     assert [item["scrape_slug"] for item in result] == [
         "argentina-liga-profesional",
@@ -159,25 +157,17 @@ async def test_discovery_workflow_retries_rejected_leagues_until_all_are_validat
         assert batch_size == 20
         validation_round += 1
         for row in pending_rows:
-            row.status = (
-                "available"
-                if row.country_name == "Argentina" or validation_round > 1
-                else "unavailable"
-            )
+            row.status = "available" if row.country_name == "Argentina" or validation_round > 1 else "unavailable"
         return len(pending_rows)
 
-    monkeypatch.setattr(
-        football_catalog_service, "discover_oddsharvester_football_catalog", fake_discover
-    )
+    monkeypatch.setattr(football_catalog_service, "discover_oddsharvester_football_catalog", fake_discover)
     monkeypatch.setattr(football_catalog_service, "_load_catalog_rows_by_slugs", fake_load)
     monkeypatch.setattr(football_catalog_service, "refresh_football_catalog", fake_refresh)
     monkeypatch.setattr(football_catalog_service, "_validate_catalog_rows", fake_validate)
 
     response = await discover_and_validate_football_catalog(
         SimpleNamespace(),
-        FootballCatalogDiscoveryValidationRequest(
-            countries=["Argentina", "Brazil"], max_attempts=3, batch_size=20
-        ),
+        FootballCatalogDiscoveryValidationRequest(countries=["Argentina", "Brazil"], max_attempts=3, batch_size=20),
     )
 
     assert response.stop_reason == "all_validated"

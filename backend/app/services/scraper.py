@@ -539,15 +539,11 @@ def _market_key_to_odds(
     if key == "btts":
         return (
             _coerce_float(
-                bookmaker_market.get("Yes")
-                or bookmaker_market.get("odds_yes")
-                or bookmaker_market.get("btts_yes")
+                bookmaker_market.get("Yes") or bookmaker_market.get("odds_yes") or bookmaker_market.get("btts_yes")
             ),
             None,
             _coerce_float(
-                bookmaker_market.get("No")
-                or bookmaker_market.get("odds_no")
-                or bookmaker_market.get("btts_no")
+                bookmaker_market.get("No") or bookmaker_market.get("odds_no") or bookmaker_market.get("btts_no")
             ),
         )
 

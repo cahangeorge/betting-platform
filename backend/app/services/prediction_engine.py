@@ -595,9 +595,7 @@ async def execute_single_model_run(
                         run_id=run_id,
                         model_type=model_key,
                         match_id=target.id,
-                        odds_snapshot_id=(
-                            quote_set.snapshot_id if isinstance(quote_set.snapshot_id, int) else None
-                        ),
+                        odds_snapshot_id=(quote_set.snapshot_id if isinstance(quote_set.snapshot_id, int) else None),
                         market=market,
                         home_prob=home_prob,
                         draw_prob=draw_prob,

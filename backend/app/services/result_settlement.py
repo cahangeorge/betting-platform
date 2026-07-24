@@ -259,9 +259,7 @@ async def _write_settlement(db: AsyncSession, ticket: Ticket, outcome: TicketSet
     )
 
     if ticket.bankroll_id and outcome.return_amount > 0:
-        bankroll_result = await db.execute(
-            select(Bankroll).where(Bankroll.id == ticket.bankroll_id).with_for_update()
-        )
+        bankroll_result = await db.execute(select(Bankroll).where(Bankroll.id == ticket.bankroll_id).with_for_update())
         bankroll = bankroll_result.scalar_one_or_none()
         if bankroll is not None:
             bankroll.balance = _money(bankroll.balance) + return_amount

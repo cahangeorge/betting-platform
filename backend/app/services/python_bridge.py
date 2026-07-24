@@ -58,9 +58,7 @@ async def run_bridge(
     extra_env: dict[str, str] | None = None,
 ) -> dict:
     if not bridge_script:
-        raise BridgeError(
-            f"{label} bridge script is not configured. Set the corresponding BET_* bridge path env var."
-        )
+        raise BridgeError(f"{label} bridge script is not configured. Set the corresponding BET_* bridge path env var.")
 
     python_path = Path(python_bin)
     if not python_path.exists():
@@ -240,14 +238,10 @@ async def discover_oddsharvester_football_catalog(*, timeout: int | None = None)
             env={**os.environ, "PYTHONUNBUFFERED": "1"},
         )
         try:
-            _stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=timeout or ODDSHARVESTER_TIMEOUT
-            )
+            _stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout or ODDSHARVESTER_TIMEOUT)
         except asyncio.TimeoutError:
             proc.kill()
-            raise BridgeError(
-                f"OddsHarvester catalog discovery timed out after {timeout or ODDSHARVESTER_TIMEOUT}s"
-            )
+            raise BridgeError(f"OddsHarvester catalog discovery timed out after {timeout or ODDSHARVESTER_TIMEOUT}s")
         if proc.returncode != 0:
             raise BridgeError(stderr.decode().strip() or "OddsHarvester catalog discovery failed")
         if not output_path.exists():
@@ -309,8 +303,7 @@ async def run_oddsharvester_json(
         if include_report and report is not None:
             return OddsHarvesterJsonResult(records=[], report=report, cli_error=cli_error)
         raise BridgeError(
-            "OddsHarvester completed without producing a JSON output file. "
-            f"CLI output was: {raw_output or '(empty)'}"
+            f"OddsHarvester completed without producing a JSON output file. CLI output was: {raw_output or '(empty)'}"
         )
 
     try:

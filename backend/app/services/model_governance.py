@@ -812,11 +812,10 @@ async def assess_prediction_runs_governance(
             )
             continue
         model_version, evaluation, certification, monitoring, gate = evidence
-        fingerprint_matches = (
-            getattr(run, "strategy_config_hash", None) in {None, model_version.strategy_config_hash}
-            and getattr(run, "training_data_fingerprint", None)
-            in {None, model_version.training_data_fingerprint}
-        )
+        fingerprint_matches = getattr(run, "strategy_config_hash", None) in {
+            None,
+            model_version.strategy_config_hash,
+        } and getattr(run, "training_data_fingerprint", None) in {None, model_version.training_data_fingerprint}
         allowed = gate.scheduled_paper_allowed if automated else gate.manual_paper_allowed
         reason = gate.reason
         if not fingerprint_matches:

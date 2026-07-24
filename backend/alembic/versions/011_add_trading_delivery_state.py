@@ -26,9 +26,7 @@ def upgrade() -> None:
         sa.Column("delivery_status", sa.String(length=30), nullable=False, server_default="pending"),
     )
     op.add_column("execution_intents", sa.Column("transport_task_id", sa.String(length=255), nullable=True))
-    op.add_column(
-        "execution_intents", sa.Column("delivery_attempts", sa.Integer(), nullable=False, server_default="0")
-    )
+    op.add_column("execution_intents", sa.Column("delivery_attempts", sa.Integer(), nullable=False, server_default="0"))
     op.add_column("execution_intents", sa.Column("last_delivery_error", sa.Text(), nullable=True))
     op.create_index("ix_execution_intents_delivery_status", "execution_intents", ["delivery_status"])
 

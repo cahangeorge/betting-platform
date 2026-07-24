@@ -104,8 +104,7 @@ async def verify_lost_stream_outbox_recovery() -> None:
                 groups = []
             if any(
                 group.get(b"name", group.get("name")) == os.environ["BET_TASKIQ_CONSUMER_GROUP"]
-                or group.get(b"name", group.get("name"))
-                == os.environ["BET_TASKIQ_CONSUMER_GROUP"].encode()
+                or group.get(b"name", group.get("name")) == os.environ["BET_TASKIQ_CONSUMER_GROUP"].encode()
                 for group in groups
             ):
                 break

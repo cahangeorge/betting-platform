@@ -24,9 +24,7 @@ def _production_settings(**overrides) -> Settings:
 
 def _cookie_headers(response: Response) -> list[str]:
     return [
-        value.decode("latin-1")
-        for key, value in response.raw_headers
-        if key.decode("latin-1").lower() == "set-cookie"
+        value.decode("latin-1") for key, value in response.raw_headers if key.decode("latin-1").lower() == "set-cookie"
     ]
 
 
