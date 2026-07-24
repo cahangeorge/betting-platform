@@ -187,13 +187,27 @@ jobs:
           set -euo pipefail
 
           test "$(docker run --rm --entrypoint id bet-api:${{ github.sha }} -u)" != "0"
+          docker run --rm --entrypoint dpkg bet-api:${{ github.sha }} --audit
           docker run --rm --entrypoint python bet-api:${{ github.sha }} -c '
           import os
+          from pathlib import Path
+
+          import asyncpg
+          import oddsharvester
+          import penaltyblog
+          import soccerdata
           from app.main import app
           from playwright.sync_api import sync_playwright
 
           assert app
+          assert asyncpg and oddsharvester and penaltyblog and soccerdata
           assert os.environ["PLAYWRIGHT_BROWSERS_PATH"] == "/ms-playwright"
+          assert os.environ["HOME"] == "/home/appuser"
+          home = Path.home()
+          assert home == Path("/home/appuser")
+          home_probe = home / ".bet-runtime-smoke"
+          home_probe.write_text("ok")
+          home_probe.unlink()
           with sync_playwright() as playwright:
               browser = playwright.chromium.launch()
               browser.close()

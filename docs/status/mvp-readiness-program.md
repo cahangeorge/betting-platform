@@ -1,6 +1,6 @@
 # MVP Readiness Program
 
-Updated: 2026-07-25T00:19:14+03:00
+Updated: 2026-07-25T01:56:44+03:00
 Repository: `/home/gion/Projects/bet`
 Branch: `agent/post-merge-trivy-status-2026-07-24`
 Program status: **ACTIVE — PR #11 merged and main evidence GO; public MVP launch HOLD**
@@ -65,7 +65,7 @@ The program can be marked **MVP GO** only when:
 | `flumine/` | EXCLUDED | post-MVP paper execution | accepted ADR excludes paper execution from public MVP |
 | PWA | LOCAL GATES GREEN | installable shell | production HTTPS offline/recovery/update suite passed; installed-device lifecycle remains |
 | Mobile/desktop design | LOCAL GATES GREEN | operator UI | 320–1920 plus landscape/safe-area/touch/forced-colors browser gates passed; hardware/manual zoom remains |
-| DevOps/release | PR #11 MERGED / MAIN EVIDENCE GREEN | deployment | main `e2ea635`: Backend, Frontend, Security and evidence run `30126304645` green, fixable=0, frontend/nginx=0, backend=115 unresolved, publication skipped; backend applicability review, signed tag, secrets, public TLS, off-host backup, monitoring and canary remain |
+| DevOps/release | PR #11 MERGED / LOCAL BACKEND REMEDIATION GREEN | deployment | main `e2ea635`: Backend, Frontend, Security and evidence run `30126304645` green, fixable=0, frontend/nginx=0, backend=115 unresolved; local applicability review removed packages responsible for 77 prior entries and runtime smoke passed; clean CI report, signed tag, secrets, public TLS, off-host backup, monitoring and canary remain |
 | QA | LOCAL GATES GREEN / STAGING HOLD | release evidence | real protected two-user staging lifecycle is absent |
 | `betfront/` | ARCHIVED/DIRTY | none | preserve; do not include in current MVP |
 
@@ -273,7 +273,7 @@ confirmed.
 | QA-002 | Tenant | add cross-user isolation gates for jobs, predictions, WS, trading, bankroll, and settlement | COMPLETE-local — REST/settlement isolation plus user-scoped prediction WebSocket tests |
 | QA-003 | Browser | run all hybrid tests with retries disabled and eliminate flaky waits/cleanup ambiguity | COMPLETE-local — repeated retry-free Chromium gates |
 | OPS-002 | CI/CD | build, scan, publish, deploy, smoke, and retain immutable rollback artifacts | PARTIAL — exact scanned-image handoff, GHCR digest publication, keyless Cosign, GitHub attestations, non-overwrite, version promotion, and auto-rollback are implemented and contract-tested; protected tag/deploy execution remains external |
-| OPS-006 | CI supply chain | pin and validate actions/scanners, gate release tags on application tests, scan current source and images | COMPLETE-MAIN / PRE-TAG HOLD — main `e2ea635` passed Backend, Frontend, Security plus run `30126304645`; complete JSON, fixable=0, frontend/nginx=0, backend=115 unresolved, three SBOMs, publication skipped; exact backend applicability review and protected tag evidence remain |
+| OPS-006 | CI supply chain | pin and validate actions/scanners, gate release tags on application tests, scan current source and images | COMPLETE-MAIN / LOCAL REMEDIATION GREEN / PRE-TAG HOLD — main `e2ea635` passed Backend, Frontend, Security plus run `30126304645`; complete JSON, fixable=0, frontend/nginx=0, backend=115 unresolved, three SBOMs, publication skipped. Applicability review is complete: the local image patch removes packages responsible for 77 prior entries and passes non-root bridge/Chromium smoke. A clean CI report and protected tag evidence remain |
 | BE-004 | Container scraper runtime | make the production Chromium install available to the non-root backend runtime user | COMPLETE-local contract — shared `/ms-playwright` path and ownership; CI now launches Chromium in the built non-root image; execution awaits CI because local container DNS is unavailable |
 | BE-005 | Production dependencies | resolve backend plus all bridge projects from one exact Python 3.12 dependency graph | COMPLETE-local — 204-package uv lock, regeneration diff and strict dry-run green |
 | FE-007 | Container dependencies | pin pnpm and avoid a second mutable production dependency resolution | COMPLETE-local — `pnpm 10.34.5`, one frozen install, builder prune and copied production node_modules; SvelteKit `2.70.1`/Vite `8.1.5`; unused npm/Corepack removed from runtime; check, 121 unit tests, E2E typecheck, build, and High/Critical production dependency audit green |
@@ -491,9 +491,11 @@ placement must remain disabled.
 
 ## Immediate execution order
 
-1. Merge the docs-only post-merge checkpoint after normal PR checks.
-2. Review the exact backend residual-risk report from main run `30126304645`
-   for runtime applicability and package-removal options.
+1. Review and intentionally commit/publish the local backend package-removal
+   patch, expanded CI runtime smoke, and status refresh through the normal PR
+   path.
+2. Require normal checks plus an evidence-only release run on the exact clean
+   revision; inspect the new backend Trivy report and all three SBOMs.
 3. Only after new explicit approval naming an exact tag and GHCR destination,
    execute and verify the protected signed release.
 4. Execute protected staging lifecycle/two-user, off-host backup/restore,
@@ -512,10 +514,12 @@ placement must remain disabled.
   `2026-07-23-exclude-paper-execution-from-mvp.md`.
 - PR #11 merged into `main` as `e2ea635`; Backend, Frontend, Security, and
   evidence-only run `30126304645` are green.
-- The exact backend report retains 115 unresolved findings without fixed
-  versions. Runtime applicability and package-removal options remain a pre-tag
-  owner review gate; frontend and nginx retain zero and fixable findings are
-  zero.
+- The exact prior backend report retains 115 unresolved findings without fixed
+  versions. Applicability review and local package-removal remediation are
+  complete: the rebuilt image removes packages responsible for 77 prior
+  entries and passes direct bridge/HOME/Chromium smoke. A clean CI report
+  remains the pre-tag evidence gate; frontend and nginx retain zero and prior
+  fixable findings are zero.
 - No `v0.1.0-rc.20260724.*` tag and no GHCR release artifact exist yet.
 - GitHub currently lists only collaborator `cahangeorge`; a genuinely
   independent required reviewer for `registry-release` cannot be configured
@@ -523,8 +527,10 @@ placement must remain disabled.
 
 ## Exact next step
 
-Merge the docs-only checkpoint after normal checks, then perform the exact
-backend residual-risk applicability/package-removal review from main run
-`30126304645`. Do not tag, publish, or deploy without new explicit approval.
-Keep public release/MVP launch HOLD until the external release gates in the
-verification refresh are evidenced.
+Review and intentionally commit/publish the local backend-image hardening patch
+and canonical status updates through the normal PR path. Require normal checks
+plus an evidence-only release run on the exact clean revision and inspect its
+new backend Trivy report before any separately authorized tag. Do not tag,
+publish, or deploy without new explicit approval. Keep public release/MVP
+launch HOLD until the external release gates in the verification refresh are
+evidenced.

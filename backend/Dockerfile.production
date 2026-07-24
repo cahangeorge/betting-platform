@@ -20,13 +20,22 @@ RUN pip install --no-cache-dir uv==0.11.25 \
     && uv pip install --system --strict --no-cache \
     --requirement backend/requirements-production.lock \
     && python -m playwright install --with-deps chromium \
+    && apt-get autoremove --purge -y \
+    gcc \
+    g++ \
+    git \
+    libpq-dev \
+    xvfb \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app/backend
 
+ENV HOME=/home/appuser
+
 RUN addgroup --system --gid 1001 appuser \
-    && adduser --system --uid 1001 --gid 1001 appuser \
-    && chown -R appuser:appuser /app "$PLAYWRIGHT_BROWSERS_PATH"
+    && adduser --system --uid 1001 --gid 1001 --home "$HOME" appuser \
+    && mkdir -p "$HOME" \
+    && chown -R appuser:appuser /app "$PLAYWRIGHT_BROWSERS_PATH" "$HOME"
 
 USER appuser
 
