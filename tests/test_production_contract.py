@@ -462,6 +462,9 @@ class ProductionContractTests(unittest.TestCase):
         for project in ("backend", "OddsHarvester", "penaltyblog", "soccerdata"):
             self.assertIn(f"-e {project}", production_input)
             self.assertIn(f"-e {project}", production_lock)
+        self.assertIn("pyjwt==", production_lock)
+        self.assertNotIn("python-jose==", production_lock)
+        self.assertNotIn("ecdsa==", production_lock)
         for line in production_lock.splitlines():
             stripped = line.strip()
             if not stripped or stripped.startswith(("#", "-e ")):
