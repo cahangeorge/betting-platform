@@ -1,8 +1,8 @@
 # Release Candidate Reconciliation Plan
 
-Updated: 2026-07-24T23:33:07+03:00
+Updated: 2026-07-24T23:52:29+03:00
 Branch: `agent/trivy-gate-pr`
-Status: **PR #8-#10 MERGED; CONTAINER POLICY ACCEPTED; FIXABLE FINDINGS REMEDIATED LOCALLY**
+Status: **PR #11 REVIEW-CLEAR AND FULLY GREEN; MERGE/MAIN EVIDENCE PENDING**
 
 This plan converted the intentionally dirty, locally verified MVP checkout into
 a reviewable release-candidate revision without losing existing work. The owner
@@ -72,8 +72,14 @@ The recommended sequence below was executed, then hardened through CI:
 19. Independent review found a malformed-finding bypass in the Python gate.
     The local follow-up now validates report identity/schema, non-empty
     results, required finding fields, field types, and the High/Critical-only
-    severity contract. Four adversarial regression cases pass; final CI on
-    this review hardening is pending.
+    severity contract. Four adversarial regression cases pass.
+20. Code review concluded `APPROVE` with no remaining finding; architecture
+    concluded `CLEAR`. On exact hardening SHA `f897e6f`, Backend, Frontend,
+    Security, and Hybrid E2E passed, then evidence-only run `30124777407`
+    passed source verification, image build/runtime smoke, all three scans,
+    strict gate, SBOMs, secret scan, packaging, and artifact upload. Backend
+    retained 115 unresolved findings, frontend/nginx retained zero, fixable
+    findings were zero, and publication was skipped.
 
 No release tag or GHCR release artifact exists at this checkpoint.
 

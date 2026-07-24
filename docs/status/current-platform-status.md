@@ -1,6 +1,6 @@
 # Current Platform Status
 
-Updated: 2026-07-24T23:33:07+03:00
+Updated: 2026-07-24T23:52:29+03:00
 Repository/branch: `/home/gion/Projects/bet` / `agent/trivy-gate-pr`
 Dirty state at this handoff refresh:
 
@@ -46,12 +46,12 @@ Current program state:
 - Phase 1 reproducible development runtime: **complete locally**.
 - Phase 2 security/release foundation: **application/source gates green;
   container residual-risk policy accepted; fixable runtime findings remediated
-  locally; final CI evidence pending**.
+  and strict fail-closed gate verified in CI; external release gates pending**.
 - Phase 3 product/UX: **local implemented scope and browser/PWA gates green**.
 - Phase 4 adversarial QA/staging: **local and branch E2E gates green; protected staging and external operations evidence pending**.
-- Phase 5 release candidate: **PR #8 through #10 merged; evidence-only source,
-  image build, and runtime smoke green; container risk review plus protected
-  release and external staging gates pending**.
+- Phase 5 release candidate: **PR #8 through #10 merged; PR #11 is review-clear
+  and fully green; merge/main evidence, exact backend residual-risk review,
+  protected release, and external staging gates pending**.
 - Paper execution: **excluded from public MVP** by accepted ADR
   [`2026-07-23-exclude-paper-execution-from-mvp.md`](../adr/2026-07-23-exclude-paper-execution-from-mvp.md).
 - Verdict: **local application/runtime validation GO; container-risk evidence
@@ -116,9 +116,19 @@ This section supersedes the older PR #8 continuation instructions below.
   High/Critical-only severity contract; four adversarial regressions cover
   missing severity, non-string `FixedVersion`, unexpected severity, and a
   result object without its target identity. Targeted tests are **18/18**,
-  Ruff is clean, Serena reports no diagnostics,
-  and the hardened gate accepts the downloaded reports above. This follow-up
-  still requires final PR/CI evidence before merge.
+  Ruff is clean, Serena reports no diagnostics, and the hardened gate accepts
+  the downloaded reports above.
+- The final hardening SHA is `f897e6fa0e12a1305217b67a61a7eb65d204d1ff`.
+  Backend, Frontend, Security, and Hybrid E2E all passed on that exact head;
+  Hybrid passed in **7m32s**. Independent review concluded `APPROVE` with zero
+  findings and architecture `CLEAR`.
+- Final evidence-only run
+  [30124777407](https://github.com/cahangeorge/betting-platform/actions/runs/30124777407)
+  passed `verify-source` (**8m21s**) and `build-scan-and-package` (**5m26s**).
+  Its exact reports again contain backend **115** unresolved findings (**96
+  High / 19 Critical**) with no fixed version, frontend **0**, nginx **0**, and
+  **0 fixable** findings. Three CycloneDX SBOMs and both evidence artifacts
+  were uploaded; `publish-signed-images` was skipped.
 - Fresh local verification on the synced tree:
   - backend Ruff and **545/545** pytest;
   - root release/security contracts **29/29**, Ruff, tracked/untracked secret
@@ -144,18 +154,15 @@ Exact continuation order:
 1. The product owner accepted the auditable container vulnerability policy on
    2026-07-24. This does not authorize a tag, GHCR publication, deployment, or
    public launch.
-2. Commit and push the review hardening plus this refreshed handoff to PR #11.
-3. Require Backend, Frontend, Security, and Hybrid E2E green on the new head,
-   then dispatch evidence-only `Release Build and Evidence`. Require a
-   successful fixable-finding image gate and `publish-signed-images` skipped.
-4. Merge only after the PR is green, then rerun evidence-only `Release Build
-   and Evidence` on the resulting `main`. Require `verify-source`,
-   `build-scan-and-package`, three complete JSON vulnerability reports, three
-   SBOMs, and `publish-signed-images` skipped.
-5. Review the exact unresolved report against runtime applicability and base
-   image/package updates. Do not approve a tag while any fixable High/Critical
-   finding exists.
-6. Only after successful evidence and explicit approval naming both the exact
+2. Let the docs-only handoff commit complete the normal PR checks, then merge
+   PR #11 without creating a tag.
+3. After merge, rerun evidence-only `Release Build and Evidence` on the
+   resulting `main`. Require `verify-source`, `build-scan-and-package`, three
+   complete JSON vulnerability reports, three SBOMs, and
+   `publish-signed-images` skipped.
+4. Do not approve or push a release tag until the exact backend residual-risk
+   report is reviewed for runtime applicability and package-removal options.
+5. Only after successful evidence and explicit approval naming both the exact
    tag and destination may an RC tag be pushed to GHCR. Protected staging,
    secrets/TLS/DNS/firewall, off-host restore, observability/on-call,
    soak/canary, rollback, and applicable compliance evidence still gate public
