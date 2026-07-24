@@ -111,6 +111,11 @@ Repomix refreshed the whole workspace at output ID `8f2867d9900ff53a`
 (1,167 files). Codebase Memory `bet-core` was reindexed in moderate mode at
 **5,237 nodes / 19,762 edges**.
 
+After the CI remediation and durable handoff commits, Repomix produced a fresh
+compressed whole-workspace pack at output ID `7fb2a326972893e0`: **1,154 files /
+2,470,226 tokens / 138,612 lines**, excluding the already inventoried large
+HAR, build, cache, and dependency artifacts.
+
 ## 2026-07-24 final local verification refresh
 
 Evidence already confirmed in this checkout:

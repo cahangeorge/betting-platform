@@ -35,7 +35,7 @@ Canonical detail lives in `docs/status/current-platform-status.md` and `docs/sta
 - Runtime `/ready` database/schema/task_queue/task_runtime ready; Taskiq round trip/provider canary pass.
 - Local production frontend/backend images run as UID 1001; backend imports FastAPI and launches bundled Chromium.
 - Non-destructive PostgreSQL dump/restore drill passed at Alembic 025.
-- Whole-workspace Repomix output `8f2867d9900ff53a` inventoried 1,167 files; large HAR fixtures dominate raw token size.
+- Whole-workspace Repomix inventory `8f2867d9900ff53a` captured the unfiltered 1,167-file tree. Final compressed refresh after `8039d42`, excluding large HAR/build/cache artifacts, is output `7fb2a326972893e0`: 1,154 files / 2,470,226 tokens / 138,612 lines.
 
 ## Public launch HOLD gates
 

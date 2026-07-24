@@ -179,6 +179,9 @@ Repomix checkpoints:
   `233d99f089e79988`, **556 files / 788,286 tokens / 84,088 lines**. Targeted
   grep confirmed the Taskiq release gate, signed GHCR flow, fail-closed
   registry guard, device/accessibility coverage, and PWA recovery test.
+- final post-remediation compressed whole-workspace refresh: output
+  `7fb2a326972893e0`, **1,154 files / 2,470,226 tokens / 138,612 lines**,
+  excluding the previously inventoried HAR/build/cache/dependency artifacts.
 
 Final durable index checkpoint:
 
