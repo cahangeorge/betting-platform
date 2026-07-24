@@ -46,7 +46,7 @@
 		source?: string;
 	};
 
-	let activeTab = $state<DashboardTab>('history');
+	let activeTab = $state<DashboardTab>('future');
 	let historyRange = $state<HistoryRange>('7d');
 	let futurePeriod = $state<FuturePeriod>('7');
 	let selectedLeague = $state('all');
@@ -81,8 +81,8 @@
 	let verificationError = $state<string | null>(null);
 
 	const tabs: { value: DashboardTab; label: string; description: string }[] = [
-		{ value: 'history', label: 'Istoric', description: 'Rezultate, verificari si bilete decontate' },
-		{ value: 'future', label: 'Viitor', description: 'Meciuri viitoare, predictii si bilete active' }
+		{ value: 'future', label: 'Today', description: 'Ready selections and active tickets' },
+		{ value: 'history', label: 'Performance', description: 'Settled tickets and verified predictions' }
 	];
 
 	const historyRangeOptions: { value: HistoryRange; label: string }[] = [
@@ -458,14 +458,14 @@
 <div class="min-w-0 space-y-6" transition:fade={{ duration: 200 }}>
 	<BetslipReviewCallout label="Dashboard picks are ready for ticket review." />
 
-	<section class="min-w-0 space-y-4">
+	<section class="workbench-page min-w-0 space-y-4">
 		<div class="min-w-0 space-y-2">
-			<p class="text-xs font-semibold uppercase tracking-[0.28em] text-muted-foreground">Dashboard</p>
+			<p class="workbench-eyebrow">Spațiu de decizie</p>
 			<div class="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
 				<div class="min-w-0">
-					<h1 class="text-2xl font-extrabold text-foreground sm:text-3xl">Rezultate si oportunitati</h1>
+					<h1 class="workbench-heading">Deciziile de azi</h1>
 					<p class="mt-1 max-w-3xl text-sm text-muted-foreground">
-						Istoric pentru bilete si predictii verificate, plus meciuri si bilete active pentru perioada urmatoare.
+						Începe cu selecțiile viitoare verificate, apoi revizuiește biletele active și performanța când ai nevoie de context suplimentar.
 					</p>
 				</div>
 				{#if summaryLoading}
@@ -520,7 +520,7 @@
 				{#if ticketsLoading || outcomesLoading}
 					<Card>
 						<div class="grid grid-cols-3 gap-3 sm:grid-cols-6">
-							{#each Array(6) as _}
+							{#each Array(6) as _, index (index)}
 								<Skeleton class="h-40 w-full" />
 							{/each}
 						</div>
@@ -708,12 +708,12 @@
 			</section>
 		</div>
 	{:else}
-		<div class="min-w-0 space-y-6" role="tabpanel" aria-label="Viitor">
+		<div class="min-w-0 space-y-6" role="tabpanel" aria-label="Today">
 			<section class="min-w-0 space-y-4">
 				<div class="flex min-w-0 flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
 					<div class="min-w-0">
-						<h2 class="text-xl font-extrabold font-sport text-foreground">Meciuri viitoare si predictii</h2>
-						<p class="text-sm text-muted-foreground">Meciuri din dashboard upcoming, imbinate cu value bets/predictii cand exista.</p>
+						<h2 class="text-xl font-semibold text-foreground">Meciuri și predicții viitoare</h2>
+						<p class="text-sm text-muted-foreground">Meciuri viitoare completate cu selecții value și predicții atunci când sunt disponibile.</p>
 					</div>
 					<div class="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-3 xl:w-[44rem]">
 						<Select bind:value={futurePeriod} options={futurePeriodOptions} name="future-period" />
@@ -724,7 +724,7 @@
 
 				{#if upcomingLoading || valueBetsLoading}
 					<div class="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-2">
-						{#each Array(4) as _}
+						{#each Array(4) as _, index (index)}
 							<Skeleton class="h-56 w-full" />
 						{/each}
 					</div>
@@ -775,13 +775,25 @@
 									{/if}
 
 									<div class="grid grid-cols-3 gap-2">
-										<button class="rounded-md border border-border p-2 text-center hover:bg-secondary" onclick={() => addMatchToBetSlip(match, { key: 'home', label: 'Home', odds: match.home_odds })}>
+										<button
+											class="rounded-md border border-border p-2 text-center hover:bg-secondary"
+											aria-label={`Selectează 1 pentru ${match.home_team} vs ${match.away_team}`}
+											onclick={() => addMatchToBetSlip(match, { key: 'home', label: 'Home', odds: match.home_odds })}
+										>
 											<p class="text-[10px] text-muted-foreground">1</p><p class="font-mono text-sm font-semibold text-football-green">{match.home_odds?.toFixed(2) ?? '--'}</p>
 										</button>
-										<button class="rounded-md border border-border p-2 text-center hover:bg-secondary" onclick={() => addMatchToBetSlip(match, { key: 'draw', label: 'Draw', odds: match.draw_odds })}>
+										<button
+											class="rounded-md border border-border p-2 text-center hover:bg-secondary"
+											aria-label={`Selectează X pentru ${match.home_team} vs ${match.away_team}`}
+											onclick={() => addMatchToBetSlip(match, { key: 'draw', label: 'Draw', odds: match.draw_odds })}
+										>
 											<p class="text-[10px] text-muted-foreground">X</p><p class="font-mono text-sm font-semibold text-football-blue">{match.draw_odds?.toFixed(2) ?? '--'}</p>
 										</button>
-										<button class="rounded-md border border-border p-2 text-center hover:bg-secondary" onclick={() => addMatchToBetSlip(match, { key: 'away', label: 'Away', odds: match.away_odds })}>
+										<button
+											class="rounded-md border border-border p-2 text-center hover:bg-secondary"
+											aria-label={`Selectează 2 pentru ${match.home_team} vs ${match.away_team}`}
+											onclick={() => addMatchToBetSlip(match, { key: 'away', label: 'Away', odds: match.away_odds })}
+										>
 											<p class="text-[10px] text-muted-foreground">2</p><p class="font-mono text-sm font-semibold text-football-gold">{match.away_odds?.toFixed(2) ?? '--'}</p>
 										</button>
 									</div>

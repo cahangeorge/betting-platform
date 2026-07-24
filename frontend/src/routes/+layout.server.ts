@@ -1,27 +1,17 @@
 import type { LayoutServerLoad } from './$types';
-import { redirect } from '@sveltejs/kit';
+import { error, redirect } from '@sveltejs/kit';
+import { isPublicPagePath } from '../lib/seo/public-routes.ts';
 
-export const load: LayoutServerLoad = async ({ url, cookies }) => {
-	const publicRoutes = ['/login', '/signup', '/about'];
-	const isPublicRoute =
-		publicRoutes.some((route) => url.pathname.startsWith(route));
+export const load: LayoutServerLoad = async ({ url, route, locals }) => {
+	if (route.id === null) {
+		error(404, 'Pagina nu a fost găsită');
+	}
 
-	let user = null;
+	const isPublicRoute = isPublicPagePath(url.pathname);
 
-	const apiBase = process.env.BET_API_URL || 'http://localhost:8001';
-
-	try {
-		const token = cookies.get('access_token');
-		if (token) {
-			const meRes = await fetch(`${apiBase}/api/v1/auth/me`, {
-				headers: { 'Authorization': `Bearer ${token}` }
-			});
-			if (meRes.ok) {
-				user = await meRes.json();
-			}
-		}
-	} catch {
-		user = null;
+	const user = locals.user;
+	if (!user && url.pathname === '/') {
+		redirect(302, '/about');
 	}
 
 	if (!user && !isPublicRoute) {

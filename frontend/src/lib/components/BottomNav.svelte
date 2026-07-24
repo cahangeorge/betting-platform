@@ -1,43 +1,28 @@
 <script lang="ts">
 	import { page } from '$app/stores';
-	import { Home, BarChart3, Ticket, Download, User } from 'lucide-svelte';
+	import { Menu } from 'lucide-svelte';
+	import { isNavigationActive, workspaceNavigation } from '$lib/navigation';
 	import { cn } from '$lib/utils';
 
-	const primaryTabs = [
-		{ href: '/', label: 'Dashboard', icon: Home },
-		{ href: '/scrape', label: 'Scrape', icon: Download },
-		{ href: '/predict', label: 'Predict', icon: BarChart3 },
-		{ href: '/tickets', label: 'Tickets', icon: Ticket },
-		{ href: '/account', label: 'Account', icon: User }
-	];
+	let { onOpenNavigation }: { onOpenNavigation: () => void } = $props();
+	const primaryTabs = workspaceNavigation.filter((item) => item.href !== '/monitoring');
 
 	function isActive(href: string): boolean {
-		if (href === '/') return $page.url.pathname === '/';
-		return $page.url.pathname.startsWith(href);
+		return isNavigationActive($page.url.pathname, href);
 	}
 </script>
 
-<nav
-	class="fixed bottom-0 left-0 right-0 z-40 lg:hidden border-t border-border bg-background/80 backdrop-blur-xl"
-	aria-label="Primary workflow navigation"
-	style="padding-bottom: env(safe-area-inset-bottom, 0px);"
->
-	<div class="flex items-center justify-around h-16">
+<nav class="mobile-bottom-nav fixed bottom-0 left-0 right-0 z-40 border-t border-border bg-background/95 backdrop-blur-xl lg:hidden" aria-label="Navigarea principală a spațiului de lucru">
+	<div class="flex h-16 items-center justify-around">
 		{#each primaryTabs as tab (tab.href)}
-			<a
-				href={tab.href}
-				aria-label={tab.label}
-				aria-current={isActive(tab.href) ? 'page' : undefined}
-				class={cn(
-					'flex flex-col items-center justify-center gap-0.5 w-full h-full transition-colors duration-200',
-					isActive(tab.href)
-						? 'text-football-green'
-						: 'text-muted-foreground hover:text-foreground'
-				)}
-			>
-				<tab.icon class="w-5 h-5" />
-				<span class="text-[10px] font-medium">{tab.label}</span>
+			<a href={tab.href} aria-current={isActive(tab.href) ? 'page' : undefined} aria-label={tab.label} class={cn('flex h-full min-w-0 flex-1 flex-col items-center justify-center gap-1 px-0.5 text-[10px] font-medium transition-colors sm:text-xs', isActive(tab.href) ? 'text-primary' : 'text-muted-foreground hover:text-foreground')}>
+				<tab.icon class="h-5 w-5" aria-hidden="true" />
+				<span class="max-w-full truncate">{tab.label}</span>
 			</a>
 		{/each}
+		<button type="button" class="flex h-full min-w-0 flex-1 flex-col items-center justify-center gap-1 px-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:text-foreground sm:text-xs" onclick={onOpenNavigation} aria-label="Deschide navigarea completă">
+			<Menu class="h-5 w-5" aria-hidden="true" />
+			<span>Mai mult</span>
+		</button>
 	</div>
 </nav>

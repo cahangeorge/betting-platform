@@ -1,44 +1,90 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { ShoppingCart, X } from 'lucide-svelte';
+	import { onMount } from 'svelte';
 	import { betslip, betslipCombinedOdds, betslipPotentialReturn } from '$lib/stores/betslip';
 	import Badge from './ui/Badge.svelte';
 	import Button from './ui/Button.svelte';
 
 	let {
-		open = $bindable(false)
+		closeBetslip
 	}: {
-		open?: boolean;
+		closeBetslip: () => void;
 	} = $props();
+
+	let dialog = $state<HTMLDivElement | null>(null);
+	let closeButton = $state<HTMLButtonElement | null>(null);
 
 	const quickStakes = [5, 10, 25, 50, 100];
 
 	async function reviewTicket() {
-		open = false;
+		closeBetslip();
 		await goto('/tickets');
 	}
+
+	function handleKeydown(event: KeyboardEvent) {
+		if (event.key === 'Escape') {
+			event.preventDefault();
+			closeBetslip();
+			return;
+		}
+
+		if (event.key !== 'Tab') return;
+		const focusable = Array.from(
+			dialog?.querySelectorAll<HTMLElement>(
+				'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+			) ?? []
+		);
+		if (focusable.length === 0) return;
+		const first = focusable[0];
+		const last = focusable.at(-1);
+		if (event.shiftKey && document.activeElement === first) {
+			event.preventDefault();
+			last?.focus();
+		} else if (!event.shiftKey && document.activeElement === last) {
+			event.preventDefault();
+			first.focus();
+		}
+	}
+
+	onMount(() => {
+		const previousOverflow = document.body.style.overflow;
+		document.body.style.overflow = 'hidden';
+		closeButton?.focus();
+		return () => {
+			document.body.style.overflow = previousOverflow;
+		};
+	});
 </script>
 
-<div class="flex flex-col bg-card">
+<svelte:window onkeydown={handleKeydown} />
+
+<div
+	bind:this={dialog}
+	role="dialog"
+	aria-modal="true"
+	aria-labelledby="betslip-dialog-title"
+	class="flex flex-col bg-card"
+>
 	<div class="flex items-center justify-between px-4 py-3 border-b border-border">
 		<div class="flex items-center gap-2">
 			<ShoppingCart class="w-4 h-4 text-football-green" />
-			<span class="text-xs font-bold tracking-widest font-sport text-foreground">BET SLIP</span>
+			<span id="betslip-dialog-title" class="text-xs font-bold tracking-widest font-sport text-foreground">SLIP DE PARIURI</span>
 			{#if $betslip.legs.length > 0}
 				<Badge variant="success">{$betslip.legs.length}</Badge>
 			{/if}
 		</div>
-		<Button variant="ghost" size="sm" class="p-1 lg:hidden" onclick={() => (open = false)} aria-label="Close bet slip">
-			<X class="w-5 h-5 text-muted-foreground" />
-		</Button>
+			<button bind:this={closeButton} type="button" class="touch-target inline-flex min-h-11 min-w-11 items-center justify-center p-1 text-muted-foreground hover:bg-muted hover:text-foreground" onclick={closeBetslip} aria-label="Închide slipul de pariuri">
+				<X class="w-5 h-5 text-muted-foreground" />
+			</button>
 	</div>
 
 	<div class="flex-1 overflow-y-auto scroll-thin">
 		{#if $betslip.legs.length === 0}
 			<div class="flex flex-col items-center justify-center py-16 gap-3">
 				<ShoppingCart class="w-10 h-10 text-muted-foreground opacity-30" />
-				<p class="text-sm text-muted-foreground">Select odds to add bets</p>
-				<p class="text-xs text-muted-foreground">Use Dashboard, Predict, Live, or Value Bets</p>
+				<p class="text-sm text-muted-foreground">Selectează cote pentru a adăuga pariuri</p>
+				<p class="text-xs text-muted-foreground">Folosește Dashboard, Predicții, Live sau Value Bets</p>
 			</div>
 		{:else}
 			<div class="p-3 space-y-2">
@@ -53,13 +99,13 @@
 									<span class="text-sm font-mono font-semibold text-football-blue">{leg.odds.toFixed(2)}</span>
 								</div>
 							</div>
-							<Button variant="ghost" size="sm" class="p-1" onclick={() => betslip.removeLeg(leg.id)} aria-label="Remove leg">
+							<Button variant="ghost" size="sm" class="min-h-11 min-w-11 p-1" onclick={() => betslip.removeLeg(leg.id)} aria-label="Elimină selecția">
 								<X class="w-4 h-4 text-muted-foreground" />
 							</Button>
 						</div>
 						<div class="flex items-center justify-between text-[11px] text-muted-foreground">
-							<span>{leg.league ?? 'Selection'}</span>
-							<span>{leg.kickoff ? new Date(leg.kickoff).toLocaleString() : 'Pending kickoff'}</span>
+							<span>{leg.league ?? 'Selecție'}</span>
+							<span>{leg.kickoff ? new Date(leg.kickoff).toLocaleString('ro-RO') : 'Start necunoscut'}</span>
 						</div>
 					</div>
 				{/each}
@@ -67,9 +113,9 @@
 
 			<div class="px-3 pb-2">
 				<div class="flex items-center gap-1.5">
-					{#each quickStakes as amount}
+					{#each quickStakes as amount (amount)}
 						<button
-							class="flex-1 border border-border py-1.5 text-xs font-mono text-foreground transition-colors duration-200 hover:border-football-green"
+							class="min-h-11 flex-1 border border-border py-2 text-xs font-mono text-foreground transition-colors duration-200 hover:border-football-green"
 							onclick={() => betslip.setStake(amount)}
 						>
 							£{amount}
@@ -80,28 +126,28 @@
 
 			<div class="px-3 py-2">
 				<div class="flex items-center justify-between border border-border bg-background p-2">
-					<span class="text-xs text-muted-foreground">Accumulator</span>
+					<span class="text-xs text-muted-foreground">Multiplu</span>
 					<button
-						class="relative h-5 w-9 transition-colors duration-200"
+						class="relative h-7 w-12 transition-colors duration-200"
 						style="background: {$betslip.ticketType === 'accumulator' ? 'hsl(var(--football-green))' : 'hsl(var(--border))'};"
 						onclick={() => betslip.setTicketType($betslip.ticketType === 'accumulator' ? 'single' : 'accumulator')}
-						aria-label="Toggle accumulator"
+						aria-label="Comută bilet multiplu"
 					>
 						<div
-							class="absolute top-0.5 h-4 w-4 bg-card transition-all duration-200"
-							style="left: {$betslip.ticketType === 'accumulator' ? '18px' : '2px'};"
+							class="absolute top-1 h-5 w-5 bg-card transition-all duration-200"
+							style="left: {$betslip.ticketType === 'accumulator' ? '26px' : '2px'};"
 						></div>
 					</button>
 				</div>
 			</div>
 
 			<div class="px-3 pb-2">
-				<label for="betslip-stake" class="mb-2 block text-xs text-muted-foreground">Stake</label>
+				<label for="betslip-stake" class="mb-2 block text-xs text-muted-foreground">Miză</label>
 				<input
 					id="betslip-stake"
 					type="number"
 					min="0"
-					step="0.5"
+					step="0.01"
 					value={$betslip.stake || ''}
 					placeholder="0.00"
 					class="w-full border border-border bg-transparent px-3 py-2 font-mono text-sm text-foreground outline-none focus:ring-1 focus:ring-ring"
@@ -111,15 +157,15 @@
 
 			<div class="mx-3 space-y-2 border border-border bg-background p-3">
 				<div class="flex items-center justify-between">
-					<span class="text-xs text-muted-foreground">Stake</span>
+					<span class="text-xs text-muted-foreground">Miză</span>
 					<span class="text-sm font-mono font-semibold text-foreground">£{$betslip.stake.toFixed(2)}</span>
 				</div>
 				<div class="flex items-center justify-between">
-					<span class="text-xs text-muted-foreground">Total Odds</span>
+					<span class="text-xs text-muted-foreground">Cotă totală</span>
 					<span class="text-sm font-mono font-semibold text-foreground">x{$betslipCombinedOdds.toFixed(2)}</span>
 				</div>
 				<div class="flex items-center justify-between">
-					<span class="text-xs text-muted-foreground">Potential Return</span>
+					<span class="text-xs text-muted-foreground">Retur potențial</span>
 					<span class="text-sm font-mono font-bold text-football-green">£{$betslipPotentialReturn.toFixed(2)}</span>
 				</div>
 			</div>
@@ -131,8 +177,9 @@
 			<Button
 				class="w-full bg-football-green py-3 text-sm font-bold tracking-wider text-primary-foreground hover:bg-football-green/90"
 				onclick={reviewTicket}
+				aria-label="Revizuiește biletul"
 			>
-				REVIEW TICKET
+				REVIZUIEȘTE BILETUL
 			</Button>
 		</div>
 	{/if}

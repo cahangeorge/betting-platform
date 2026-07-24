@@ -5,7 +5,7 @@
 	import Button from '$lib/components/ui/Button.svelte';
 
 	let {
-		label = 'Selections ready'
+		label = 'Selecții pregătite'
 	}: {
 		label?: string;
 	} = $props();
@@ -19,16 +19,16 @@
 	<div class="border border-football-green/30 bg-football-green/8 px-4 py-3">
 		<div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
 			<div class="flex items-start gap-3">
-				<Badge variant="success">{$betslipCount} in slip</Badge>
+				<Badge variant="success">{$betslipCount} selecții în bilet</Badge>
 				<div class="space-y-1">
 					<p class="text-sm font-semibold text-foreground">{label}</p>
 					<p class="text-xs text-muted-foreground">
-						Combined odds x{$betslipCombinedOdds.toFixed(2)} · Potential return
+						Cotă totală x{$betslipCombinedOdds.toFixed(2)} · Retur potențial
 						£{$betslipPotentialReturn.toFixed(2)}
 					</p>
 				</div>
 			</div>
-			<Button variant="primary" onclick={reviewSlip}>Review Ticket</Button>
+			<Button variant="primary" onclick={reviewSlip}>Revizuiește biletul</Button>
 		</div>
 	</div>
 {/if}

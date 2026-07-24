@@ -1,27 +1,26 @@
 <script lang="ts">
-	import { goto } from '$app/navigation';
 	import AuthForm from '$lib/components/AuthForm.svelte';
-	import Card from '$lib/components/ui/Card.svelte';
+	import PublicFooter from '$lib/components/PublicFooter.svelte';
 
-	function onSignupSuccess() {
-		goto('/')
-	}
+	let { form }: import('./$types').PageProps = $props();
 </script>
 
-<div class="min-h-[calc(100vh-4rem)] flex items-center justify-center">
+<div class="flex min-h-[calc(100vh-4rem)] items-center justify-center py-6">
 	<div class="w-full max-w-md">
-		<div class="text-center mb-8">
+		<div class="mb-8 text-center">
 			<div
-				class="w-16 h-16 flex items-center justify-center mx-auto mb-4 bg-muted border border-football-green "
+				class="mx-auto mb-4 flex h-16 w-16 items-center justify-center border border-football-green bg-muted"
 			>
-				<span class="font-extrabold text-2xl text-football-green font-sport">SI</span>
+				<span class="font-sport text-2xl font-extrabold text-football-green">BF</span>
 			</div>
-			<h1 class="text-2xl font-extrabold font-sport text-foreground">Create account</h1>
-			<p class="mt-2 text-muted-foreground">Start your sports intelligence journey</p>
+			<h1 class="font-sport text-2xl font-extrabold text-foreground">Creează un cont</h1>
+			<p class="mt-2 text-muted-foreground">Păstrează datele, analizele și biletele în același flux trasabil.</p>
 		</div>
 
-		<div class="bg-card  border border-border p-5 border-t-2 border-t-football-green">
-			<AuthForm mode="signup" onSuccess={onSignupSuccess} />
+		<div class="border border-border border-t-2 border-t-football-green bg-card p-5">
+			<AuthForm mode="signup" {form} />
 		</div>
 	</div>
 </div>
+
+<PublicFooter />

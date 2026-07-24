@@ -1,19 +1,19 @@
-FROM node:22-alpine AS builder
+FROM node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2 AS builder
 
 WORKDIR /app
 
-ARG PUBLIC_API_URL=http://localhost:8001
+ARG PUBLIC_API_URL=""
 ENV PUBLIC_API_URL=$PUBLIC_API_URL
 
-RUN npm install -g pnpm@10
+RUN npm install -g pnpm@10.34.5
 
 COPY package.json pnpm-lock.yaml .npmrc ./
 RUN pnpm install --frozen-lockfile
 
 COPY . .
-RUN pnpm build
+RUN pnpm build && pnpm prune --prod
 
-FROM node:22-alpine AS runner
+FROM node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2 AS runner
 
 WORKDIR /app
 
@@ -23,8 +23,7 @@ RUN addgroup -S -g 1001 nodeuser \
 COPY --from=builder /app/build ./build
 COPY --from=builder /app/package.json ./
 COPY --from=builder /app/pnpm-lock.yaml ./
-
-RUN npm install -g pnpm@10 && pnpm install --prod --frozen-lockfile && pnpm store prune
+COPY --from=builder /app/node_modules ./node_modules
 
 RUN chown -R nodeuser:nodeuser /app
 

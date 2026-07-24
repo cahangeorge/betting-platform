@@ -1,0 +1,19 @@
+name: Compose Smoke
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'docker-compose.yml'
+      - 'docker-compose.podman.yml'
+      - '.github/workflows/compose-smoke.yml'
+
+jobs:
+  compose-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Compose config validates
+        run: |
+          docker compose -f docker-compose.yml config >/tmp/bet-compose.yml
+          docker compose -f docker-compose.podman.yml config >/tmp/bet-compose-podman.yml

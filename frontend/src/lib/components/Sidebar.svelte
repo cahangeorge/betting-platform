@@ -1,26 +1,18 @@
 <script lang="ts">
 	import { page } from '$app/stores';
+	import { Info, User } from 'lucide-svelte';
 	import {
-		Home,
-		BarChart3,
-		Ticket,
-		Download,
-		Database,
-		User,
-		Info,
-		Zap,
-		Radio,
-		Settings
-	} from 'lucide-svelte';
+		configurationNavigation,
+		isNavigationActive,
+		utilityNavigation,
+		workspaceNavigation
+	} from '$lib/navigation';
 	import { cn } from '$lib/utils';
-	import Button from './ui/Button.svelte';
 	import { ThemeToggle } from './ui/theme-toggle';
+	import type { User as AuthenticatedUser } from '$lib/types';
 	import {
-		SheetRoot,
 		SheetContent,
-		SheetHeader,
-		SheetTitle,
-		SheetClose
+		SheetRoot
 	} from './ui/sheet';
 
 	let {
@@ -28,167 +20,111 @@
 		user
 	}: {
 		open: boolean;
-		user: { name: string; email: string } | null;
+		user: AuthenticatedUser | null;
 	} = $props();
 
-	const primaryNavItems = [
-		{ href: '/', label: 'Dashboard', icon: Home },
-		{ href: '/scrape', label: 'Scrape', icon: Download },
-		{ href: '/predict', label: 'Predict', icon: BarChart3 },
-		{ href: '/tickets', label: 'Tickets', icon: Ticket },
-		{ href: '/account', label: 'Account', icon: User }
-	];
-
-	const secondaryNavItems = [
-		{ href: '/data', label: 'Data', icon: Database },
-		{ href: '/configuratii', label: 'Configuratii', icon: Settings },
-		{ href: '/value-bets', label: 'Value Bets', icon: Zap },
-		{ href: '/live', label: 'Live', icon: Radio },
-		{ href: '/about', label: 'About', icon: Info }
-	];
-
 	function isActive(href: string): boolean {
-		if (href === '/') return $page.url.pathname === '/';
-		return $page.url.pathname.startsWith(href);
+		return isNavigationActive($page.url.pathname, href);
 	}
 
-	let connected = $state(true);
+	function itemClass(href: string): string {
+		return cn(
+			'group flex items-center gap-3 border-l-2 px-3 py-2.5 text-sm font-medium transition-colors',
+			isActive(href)
+				? 'border-primary bg-primary/10 text-primary'
+				: 'border-transparent text-muted-foreground hover:bg-muted hover:text-foreground'
+		);
+	}
 </script>
 
-<!-- Mobile: Sheet from left -->
 {#if open}
 	<SheetRoot bind:open={open}>
-		<SheetContent side="left" class="w-[220px] p-0 bg-card border-border">
-			<div class="flex flex-col h-full">
-				<nav class="p-3 space-y-0.5 flex-1">
-					<p class="px-3 pb-2 pt-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-						Core Workflow
-					</p>
-					{#each primaryNavItems as item (item.href)}
-						<a
-							href={item.href}
-							class={cn(
-								'flex items-center space-x-3 px-3 py-2.5 text-sm font-medium transition-all duration-200 ease-out border-l-2',
-								isActive(item.href)
-									? 'bg-football-green/5 text-football-green border-football-green'
-									: 'text-muted-foreground border-transparent hover:bg-muted hover:text-foreground'
-							)}
-							aria-current={isActive(item.href) ? 'page' : undefined}
-							onclick={() => (open = false)}
-						>
-							<item.icon class="w-5 h-5 flex-shrink-0" />
-							<span>{item.label}</span>
-						</a>
-					{/each}
-
-					<p class="px-3 pb-2 pt-5 text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-						Explore
-					</p>
-					{#each secondaryNavItems as item (item.href)}
-						<a
-							href={item.href}
-							class={cn(
-								'flex items-center space-x-3 px-3 py-2.5 text-sm font-medium transition-all duration-200 ease-out border-l-2',
-								isActive(item.href)
-									? 'bg-football-green/5 text-football-green border-football-green'
-									: 'text-muted-foreground border-transparent hover:bg-muted hover:text-foreground'
-							)}
-							aria-current={isActive(item.href) ? 'page' : undefined}
-							onclick={() => (open = false)}
-						>
-							<item.icon class="w-5 h-5 flex-shrink-0" />
-							<span>{item.label}</span>
-						</a>
-					{/each}
+		<SheetContent side="left" class="w-[272px] border-border bg-card p-0">
+			<div class="flex h-full flex-col">
+				<div class="border-b border-border px-5 py-5">
+					<p class="text-sm font-semibold text-foreground">Spațiu de decizie</p>
+					<p class="mt-1 text-xs text-muted-foreground">Pregătește, analizează și revizuiește cu context.</p>
+				</div>
+				<nav class="flex-1 space-y-6 overflow-y-auto p-3" aria-label="Navigarea spațiului de lucru">
+					<div>
+						<p class="px-3 pb-2 text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Flux principal</p>
+						{#each workspaceNavigation as item (item.href)}
+							<a href={item.href} class={itemClass(item.href)} aria-current={isActive(item.href) ? 'page' : undefined} onclick={() => (open = false)}>
+								<item.icon class="h-4 w-4 shrink-0" />
+								<span>{item.label}</span>
+							</a>
+						{/each}
+					</div>
+					<div>
+						<p class="px-3 pb-2 text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Instrumente</p>
+						{#each utilityNavigation as item (item.href)}
+							<a href={item.href} class={itemClass(item.href)} aria-current={isActive(item.href) ? 'page' : undefined} onclick={() => (open = false)}>
+								<item.icon class="h-4 w-4 shrink-0" />
+								<span>{item.label}</span>
+							</a>
+						{/each}
+					</div>
+					<div>
+						<p class="px-3 pb-2 text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Configurații</p>
+						{#each configurationNavigation as item (item.href)}
+							<a href={item.href} class={itemClass(item.href)} aria-current={isActive(item.href) ? 'page' : undefined} onclick={() => (open = false)}>
+								<item.icon class="h-4 w-4 shrink-0" />
+								<span>{item.label}</span>
+							</a>
+						{/each}
+					</div>
 				</nav>
-
-			<div class="border-t border-border p-3 bg-card">
-				<div class="flex items-center justify-between">
-					<div class="flex items-center space-x-2">
-						<div class="w-2 h-2  animate-pulse {connected ? 'bg-football-green' : 'bg-destructive'}"></div>
-						<span class="text-xs text-muted-foreground">
-							{connected ? 'Connected' : 'Disconnected'}
-						</span>
-					</div>
-					<div class="flex items-center space-x-2">
+				<div class="border-t border-border p-4">
+					<div class="flex items-center justify-between gap-3">
+						<div class="min-w-0">
+							<p class="truncate text-xs font-medium text-foreground">{user?.name ?? 'Spațiu demonstrativ'}</p>
+							<p class="truncate text-xs text-muted-foreground">{user?.email ?? 'Autentifică-te pentru a salva lucrul'}</p>
+						</div>
 						<ThemeToggle />
-						<span class="text-xs font-mono text-muted-foreground">Betfront v1.0.0</span>
 					</div>
 				</div>
-				<div class="mt-2 flex items-center space-x-2 text-muted-foreground">
-					<Info class="w-3 h-3" />
-					<span class="text-xs text-muted-foreground">
-						{user?.name ?? 'Offline'}
-					</span>
-				</div>
-			</div>
 			</div>
 		</SheetContent>
 	</SheetRoot>
 {/if}
 
-<!-- Desktop: fixed sidebar -->
-<aside
-	class="hidden lg:block fixed top-16 left-0 z-30 w-[220px] h-[calc(100vh-64px)] border-r border-border bg-card/80 backdrop-blur-xl overflow-y-auto scroll-thin"
->
-	<nav class="p-3 space-y-0.5">
-		<p class="px-3 pb-2 pt-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-			Core Workflow
-		</p>
-		{#each primaryNavItems as item (item.href)}
-			<a
-				href={item.href}
-				class={cn(
-					'flex items-center space-x-3 px-3 py-2.5 text-sm font-medium transition-all duration-200 ease-out border-l-2',
-					isActive(item.href)
-						? 'bg-football-green/5 text-football-green border-football-green'
-						: 'text-muted-foreground border-transparent hover:bg-muted hover:text-foreground'
-				)}
-				aria-current={isActive(item.href) ? 'page' : undefined}
-			>
-				<item.icon class="w-5 h-5 flex-shrink-0" />
-				<span>{item.label}</span>
-			</a>
-		{/each}
-
-		<p class="px-3 pb-2 pt-5 text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-			Explore
-		</p>
-		{#each secondaryNavItems as item (item.href)}
-			<a
-				href={item.href}
-				class={cn(
-					'flex items-center space-x-3 px-3 py-2.5 text-sm font-medium transition-all duration-200 ease-out border-l-2',
-					isActive(item.href)
-						? 'bg-football-green/5 text-football-green border-football-green'
-						: 'text-muted-foreground border-transparent hover:bg-muted hover:text-foreground'
-				)}
-				aria-current={isActive(item.href) ? 'page' : undefined}
-			>
-				<item.icon class="w-5 h-5 flex-shrink-0" />
-				<span>{item.label}</span>
-			</a>
-		{/each}
-	</nav>
-
-	<div class="absolute bottom-0 left-0 right-0 border-t border-border p-3 bg-card">
-		<div class="flex items-center justify-between">
-			<div class="flex items-center space-x-2">
-				<div class="w-2 h-2  animate-pulse {connected ? 'bg-football-green' : 'bg-destructive'}"></div>
-				<span class="text-xs text-muted-foreground">
-					{connected ? 'Connected' : 'Disconnected'}
-				</span>
+<aside class="fixed left-0 top-16 z-30 hidden h-[calc(100vh-4rem)] w-16 border-r border-border bg-card/90 backdrop-blur-xl lg:block xl:w-60" aria-label="Navigarea spațiului de lucru">
+	<nav class="flex h-full flex-col justify-between p-2 xl:p-3">
+		<div class="space-y-6 overflow-y-auto">
+			<div>
+				<p class="hidden px-3 pb-2 text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground xl:block">Flux principal</p>
+				{#each workspaceNavigation as item (item.href)}
+						<a href={item.href} class={itemClass(item.href)} aria-current={isActive(item.href) ? 'page' : undefined} aria-label={item.label} title={item.label}>
+							<item.icon class="h-4 w-4 shrink-0" aria-hidden="true" />
+						<span class="hidden xl:inline">{item.label}</span>
+					</a>
+				{/each}
 			</div>
-			<div class="flex items-center space-x-2">
+			<div>
+				<p class="hidden px-3 pb-2 text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground xl:block">Instrumente</p>
+				{#each utilityNavigation as item (item.href)}
+						<a href={item.href} class={itemClass(item.href)} aria-current={isActive(item.href) ? 'page' : undefined} aria-label={item.label} title={item.label}>
+							<item.icon class="h-4 w-4 shrink-0" aria-hidden="true" />
+						<span class="hidden xl:inline">{item.label}</span>
+					</a>
+				{/each}
+			</div>
+			<div>
+				<p class="hidden px-3 pb-2 text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground xl:block">Configurații</p>
+				{#each configurationNavigation as item (item.href)}
+						<a href={item.href} class={itemClass(item.href)} aria-current={isActive(item.href) ? 'page' : undefined} aria-label={item.label} title={item.label}>
+							<item.icon class="h-4 w-4 shrink-0" aria-hidden="true" />
+						<span class="hidden xl:inline">{item.label}</span>
+					</a>
+				{/each}
+			</div>
+		</div>
+		<div class="space-y-3 border-t border-border px-1 pt-3 xl:px-2">
+			<div class="hidden items-center gap-2 text-xs text-muted-foreground xl:flex"><Info class="h-3.5 w-3.5" /> Starea datelor live este afișată în fiecare secțiune.</div>
+			<div class="flex items-center justify-center gap-2 xl:justify-between">
+				<a href="/settings/account" class="hidden min-w-0 items-center gap-2 xl:flex"><User class="h-3.5 w-3.5 text-muted-foreground" /><span class="truncate text-xs text-muted-foreground">{user?.name ?? 'Vizitator'}</span></a>
 				<ThemeToggle />
-				<span class="text-xs font-mono text-muted-foreground">Betfront v1.0.0</span>
 			</div>
 		</div>
-		<div class="mt-2 flex items-center space-x-2 text-muted-foreground">
-			<Info class="w-3 h-3" />
-			<span class="text-xs text-muted-foreground">
-				{user?.name ?? 'Offline'}
-			</span>
-		</div>
-	</div>
+	</nav>
 </aside>

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import AccountPanel from '$lib/components/AccountPanel.svelte';
-	import type { Bankroll, BookmakerAccount, LedgerEntry } from '$lib/types';
+	import PaperTradingPanel from '$lib/components/PaperTradingPanel.svelte';
+	import type { Bankroll, BookmakerAccount, LedgerEntry, TradingAccount } from '$lib/types';
 	import type { BackendLoadStatus } from '$lib/types/backend';
 
 	let { data }: import('./$types').PageProps = $props();
@@ -8,6 +9,8 @@
 		bankrolls?: Bankroll[];
 		accounts?: BookmakerAccount[];
 		ledger?: LedgerEntry[];
+		tradingAccounts?: TradingAccount[];
+		paperTradingEnabled?: boolean;
 		backendStatus?: BackendLoadStatus;
 	};
 	const pageData = $derived(data as AccountPageData);
@@ -28,6 +31,9 @@
 		<div class="border border-yellow-500/30 bg-yellow-500/10 p-4 text-sm text-yellow-200">
 			<span class="font-medium">Partial backend data.</span> {backendStatus.message}
 		</div>
+	{/if}
+	{#if pageData.paperTradingEnabled}
+		<PaperTradingPanel serverAccounts={pageData.tradingAccounts ?? []} />
 	{/if}
 	<AccountPanel
 		serverBankrolls={pageData.bankrolls ?? []}

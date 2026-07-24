@@ -1,9 +1,47 @@
 import type { ApiError } from '$lib/types';
-import { apiBaseUrl } from './base';
+import { apiBaseUrl } from './base.ts';
+import { formatApiErrorDetail } from './error-detail.ts';
+import { notifySessionExpired } from '../auth/session-event.ts';
+import { sessionEpoch } from '../auth/session-epoch.ts';
 
 // Use empty base URL (same-origin) so auth cookies set by SvelteKit are sent
 // with API requests. The Vite dev server proxies /api/* to the backend.
 const BASE_URL: string = '';
+const AUTH_PATH_PREFIX = '/api/v1/auth/';
+const REFRESH_PATH = '/api/v1/auth/refresh';
+const sessionRefreshPromises = new WeakMap<typeof fetch, Promise<boolean>>();
+
+function canRefreshSession(path: string): boolean {
+	return !path.startsWith(AUTH_PATH_PREFIX);
+}
+
+async function refreshSession(baseUrl: string, fetchImpl: typeof fetch): Promise<boolean> {
+	const epoch = sessionEpoch.current();
+	if (!sessionEpoch.canRefresh(epoch)) return false;
+	let refreshPromise = sessionRefreshPromises.get(fetchImpl);
+	if (!refreshPromise) {
+		refreshPromise = (async () => {
+			try {
+				const response = await fetchImpl(`${baseUrl}${REFRESH_PATH}`, {
+					method: 'POST',
+					credentials: 'include'
+				});
+				return response.ok && sessionEpoch.canRefresh(epoch);
+			} catch {
+				return false;
+			}
+		})().finally(() => {
+			sessionRefreshPromises.delete(fetchImpl);
+		});
+		sessionRefreshPromises.set(fetchImpl, refreshPromise);
+	}
+
+	return refreshPromise;
+}
+
+export async function waitForSessionRefresh(fetchImpl: typeof fetch = fetch): Promise<void> {
+	await sessionRefreshPromises.get(fetchImpl);
+}
 
 export class ApiClient {
 	private baseUrl: string;
@@ -17,9 +55,11 @@ export class ApiClient {
 		path: string,
 		body?: Record<string, unknown> | FormData,
 		options?: { timeout?: number },
-		fetchFn?: typeof fetch
+		fetchFn?: typeof fetch,
+		hasRetriedAfterRefresh = false
 	): Promise<T> {
-		const url = `${this.baseUrl || apiBaseUrl()}${path}`;
+		const baseUrl = this.baseUrl || apiBaseUrl();
+		const url = `${baseUrl}${path}`;
 		const controller = new AbortController();
 		const timeoutId = options?.timeout
 			? setTimeout(() => controller.abort(), options.timeout)
@@ -49,11 +89,25 @@ export class ApiClient {
 
 			clearTimeout(timeoutId);
 
+			if (
+				response.status === 401 &&
+				!hasRetriedAfterRefresh &&
+				canRefreshSession(path) &&
+				(await refreshSession(baseUrl, fetchImpl))
+			) {
+				return this.request<T>(method, path, body, options, fetchFn, true);
+			}
+
+			if (response.status === 401 && canRefreshSession(path)) {
+				sessionEpoch.terminate();
+				notifySessionExpired();
+			}
+
 			if (!response.ok) {
 				let errorDetail: string;
 				try {
 					const errorBody = await response.json();
-					errorDetail = (errorBody as ApiError).detail || `HTTP ${response.status}`;
+					errorDetail = formatApiErrorDetail((errorBody as Partial<ApiError>).detail);
 				} catch {
 					errorDetail = `HTTP ${response.status}: ${response.statusText}`;
 				}

@@ -1,11 +1,17 @@
 version: '3.8'
 
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: betuser
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-betpassword_dev}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-not-a-real-dev-password}
       POSTGRES_DB: betting_platform
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -17,6 +23,7 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    logging: *default-logging
 
   redis:
     image: redis:7-alpine
@@ -28,21 +35,36 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    logging: *default-logging
 
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
     environment:
-      BET_DATABASE_URL: postgresql+asyncpg://betuser:${POSTGRES_PASSWORD:-betpassword_dev}@postgres:5432/betting_platform
+      BET_DATABASE_URL: postgresql+asyncpg://betuser:${POSTGRES_PASSWORD:-not-a-real-dev-password}@postgres:5432/betting_platform
       BET_JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production}
       BET_CORS_ORIGINS: http://localhost:5173,http://frontend:3000,http://localhost:3000,http://localhost:8000
       BET_DEBUG: "false"
+      BET_TASK_QUEUE_BACKEND: taskiq
+      BET_REDIS_URL: redis://redis:6379/0
+      BET_TASKIQ_RESULT_BACKEND_URL: redis://redis:6379/1
+      BET_TASKIQ_QUEUE_NAME: bet
+      BET_TASKIQ_CONSUMER_GROUP: bet-workers
+      BET_SCHEDULED_JOBS_ENABLED: "false"
+      BET_TRADING_ENABLED: "true"
+      BET_TRADING_PAPER_ENABLED: "true"
+      BET_TRADING_LIVE_ENABLED: "false"
+      BET_TRADING_BETFAIR_READ_ONLY_ENABLED: "false"
+      BET_TRADING_TASKIQ_QUEUE_NAME: bet-trading
+      BET_FLUMINE_ROOT: /workspace/flumine
       BET_ODDSHARVESTER_PYTHON: /workspace/OddsHarvester/.venv/bin/python
       BET_PENALTYBLOG_PYTHON: /workspace/penaltyblog/.venv/bin/python
-      BET_PENALTYBLOG_BRIDGE: /workspace/betfront/scripts/penaltyblog_bridge.py
+      BET_PENALTYBLOG_BRIDGE: /app/app/bridges/penaltyblog_bridge.py
+      BET_PENALTYBLOG_ROOT: /workspace/penaltyblog
       BET_SOCCERDATA_PYTHON: /workspace/soccerdata/.venv/bin/python
-      BET_SOCCERDATA_BRIDGE: /workspace/betfront/scripts/soccerdata_bridge.py
+      BET_SOCCERDATA_BRIDGE: /app/app/bridges/soccerdata_bridge.py
+      BET_SOCCERDATA_ROOT: /workspace/soccerdata
       PYTHONPATH: /app
     ports:
       - "8000:8000"
@@ -56,10 +78,132 @@ services:
       - ./OddsHarvester:/workspace/OddsHarvester:ro
       - ./penaltyblog:/workspace/penaltyblog:ro
       - ./soccerdata:/workspace/soccerdata:ro
-      - ./betfront:/workspace/betfront:ro
+      - ./flumine:/workspace/flumine:ro
       - shared_data:/shared_data
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: >
+      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
     restart: unless-stopped
+    logging: *default-logging
+
+  backend-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      BET_DATABASE_URL: postgresql+asyncpg://betuser:${POSTGRES_PASSWORD:-not-a-real-dev-password}@postgres:5432/betting_platform
+      BET_JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production}
+      BET_TASK_QUEUE_BACKEND: taskiq
+      BET_REDIS_URL: redis://redis:6379/0
+      BET_TASKIQ_RESULT_BACKEND_URL: redis://redis:6379/1
+      BET_TASKIQ_QUEUE_NAME: bet
+      BET_TASKIQ_CONSUMER_GROUP: bet-workers
+      BET_TRADING_ENABLED: "true"
+      BET_TRADING_PAPER_ENABLED: "true"
+      BET_TRADING_LIVE_ENABLED: "false"
+      BET_TRADING_BETFAIR_READ_ONLY_ENABLED: "false"
+      BET_TRADING_TASKIQ_QUEUE_NAME: bet-trading
+      BET_FLUMINE_ROOT: /workspace/flumine
+      BET_ODDSHARVESTER_PYTHON: /workspace/OddsHarvester/.venv/bin/python
+      BET_PENALTYBLOG_PYTHON: /workspace/penaltyblog/.venv/bin/python
+      BET_PENALTYBLOG_BRIDGE: /app/app/bridges/penaltyblog_bridge.py
+      BET_PENALTYBLOG_ROOT: /workspace/penaltyblog
+      BET_SOCCERDATA_PYTHON: /workspace/soccerdata/.venv/bin/python
+      BET_SOCCERDATA_BRIDGE: /app/app/bridges/soccerdata_bridge.py
+      BET_SOCCERDATA_ROOT: /workspace/soccerdata
+      PYTHONPATH: /app
+    depends_on:
+      backend:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - ./OddsHarvester:/workspace/OddsHarvester:ro
+      - ./penaltyblog:/workspace/penaltyblog:ro
+      - ./soccerdata:/workspace/soccerdata:ro
+      - ./flumine:/workspace/flumine:ro
+      - shared_data:/shared_data
+    command: taskiq worker app.tasks.broker:broker app.tasks.jobs
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.tasks.runtime", "worker"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+    logging: *default-logging
+
+  trading-runner:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      BET_DATABASE_URL: postgresql+asyncpg://betuser:${POSTGRES_PASSWORD:-not-a-real-dev-password}@postgres:5432/betting_platform
+      BET_JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production}
+      BET_TASK_QUEUE_BACKEND: taskiq
+      BET_REDIS_URL: redis://redis:6379/0
+      BET_TASKIQ_RESULT_BACKEND_URL: redis://redis:6379/1
+      BET_TRADING_ENABLED: "true"
+      BET_TRADING_PAPER_ENABLED: "true"
+      BET_TRADING_LIVE_ENABLED: "false"
+      BET_TRADING_BETFAIR_READ_ONLY_ENABLED: "false"
+      BET_TRADING_TASKIQ_QUEUE_NAME: bet-trading
+      BET_FLUMINE_ROOT: /workspace/flumine
+      PYTHONPATH: /app
+    depends_on:
+      backend:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - ./flumine:/workspace/flumine:ro
+    command: taskiq worker app.tasks.trading_broker:trading_broker app.tasks.trading
+    restart: unless-stopped
+    logging: *default-logging
+
+  backend-scheduler:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      BET_DATABASE_URL: postgresql+asyncpg://betuser:${POSTGRES_PASSWORD:-not-a-real-dev-password}@postgres:5432/betting_platform
+      BET_JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production}
+      BET_TASK_QUEUE_BACKEND: taskiq
+      BET_REDIS_URL: redis://redis:6379/0
+      BET_TASKIQ_RESULT_BACKEND_URL: redis://redis:6379/1
+      BET_TASKIQ_QUEUE_NAME: bet
+      BET_TASKIQ_CONSUMER_GROUP: bet-workers
+      BET_TASKIQ_POLL_INTERVAL_SECONDS: 60
+      PYTHONPATH: /app
+    depends_on:
+      backend:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    command: python -m app.tasks.scheduler
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.tasks.runtime", "scheduler"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+    logging: *default-logging
 
   frontend:
     build:
@@ -71,26 +215,38 @@ services:
     ports:
       - "5173:3000"
     depends_on:
-      - backend
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
+      backend:
+        condition: service_healthy
     command: node build/index.js
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r => { if (!r.ok && r.status !== 302) process.exit(1) }).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
     restart: unless-stopped
+    logging: *default-logging
 
   nginx:
     build:
       context: ./nginx
       dockerfile: Dockerfile
     ports:
-      - "80:80"
+      - "80:8080"
     depends_on:
-      - backend
-      - frontend
+      backend:
+        condition: service_healthy
+      backend-worker:
+        condition: service_started
+      backend-scheduler:
+        condition: service_started
+      frontend:
+        condition: service_healthy
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - shared_data:/shared_data:ro
     restart: unless-stopped
+    logging: *default-logging
 
 volumes:
   postgres_data:

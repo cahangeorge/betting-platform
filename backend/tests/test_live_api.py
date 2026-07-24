@@ -2,9 +2,11 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
-from fastapi.routing import APIRoute, serialize_response
+from httpx import ASGITransport, AsyncClient
 
+from app.api.deps import get_current_user
 from app.api.v1 import live as live_api
+from app.database import get_db
 from app.main import app
 from app.services import scraper
 
@@ -41,21 +43,14 @@ class _DBSequence:
         return self._results.pop(0)
 
 
-async def _serialize_live_overview_response(overview):
-    route = next(
-        route for route in app.routes if isinstance(route, APIRoute) and route.path == "/api/v1/live/overview"
-    )
-    return await serialize_response(
-        field=route.response_field,
-        response_content=overview,
-        include=None,
-        exclude=None,
-        by_alias=True,
-        exclude_unset=False,
-        exclude_defaults=False,
-        exclude_none=False,
-        is_coroutine=True,
-    )
+class _CapturingDB:
+    def __init__(self, result):
+        self.result = result
+        self.statement = None
+
+    async def execute(self, statement):
+        self.statement = statement
+        return self.result
 
 
 def _make_match(
@@ -106,6 +101,25 @@ def _make_prediction(now: datetime, *, created_at: datetime | None = None, home_
         away_prob=0.22,
         created_at=created_at,
     )
+
+
+@pytest.mark.asyncio
+async def test_live_prediction_map_selects_latest_completed_run_per_match():
+    predictions = [SimpleNamespace(match_id=101), SimpleNamespace(match_id=102)]
+    db = _CapturingDB(_MatchesResult(predictions))
+
+    mapped = await live_api._load_live_prediction_map(
+        db,
+        match_ids=[101, 102],
+        user=SimpleNamespace(id=7),
+    )
+
+    sql = str(db.statement)
+    assert "row_number() OVER" in sql
+    assert "PARTITION BY" in sql
+    assert "prediction_runs.user_id" in sql
+    assert "prediction_runs.status" in sql
+    assert mapped == {101: [predictions[0]], 102: [predictions[1]]}
 
 
 def test_live_value_candidate_is_only_betslip_eligible_when_trust_signals_are_green():
@@ -225,18 +239,34 @@ async def test_live_overview_http_serialization_keeps_live_contract_fields(monke
 
     monkeypatch.setattr(live_api, "_load_live_prediction_map", _prediction_map)
 
-    overview = await live_api.live_overview(
-        status="live",
-        league=None,
-        max_matches=10,
-        min_live_value_edge=0,
-        include_live_value=True,
-        db=db,
-        user=SimpleNamespace(id=7),
-    )
+    async def override_db():
+        yield db
 
-    payload = await _serialize_live_overview_response(overview)
+    async def override_user():
+        return SimpleNamespace(id=7)
 
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = override_user
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as client:
+            response = await client.get(
+                "/api/v1/live/overview",
+                params={
+                    "status": "live",
+                    "max_matches": 10,
+                    "min_live_value_edge": 0,
+                    "include_live_value": "true",
+                },
+            )
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        app.dependency_overrides.pop(get_current_user, None)
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
     [live_match] = payload["matches"]
     assert live_match["source_ok"] is True
     assert live_match["odds_freshness_seconds"] == 12

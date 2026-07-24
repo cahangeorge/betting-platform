@@ -1,6 +1,13 @@
 from types import SimpleNamespace
 
-from app.services.result_settlement import evaluate_model_prediction, evaluate_ticket_leg, resolve_finished_ticket
+import pytest
+
+from app.services.result_settlement import (
+    evaluate_model_prediction,
+    evaluate_ticket_leg,
+    resolve_finished_ticket,
+    settle_due_tickets,
+)
 
 
 def _match(home_score, away_score, status="finished"):
@@ -118,3 +125,60 @@ def test_evaluate_model_prediction_handles_pending_and_over_under():
     assert evaluation.status == "lost"
     assert evaluation.predicted_selection == "under"
     assert evaluation.actual_selection == "over"
+
+
+@pytest.mark.asyncio
+async def test_generated_draft_is_never_checked_mutated_or_credited_by_automatic_settlement():
+    bankroll = SimpleNamespace(id=5, balance=100.0)
+    leg = _leg("home", odds=2.0, match=_match(2, 0), status="pending")
+    generated = SimpleNamespace(
+        id=77,
+        user_id=8,
+        bankroll_id=5,
+        status="generated",
+        stake=10.0,
+        legs=[leg],
+    )
+
+    class _Scalars:
+        def unique(self):
+            return self
+
+        def all(self):
+            # Return the draft even though a real database honors the WHERE;
+            # the service-level guard must still prevent lifecycle mutation.
+            return [generated]
+
+    class _Result:
+        def scalars(self):
+            return _Scalars()
+
+    class _Db:
+        def __init__(self):
+            self.added = []
+            self.statements = []
+            self.flushed = False
+
+        async def execute(self, stmt):
+            self.statements.append(str(stmt.compile(compile_kwargs={"literal_binds": True})))
+            return _Result()
+
+        async def get(self, _model, _object_id):
+            raise AssertionError("Generated drafts must never reach bankroll settlement")
+
+        def add(self, value):
+            self.added.append(value)
+
+        async def flush(self):
+            self.flushed = True
+
+    db = _Db()
+    summary = await settle_due_tickets(db, user_id=8)
+
+    assert "tickets.status IN ('open')" in db.statements[0]
+    assert summary.checked_tickets == 0
+    assert summary.settled_tickets == 0
+    assert generated.status == "generated"
+    assert leg.status == "pending"
+    assert bankroll.balance == 100.0
+    assert db.added == []

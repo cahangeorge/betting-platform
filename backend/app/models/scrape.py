@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models import Base
@@ -8,6 +8,10 @@ from app.models import Base
 
 class ScrapeJob(Base):
     __tablename__ = "scrape_jobs"
+    __table_args__ = (
+        Index("ix_scrape_jobs_status", "status"),
+        Index("ix_scrape_jobs_status_created", "status", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     job_type: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -27,9 +31,13 @@ class ScrapeJob(Base):
 
 class ScrapeJobLog(Base):
     __tablename__ = "scrape_job_logs"
+    __table_args__ = (
+        Index("ix_scrape_job_logs_job_id", "job_id"),
+        Index("ix_scrape_job_logs_job_created", "job_id", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    job_id: Mapped[int] = mapped_column(ForeignKey("scrape_jobs.id", ondelete="CASCADE"), nullable=False, index=True)
+    job_id: Mapped[int] = mapped_column(ForeignKey("scrape_jobs.id", ondelete="CASCADE"), nullable=False)
     level: Mapped[str] = mapped_column(String(20), default="info", nullable=False)
     action: Mapped[str] = mapped_column(String(100), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
@@ -41,6 +49,7 @@ class ScrapeJobLog(Base):
 
 class ScrapedDataset(Base):
     __tablename__ = "scraped_datasets"
+    __table_args__ = (Index("ix_scraped_datasets_source", "source"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str | None] = mapped_column(String(255), nullable=True)

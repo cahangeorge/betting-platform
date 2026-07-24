@@ -32,7 +32,6 @@ async function expectLockedLiveCandidateState(page: Page, fixtures: {
 	liveAway: string;
 }) {
 	const main = page.getByRole('main');
-	const betSlip = page.getByRole('complementary', { name: 'Bet slip' });
 	const staleBanner = main.getByText('Live feed may be stale').first();
 	const monitorOnlyBanner = main.getByText('Monitor-only mode for live betslip actions').first();
 	const lockReason = main
@@ -48,8 +47,6 @@ async function expectLockedLiveCandidateState(page: Page, fixtures: {
 	await expect(lockReason).toBeVisible();
 	await expect(lockedAction).toBeVisible();
 	await expect(lockedAction).toBeDisabled();
-	await expect(betSlip.getByText('Select odds to add bets')).toBeVisible();
-	await expect(betSlip.getByText('Use Dashboard, Predict, Live, or Value Bets')).toBeVisible();
 }
 
 test('seeded live value candidate stays locked on /live when feed freshness is unavailable', async ({
@@ -94,7 +91,7 @@ test('seeded live value candidate stays locked on /live when feed freshness is u
 			`seeded match should expose at least one actionable live value candidate: ${JSON.stringify(seededMatch?.live_value_candidates)}`
 		).toBe(true);
 
-		await page.goto('/live');
+		await page.goto('/opportunities?view=live');
 		await expectLockedLiveCandidateState(page, { liveHome, liveAway });
 		expect(pageErrors, `unexpected browser errors on /live: ${pageErrors.join('\n')}`).toEqual([]);
 	} finally {

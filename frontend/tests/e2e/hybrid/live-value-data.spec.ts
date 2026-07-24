@@ -17,25 +17,23 @@ test('live and value bet pages surface seeded backend data', async ({ page, cont
 		const [liveHome, liveAway] = fixtures.liveMatchLabel.split(' vs ');
 		console.log('live-value-data: seeded');
 
-		await page.goto('/live');
+		await page.goto('/opportunities?view=live');
 		console.log('live-value-data: goto live');
 		await expect(page.getByRole('heading', { name: 'LIVE MATCHES' })).toBeVisible();
 		await page.waitForTimeout(250);
 		expect(pageErrors, `unexpected browser errors on /live: ${pageErrors.join('\n')}`).toEqual([]);
 		await expect(page.getByText(liveHome).first()).toBeVisible();
 		await expect(page.getByText(liveAway).first()).toBeVisible();
-		const liveValueAddButton = page.getByRole('button', { name: 'Add to betslip' });
-			const monitorOnlyBanner = page.getByText('Monitor-only mode for live betslip actions').first();
+		const liveValueAddButton = page.getByRole('button', { name: 'Add to betslip' }).first();
+		const monitorOnlyBanner = page.getByText('Monitor-only mode for live betslip actions').first();
 		const lockedButton = page.getByRole('button', { name: 'Locked' }).first();
-		if (await liveValueAddButton.count()) {
-			await expect(liveValueAddButton.first()).toBeVisible();
-		} else {
+		await expect(liveValueAddButton.or(lockedButton).first()).toBeVisible();
+		if (await lockedButton.isVisible()) {
 			await expect(monitorOnlyBanner).toBeVisible();
-			await expect(lockedButton).toBeVisible();
 		}
 		console.log('live-value-data: live ok');
 
-		await page.goto('/value-bets');
+		await page.goto('/opportunities?view=value');
 		console.log('live-value-data: goto value-bets');
 		await expect(page.getByRole('heading', { name: 'VALUE BET FEED' })).toBeVisible();
 		await expect(page.getByText(fixtures.scheduledMatchLabel).first()).toBeVisible();

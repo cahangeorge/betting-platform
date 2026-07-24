@@ -1,13 +1,13 @@
 # Codex Model Routing Policy
 
-This project uses a tiered model strategy: cheap/fast models for lookup, standard strong models for implementation, and frontier models only for high-risk reasoning or final verification.
+This project uses a tiered model strategy: Codex Spark for pure lookup, Luna for lightweight agentic support, Terra for normal delivery, and Sol only for high-risk reasoning or final verification.
 
 ## Default session model
 
 Repo-local `.codex/config.toml` defaults to:
 
 ```toml
-model = "gpt-5.4"
+model = "gpt-5.6-terra"
 model_reasoning_effort = "medium"
 ```
 
@@ -18,9 +18,10 @@ This is the day-to-day cost/performance lane for normal implementation.
 | Lane | Agent(s) | Model | Effort | Use when | Cost rule |
 |---|---|---:|---:|---|---|
 | Explore | `*-explorer` | `gpt-5.3-codex-spark` | low | read-only repo lookup, file mapping, command discovery | cheapest/fastest; never implement |
-| Implement | `*-executor` | `gpt-5.4` | medium | scoped code/docs/config changes | default worker lane |
-| Verify | `*-qa-verifier` | `gpt-5.5` | high | final evidence, browser runtime, cross-boundary validation | use once near the gate, not continuously |
-| Risk review | `bet-scrape-reviewer` | `gpt-5.5` | high | scraper/prediction/odds risk review | only for brittle/high-impact surfaces |
+| Light agentic | global `analyst`/`writer`/`vision` or explicit `--model` | `gpt-5.6-luna` | low/medium | lightweight analysis, docs, screenshots, bounded synthesis | use when Spark is too narrow but Terra is unnecessary |
+| Implement | `*-executor` | `gpt-5.6-terra` | medium | scoped code/docs/config changes | default worker lane |
+| Verify | `*-qa-verifier` | `gpt-5.6-sol` | high | final evidence, browser runtime, cross-boundary validation | use once near the gate, not continuously |
+| Risk review | `bet-scrape-reviewer` | `gpt-5.6-sol` | high | scraper/prediction/odds risk review | only for brittle/high-impact surfaces |
 
 ## Escalation rules
 

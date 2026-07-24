@@ -57,6 +57,11 @@
 
 @layer base {
 	:root {
+		--safe-area-bottom: env(safe-area-inset-bottom, 0px);
+		--mobile-nav-content-height: 4rem;
+		--mobile-nav-height: calc(var(--mobile-nav-content-height) + var(--safe-area-bottom));
+		--mobile-floating-gap: 0.75rem;
+
 		--background: 0 0% 100%;
 		--foreground: 222.2 84% 4.9%;
 		--card: 0 0% 100%;
@@ -71,8 +76,8 @@
 		--muted-foreground: 215.4 16.3% 46.9%;
 		--accent: 210 40% 96.1%;
 		--accent-foreground: 222.2 47.4% 11.2%;
-		--destructive: 0 84.2% 60.2%;
-		--destructive-foreground: 210 40% 98%;
+		--destructive: 0 72% 40%;
+		--destructive-foreground: 0 0% 100%;
 		--border: 214.3 31.8% 91.4%;
 		--input: 214.3 31.8% 91.4%;
 		--ring: 222.2 84% 4.9%;
@@ -83,10 +88,26 @@
 		--chart-4: 43 74% 66%;
 		--chart-5: 27 87% 67%;
 
-		--football-red: 356 76% 50%;
-		--football-green: 82 22% 55%;
-		--football-blue: 212 84% 44%;
-		--football-gold: 44 70% 50%;
+		--football-red: 0 72% 42%;
+		--football-green: 158 75% 28%;
+		--football-blue: 210 80% 38%;
+		--football-gold: 38 90% 32%;
+
+		--status-success-text: 158 75% 25%;
+		--status-success-bg: 158 55% 95%;
+		--status-success-border: 158 55% 38%;
+		--status-warning-text: 34 88% 28%;
+		--status-warning-bg: 42 100% 95%;
+		--status-warning-border: 38 78% 42%;
+		--status-danger-text: 0 72% 36%;
+		--status-danger-bg: 0 85% 96%;
+		--status-danger-border: 0 62% 46%;
+		--status-info-text: 210 80% 32%;
+		--status-info-bg: 210 100% 96%;
+		--status-info-border: 210 68% 46%;
+		--status-premium-text: 275 58% 36%;
+		--status-premium-bg: 275 75% 96%;
+		--status-premium-border: 275 48% 50%;
 	}
 
 	.dark {
@@ -114,6 +135,62 @@
 		--chart-3: 30 80% 55%;
 		--chart-4: 280 65% 60%;
 		--chart-5: 340 75% 55%;
+		--status-success-text: 158 65% 72%;
+		--status-success-bg: 158 48% 13%;
+		--status-success-border: 158 52% 42%;
+		--status-warning-text: 42 94% 72%;
+		--status-warning-bg: 40 58% 14%;
+		--status-warning-border: 40 68% 46%;
+		--status-danger-text: 0 84% 76%;
+		--status-danger-bg: 0 52% 15%;
+		--status-danger-border: 0 62% 50%;
+		--status-info-text: 204 88% 75%;
+		--status-info-bg: 204 58% 14%;
+		--status-info-border: 204 68% 48%;
+		--status-premium-text: 275 80% 80%;
+		--status-premium-bg: 275 48% 15%;
+		--status-premium-border: 275 58% 54%;
+	}
+
+	/* Dark is the decision-workbench default. Add .light only when the user opts in. */
+	:root:not(.light) {
+		--background: 222.2 84% 4.9%;
+		--foreground: 210 40% 98%;
+		--card: 222.2 47.4% 8.5%;
+		--card-foreground: 210 40% 98%;
+		--popover: 222.2 47.4% 8.5%;
+		--popover-foreground: 210 40% 98%;
+		--primary: 165 72% 45%;
+		--primary-foreground: 222.2 47.4% 11.2%;
+		--secondary: 217.2 32.6% 17.5%;
+		--secondary-foreground: 210 40% 98%;
+		--muted: 217.2 32.6% 17.5%;
+		--muted-foreground: 215 20.2% 65.1%;
+		--accent: 217.2 32.6% 17.5%;
+		--accent-foreground: 210 40% 98%;
+		--destructive: 0 72% 51%;
+		--destructive-foreground: 210 40% 98%;
+		--border: 217.2 28% 21%;
+		--input: 217.2 28% 25%;
+		--ring: 165 72% 45%;
+		--football-green: 165 72% 45%;
+		--football-blue: 204 88% 58%;
+		--football-gold: 42 94% 60%;
+		--status-success-text: 158 65% 72%;
+		--status-success-bg: 158 48% 13%;
+		--status-success-border: 158 52% 42%;
+		--status-warning-text: 42 94% 72%;
+		--status-warning-bg: 40 58% 14%;
+		--status-warning-border: 40 68% 46%;
+		--status-danger-text: 0 84% 76%;
+		--status-danger-bg: 0 52% 15%;
+		--status-danger-border: 0 62% 50%;
+		--status-info-text: 204 88% 75%;
+		--status-info-bg: 204 58% 14%;
+		--status-info-border: 204 68% 48%;
+		--status-premium-text: 275 80% 80%;
+		--status-premium-bg: 275 48% 15%;
+		--status-premium-border: 275 58% 54%;
 	}
 }
 
@@ -124,6 +201,7 @@
 	body {
 		@apply bg-background text-foreground;
 		font-family: var(--font-sans);
+		letter-spacing: -0.01em;
 	}
 
 	/* Skip-to-content link (accessible, visually hidden until focused) */
@@ -144,6 +222,19 @@
 		@apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
 	}
 
+	/* System-color fallback when High Contrast suppresses box-shadow focus rings. */
+	@media (forced-colors: active) {
+		a:focus-visible,
+		button:focus-visible,
+		input:focus-visible,
+		select:focus-visible,
+		textarea:focus-visible,
+		[tabindex]:focus-visible {
+			outline: 2px solid CanvasText !important;
+			outline-offset: 2px !important;
+		}
+	}
+
 	/* Reduced motion: disable all animations and transitions */
 	@media (prefers-reduced-motion: reduce) {
 		*,
@@ -153,6 +244,47 @@
 			animation-iteration-count: 1 !important;
 			transition-duration: 0.01ms !important;
 			scroll-behavior: auto !important;
+		}
+	}
+}
+
+@layer components {
+	.workbench-page {
+		@apply mx-auto w-full max-w-7xl space-y-6;
+	}
+	.workbench-eyebrow {
+		@apply text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground;
+	}
+	.workbench-heading {
+		@apply text-3xl font-semibold tracking-tight text-foreground sm:text-4xl;
+	}
+	.workbench-surface {
+		@apply border border-border bg-card shadow-[0_16px_48px_rgba(0,0,0,0.16)];
+	}
+	.mobile-shell-bottom-space {
+		padding-bottom: var(--mobile-nav-height);
+	}
+	.mobile-bottom-nav {
+		height: var(--mobile-nav-height);
+		padding-bottom: var(--safe-area-bottom);
+	}
+	.mobile-above-nav {
+		bottom: calc(var(--mobile-nav-height) + var(--mobile-floating-gap));
+	}
+
+	@media (min-width: 64rem) {
+		.mobile-shell-bottom-space {
+			padding-bottom: 0;
+		}
+	}
+
+	@media (pointer: coarse) {
+		.touch-target {
+			min-width: 2.75rem;
+			min-height: 2.75rem;
+		}
+		.touch-control {
+			min-height: 2.75rem;
 		}
 	}
 }
@@ -183,7 +315,7 @@
 	background-color: hsl(var(--football-gold));
 }
 @utility pb-safe {
-	padding-bottom: env(safe-area-inset-bottom, 0px);
+	padding-bottom: var(--safe-area-bottom);
 }
 
 /* Animation utilities */

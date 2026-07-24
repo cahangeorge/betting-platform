@@ -41,7 +41,7 @@ class _FakeTicketSession:
                 self._ticket_id += 1
                 obj.id = self._ticket_id
 
-    async def get(self, model, pk):
+    async def get(self, model, pk, **_kwargs):
         if self.bankroll is not None and pk == getattr(self.bankroll, "id", None):
             return self.bankroll
         return None

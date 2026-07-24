@@ -1,25 +1,28 @@
 from datetime import datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, Numeric, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models import Base
 
 if TYPE_CHECKING:
+    from app.models.risk import BankrollRiskPolicy, BankrollRiskState
     from app.models.ticket import BetPlacement, Ticket, TicketBatch
     from app.models.user import User
 
 
 class Bankroll(Base):
     __tablename__ = "bankrolls"
+    __table_args__ = (Index("ix_bankrolls_user_id", "user_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     type: Mapped[str] = mapped_column(String(50), default="paper", nullable=False)
-    balance: Mapped[float] = mapped_column(Float, default=1000.0, nullable=False)
-    initial_balance: Mapped[float] = mapped_column(Float, default=1000.0, nullable=False)
+    balance: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("1000.00"), nullable=False)
+    initial_balance: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("1000.00"), nullable=False)
     currency: Mapped[str] = mapped_column(String(10), default="GBP", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
@@ -37,16 +40,19 @@ class Bankroll(Base):
     ticket_batches: Mapped[list["TicketBatch"]] = relationship(
         "TicketBatch", back_populates="bankroll", cascade="all, delete-orphan"
     )
+    risk_policies: Mapped[list["BankrollRiskPolicy"]] = relationship("BankrollRiskPolicy")
+    risk_state: Mapped["BankrollRiskState | None"] = relationship("BankrollRiskState", uselist=False)
 
 
 class BookmakerAccount(Base):
     __tablename__ = "bookmaker_accounts"
+    __table_args__ = (Index("ix_bookmaker_accounts_bankroll_id", "bankroll_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     bankroll_id: Mapped[int] = mapped_column(ForeignKey("bankrolls.id", ondelete="CASCADE"), nullable=False)
     bookmaker: Mapped[str] = mapped_column(String(100), nullable=False)
     account_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    balance: Mapped[float | None] = mapped_column(Float, nullable=True)
+    balance: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     bankroll: Mapped["Bankroll"] = relationship("Bankroll", back_populates="bookmaker_accounts")
@@ -57,6 +63,10 @@ class BookmakerAccount(Base):
 
 class LedgerEntry(Base):
     __tablename__ = "ledger_entries"
+    __table_args__ = (
+        Index("ix_ledger_entries_bankroll_id", "bankroll_id"),
+        Index("ix_ledger_entries_bankroll_created_at", "bankroll_id", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     bankroll_id: Mapped[int] = mapped_column(ForeignKey("bankrolls.id", ondelete="CASCADE"), nullable=False)
@@ -65,8 +75,8 @@ class LedgerEntry(Base):
         ForeignKey("bet_placements.id", ondelete="SET NULL"), nullable=True
     )
     entry_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    amount: Mapped[float] = mapped_column(Float, nullable=False)
-    balance_after: Mapped[float] = mapped_column(Float, nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    balance_after: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     reference_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     reference_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -28,7 +28,7 @@ async function setAuthCookies(context: BrowserContext, accessToken: string): Pro
 }
 
 async function createBankroll(token: string): Promise<Bankroll> {
-	return await backendRequest<Bankroll>('/api/v1/bankroll', {
+	const bankroll = await backendRequest<Bankroll>('/api/v1/bankroll', {
 		method: 'POST',
 		headers: {
 			'Content-Type': 'application/json',
@@ -40,7 +40,40 @@ async function createBankroll(token: string): Promise<Bankroll> {
 			initial_balance: 1000,
 			currency: 'EUR'
 		})
- 	});
+	});
+	await poll(
+		async () => {
+			await backendRequest(`/api/v1/bankroll/${bankroll.id}/risk-policy`, {
+				method: 'PUT',
+				headers: {
+					'Content-Type': 'application/json',
+					...withBearerToken(token)
+				},
+				body: JSON.stringify({
+					staking_mode: 'flat_percent',
+					flat_stake_pct: 0.01,
+					kelly_fraction: null,
+					max_ticket_pct: 0.05,
+					max_open_exposure_pct: 0.2,
+					max_match_pct: 0.2,
+					max_team_pct: 0.2,
+					max_league_window_pct: 0.2,
+					league_window_hours: 24,
+					max_daily_stake_pct: 0.2,
+					max_weekly_stake_pct: 0.5,
+					max_daily_ticket_count: 100,
+					max_weekly_ticket_count: 500,
+					accumulators_enabled: true,
+					automation_enabled: true
+				})
+			});
+			return true;
+		},
+		(value) => value,
+		5_000,
+		100
+	);
+	return bankroll;
 }
 
 export async function createAuthenticatedSession(context: BrowserContext): Promise<AuthSession> {

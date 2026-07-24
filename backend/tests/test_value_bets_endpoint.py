@@ -42,6 +42,7 @@ def _completed_run(
     odds_timestamp: datetime | None,
     reliability_label: str = "trusted",
     is_ticket_eligible: bool = True,
+    odds_entries: list[SimpleNamespace] | None = None,
 ):
     match = SimpleNamespace(
         id=42,
@@ -50,7 +51,8 @@ def _completed_run(
         away_team="Canada",
         match_date=match_date,
         status="scheduled",
-        odds=[
+        odds=odds_entries
+        or [
             SimpleNamespace(
                 market="1x2",
                 home_odds=2.2,
@@ -83,6 +85,59 @@ def _completed_run(
             )
         ],
     )
+
+
+def _odds_entry(*, bookmaker: str, home_odds: float, observed_at: datetime | None):
+    return SimpleNamespace(
+        id=1,
+        market="1x2",
+        home_odds=home_odds,
+        draw_odds=3.4,
+        away_odds=4.5,
+        bookmaker=bookmaker,
+        timestamp=observed_at,
+        created_at=observed_at,
+    )
+
+
+@pytest.mark.parametrize("fresh_home_odds", [2.1, 1.9])
+def test_market_odds_uses_fresh_quote_even_when_stale_quote_is_equal_or_higher(fresh_home_odds: float):
+    old_snapshot = datetime(2026, 7, 3, 8, 0, tzinfo=timezone.utc)
+    fresh_snapshot = datetime(2026, 7, 3, 9, 59, tzinfo=timezone.utc)
+    prediction = SimpleNamespace(market="1x2")
+
+    odds, bookmaker, observed_at = predictions_api._resolve_market_odds(
+        prediction,
+        "home",
+        [
+            _odds_entry(bookmaker="Stale Book", home_odds=2.1, observed_at=old_snapshot),
+            _odds_entry(bookmaker="Fresh Book", home_odds=fresh_home_odds, observed_at=fresh_snapshot),
+        ],
+    )
+
+    assert odds == fresh_home_odds
+    assert bookmaker == "Fresh Book"
+    assert observed_at == fresh_snapshot
+
+
+def test_market_odds_selects_best_bookmaker_inside_latest_snapshot():
+    old_snapshot = datetime(2026, 7, 3, 8, 0, tzinfo=timezone.utc)
+    fresh_snapshot = datetime(2026, 7, 3, 9, 59, tzinfo=timezone.utc)
+    prediction = SimpleNamespace(market="1x2")
+
+    odds, bookmaker, observed_at = predictions_api._resolve_market_odds(
+        prediction,
+        "home",
+        [
+            _odds_entry(bookmaker="Stale Book", home_odds=2.5, observed_at=old_snapshot),
+            _odds_entry(bookmaker="Fresh Low", home_odds=1.9, observed_at=fresh_snapshot),
+            _odds_entry(bookmaker="Fresh Best", home_odds=2.0, observed_at=fresh_snapshot),
+        ],
+    )
+
+    assert odds == 2.0
+    assert bookmaker == "Fresh Best"
+    assert observed_at == fresh_snapshot
 
 
 @pytest.mark.asyncio
@@ -145,6 +200,40 @@ async def test_value_bets_endpoint_surfaces_fresh_trust_metadata_for_safe_betsli
     assert item.model_drift_flag is False
     assert item.is_betslip_eligible is True
     assert item.block_reasons == []
+
+
+@pytest.mark.asyncio
+async def test_value_bets_endpoint_does_not_mark_fresh_lower_quote_stale(monkeypatch: pytest.MonkeyPatch):
+    now = datetime(2026, 7, 3, 10, 0, tzinfo=timezone.utc)
+    old_snapshot = datetime(2026, 7, 3, 8, 0, tzinfo=timezone.utc)
+    fresh_snapshot = datetime(2026, 7, 3, 9, 59, tzinfo=timezone.utc)
+    _freeze_time(monkeypatch, now)
+    db = _DB(
+        _completed_run(
+            match_date=datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc),
+            prediction_created_at=datetime(2026, 7, 3, 9, 58, tzinfo=timezone.utc),
+            odds_timestamp=fresh_snapshot,
+            odds_entries=[
+                _odds_entry(bookmaker="Stale High", home_odds=2.1, observed_at=old_snapshot),
+                _odds_entry(bookmaker="Fresh Current", home_odds=1.9, observed_at=fresh_snapshot),
+            ],
+        )
+    )
+
+    feed = await predictions_api.list_value_bets(
+        min_edge=0,
+        max_results=10,
+        include_unreliable=False,
+        db=db,
+        user=SimpleNamespace(id=9),
+    )
+
+    [item] = feed.items
+    assert item.odds == 1.9
+    assert item.source == "odds:Fresh Current"
+    assert item.odds_freshness_seconds == 60
+    assert item.is_betslip_eligible is True
+    assert "data_stale" not in item.block_reasons
 
 
 @pytest.mark.asyncio

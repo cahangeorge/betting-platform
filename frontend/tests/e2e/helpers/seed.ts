@@ -1,44 +1,16 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-
 import { backendRequest, withBearerToken } from './backend';
+import { runDirectSql, skipIfDirectDatabaseFixturesUnavailable } from './database';
 import type { AuthSession, SeededHybridFixtures } from './types';
-
-const execFileAsync = promisify(execFile);
-
-const DEFAULT_POSTGRES_CONTAINER = process.env.E2E_POSTGRES_CONTAINER ?? 'bet_postgres_1';
-const DEFAULT_DB_NAME = process.env.E2E_POSTGRES_DB ?? 'betting_platform';
-const DEFAULT_DB_USER = process.env.E2E_POSTGRES_USER ?? 'betuser';
-const DEFAULT_CONTAINER_RUNTIME = process.env.E2E_CONTAINER_RUNTIME ?? 'podman';
 
 function sqlLiteral(value: string): string {
 	return `'${value.split("'").join("''")}'`;
 }
 
 async function runSql(sql: string): Promise<string> {
-	const { stdout } = await execFileAsync(
-		DEFAULT_CONTAINER_RUNTIME,
-		[
-			'exec',
-			'-i',
-			DEFAULT_POSTGRES_CONTAINER,
-			'psql',
-			'-U',
-			DEFAULT_DB_USER,
-			'-d',
-			DEFAULT_DB_NAME,
-			'-t',
-			'-A',
-			'-c',
-			sql
-		],
-		{
-			maxBuffer: 1024 * 1024 * 4
-		}
-	);
-
-	return stdout.trim();
+	skipIfDirectDatabaseFixturesUnavailable();
+	return await runDirectSql(sql);
 }
+
 
 export async function markMatchFinished(
 	matchId: number,
@@ -76,7 +48,7 @@ async function tableHasColumn(tableName: string, columnName: string): Promise<bo
 		);
 	`);
 
-	return output.split('\n')[0]?.trim() === 't';
+	return ['t', 'true', '1'].includes(output.split('\n')[0]?.trim().toLowerCase() ?? '');
 }
 
 async function insertMatch(input: {
@@ -113,16 +85,31 @@ async function insertOdds(
 	matchId: number,
 	input: { homeOdds: number; drawOdds: number; awayOdds: number; market?: string; bookmaker?: string }
 ) {
-	await runSql(`
-		INSERT INTO odds_entries (match_id, bookmaker, market, home_odds, draw_odds, away_odds, timestamp)
+	const bookmaker = input.bookmaker ?? 'Betfair';
+	const market = input.market ?? '1x2';
+	const snapshotId = Number((await runSql(`
+		INSERT INTO odds_snapshots (match_id, source, source_key, observed_at, quality, metadata_json)
 		VALUES (
 			${matchId},
-			${sqlLiteral(input.bookmaker ?? 'Betfair')},
-			${sqlLiteral(input.market ?? '1x2')},
+			'e2e',
+			${sqlLiteral(`e2e:${matchId}:${bookmaker}:${market}`)},
+			NOW(),
+			'complete',
+			'{"fixture":"hybrid"}'::json
+		)
+		RETURNING id;
+	`)).split('\n')[0]?.trim());
+	await runSql(`
+		INSERT INTO odds_entries (match_id, bookmaker, market, home_odds, draw_odds, away_odds, timestamp, odds_snapshot_id)
+		VALUES (
+			${matchId},
+			${sqlLiteral(bookmaker)},
+			${sqlLiteral(market)},
 			${input.homeOdds},
 			${input.drawOdds},
 			${input.awayOdds},
-			NOW()
+			NOW(),
+			${snapshotId}
 		);
 	`);
 }
@@ -285,7 +272,7 @@ async function createTicketForMatch(session: AuthSession, matchId: number): Prom
 		},
 		body: JSON.stringify({
 			ticket_type: 'single',
-			stake: 12,
+			stake: 10,
 			bankroll_id: session.bankroll.id,
 			legs: [
 				{

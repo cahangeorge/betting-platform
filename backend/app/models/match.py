@@ -1,18 +1,24 @@
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import JSON, DateTime, Float, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models import Base
 
 if TYPE_CHECKING:
+    from app.models.odds_lineage import OddsSnapshot, TicketLegQuoteSnapshot
     from app.models.prediction import EnsemblePrediction, ModelPrediction
     from app.models.ticket import TicketLeg
 
 
 class Match(Base):
     __tablename__ = "matches"
+    __table_args__ = (
+        Index("ix_matches_status", "status"),
+        Index("ix_matches_match_date", "match_date"),
+        Index("ix_matches_competition", "competition"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -31,6 +37,7 @@ class Match(Base):
     )
 
     odds: Mapped[list["OddsEntry"]] = relationship("OddsEntry", back_populates="match", cascade="all, delete-orphan")
+    odds_snapshots: Mapped[list["OddsSnapshot"]] = relationship("OddsSnapshot", cascade="all, delete-orphan")
     stats: Mapped[list["MatchStat"]] = relationship("MatchStat", back_populates="match", cascade="all, delete-orphan")
     sources: Mapped[list["MatchSource"]] = relationship(
         "MatchSource", back_populates="match", cascade="all, delete-orphan"
@@ -44,13 +51,43 @@ class Match(Base):
     ticket_legs: Mapped[list["TicketLeg"]] = relationship(
         "TicketLeg", back_populates="match", cascade="all, delete-orphan"
     )
+    result_corrections: Mapped[list["MatchResultCorrection"]] = relationship(
+        "MatchResultCorrection", back_populates="match", cascade="all, delete-orphan"
+    )
+
+
+class MatchResultCorrection(Base):
+    """An explicit, attributable correction to a persisted final match result."""
+
+    __tablename__ = "match_result_corrections"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    match_id: Mapped[int] = mapped_column(ForeignKey("matches.id", ondelete="CASCADE"), nullable=False, index=True)
+    corrected_by_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    source: Mapped[str] = mapped_column(String(100), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    previous_home_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    previous_away_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    previous_status: Mapped[str] = mapped_column(String(50), nullable=False)
+    corrected_home_score: Mapped[int] = mapped_column(Integer, nullable=False)
+    corrected_away_score: Mapped[int] = mapped_column(Integer, nullable=False)
+    corrected_status: Mapped[str] = mapped_column(String(50), nullable=False, default="finished")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    match: Mapped["Match"] = relationship("Match", back_populates="result_corrections")
 
 
 class OddsEntry(Base):
     __tablename__ = "odds_entries"
+    __table_args__ = (Index("ix_odds_entries_match_id", "match_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     match_id: Mapped[int] = mapped_column(ForeignKey("matches.id", ondelete="CASCADE"), nullable=False)
+    odds_snapshot_id: Mapped[int | None] = mapped_column(
+        ForeignKey("odds_snapshots.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     bookmaker: Mapped[str] = mapped_column(String(100), nullable=False)
     market: Mapped[str] = mapped_column(String(50), nullable=False)
     home_odds: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -60,10 +97,13 @@ class OddsEntry(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     match: Mapped["Match"] = relationship("Match", back_populates="odds")
+    odds_snapshot: Mapped["OddsSnapshot | None"] = relationship("OddsSnapshot")
+    quote_snapshots: Mapped[list["TicketLegQuoteSnapshot"]] = relationship("TicketLegQuoteSnapshot")
 
 
 class MatchStat(Base):
     __tablename__ = "match_stats"
+    __table_args__ = (Index("ix_match_stats_match_id", "match_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     match_id: Mapped[int] = mapped_column(ForeignKey("matches.id", ondelete="CASCADE"), nullable=False)
@@ -90,6 +130,7 @@ class MatchStat(Base):
 
 class MatchSource(Base):
     __tablename__ = "match_sources"
+    __table_args__ = (Index("ix_match_sources_match_id", "match_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     match_id: Mapped[int] = mapped_column(ForeignKey("matches.id", ondelete="CASCADE"), nullable=False)

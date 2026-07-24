@@ -57,6 +57,9 @@ importers:
       svelte-check:
         specifier: ^4.0.0
         version: 4.5.0(picomatch@4.0.4)(svelte@5.56.1)(typescript@5.9.3)
+      svelte-meta-tags:
+        specifier: 5.0.1
+        version: 5.0.1(svelte@5.56.1)(typescript@5.9.3)
       tailwindcss:
         specifier: ^4.0.0
         version: 4.3.0
@@ -1295,6 +1298,15 @@ packages:
   safer-buffer@2.1.2:
     resolution: {integrity: sha512-YZo3K82SD7Riyi0E1EQPojLz7kpepnSQI9IyPbHHg1XXXevb5dJI7tpyN2ADxGcQbHG7vcyRHk0cbwqcQriUtg==}
 
+  schema-dts-lib@1.0.0:
+    resolution: {integrity: sha512-9MEO5vpQH9JdBioUupqluzxSYxPLjhmqRUudk15adUl/ypnRsM2/M1kN3AmVJQeG7nZqcL68H8JlGqQQT6vy9A==}
+    engines: {node: '>=14.0.0'}
+    peerDependencies:
+      typescript: '>=4.9.5'
+
+  schema-dts@2.0.0:
+    resolution: {integrity: sha512-t7NoCy3Rn5GHGx6p7s1qIYK/AeIb8ZxJNR9WUNFkwMv2CiiGZBmqqYWc2FlZVm5ZbiHMY4OvBWhj7QtyrFO2Jw==}
+
   set-cookie-parser@3.1.0:
     resolution: {integrity: sha512-kjnC1DXBHcxaOaOXBHBeRtltsDG2nUiUni+jP92M9gYdW12rsmx92UsfpH7o5tDRs7I1ZZPSQJQGv3UaRfCiuw==}
 
@@ -1325,6 +1337,11 @@ packages:
     peerDependencies:
       svelte: ^4.0.0 || ^5.0.0-next.0
       typescript: '>=5.0.0'
+
+  svelte-meta-tags@5.0.1:
+    resolution: {integrity: sha512-ZCYCqBxpXjjyKbfytOrWKImJGd8ORFp/Y4CImtBna43sqpkGMkI95P5UgFHhZrTV9QidGdGZiQGQIteIPoUYtw==}
+    peerDependencies:
+      svelte: ^5.0.0
 
   svelte-toolbelt@0.10.6:
     resolution: {integrity: sha512-YWuX+RE+CnWYx09yseAe4ZVMM7e7GRFZM6OYWpBKOb++s+SQ8RBIMMe+Bs/CznBMc0QPLjr+vDBxTAkozXsFXQ==}
@@ -2503,6 +2520,16 @@ snapshots:
 
   safer-buffer@2.1.2: {}
 
+  schema-dts-lib@1.0.0(typescript@5.9.3):
+    dependencies:
+      typescript: 5.9.3
+
+  schema-dts@2.0.0(typescript@5.9.3):
+    dependencies:
+      schema-dts-lib: 1.0.0(typescript@5.9.3)
+    transitivePeerDependencies:
+      - typescript
+
   set-cookie-parser@3.1.0: {}
 
   sirv@3.0.2:
@@ -2540,6 +2567,13 @@ snapshots:
       typescript: 5.9.3
     transitivePeerDependencies:
       - picomatch
+
+  svelte-meta-tags@5.0.1(svelte@5.56.1)(typescript@5.9.3):
+    dependencies:
+      schema-dts: 2.0.0(typescript@5.9.3)
+      svelte: 5.56.1
+    transitivePeerDependencies:
+      - typescript
 
   svelte-toolbelt@0.10.6(@sveltejs/kit@2.62.0(@sveltejs/vite-plugin-svelte@5.1.1(svelte@5.56.1)(vite@6.4.3(@types/node@25.9.2)(jiti@1.21.7)(lightningcss@1.32.0)))(svelte@5.56.1)(typescript@5.9.3)(vite@6.4.3(@types/node@25.9.2)(jiti@1.21.7)(lightningcss@1.32.0)))(svelte@5.56.1):
     dependencies:

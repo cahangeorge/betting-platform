@@ -3,16 +3,19 @@ import { expect, test } from '@playwright/test';
 import { createAuthenticatedSession } from '../helpers/auth';
 import { cleanupSessionArtifacts } from '../helpers/cleanup';
 
-const viewportWidths = [1440, 1024, 390, 320] as const;
+const viewportWidths = [1920, 1440, 1024, 768, 390, 320] as const;
 
 const routes = [
-	{ name: 'Dashboard', path: '/', heading: 'Rezultate si oportunitati' },
-	{ name: 'Scrape', path: '/scrape', heading: 'SCRAPING' },
-	{ name: 'Predictii', path: '/predict', heading: 'PREDICTIONS' },
-	{ name: 'Bilete', path: '/tickets', heading: 'TICKETS' },
-	{ name: 'Account', path: '/account', heading: 'ACCOUNT' },
-	{ name: 'Date', path: '/data', heading: 'Data Hub' },
-	{ name: 'Configuratii', path: '/configuratii', heading: 'CONFIGURATII' }
+	{ name: 'Home', path: '/', heading: 'Deciziile de azi' },
+	{ name: 'Prepare', path: '/prepare', heading: 'Pregătește datele meciurilor' },
+	{ name: 'Analyze', path: '/analyze', heading: 'Analiză' },
+	{ name: 'Opportunities', path: '/opportunities?view=value', heading: 'VALUE BET FEED' },
+	{ name: 'Tickets', path: '/tickets', heading: 'Bilete' },
+	{ name: 'Monitoring', path: '/monitoring', heading: 'Monitoring and automation' },
+	{ name: 'Data explorer', path: '/prepare/data', heading: 'Data Hub' },
+	{ name: 'Strategies', path: '/settings/strategies', heading: 'CONFIGURATII' },
+	{ name: 'Countries and leagues', path: '/settings/countries-leagues', heading: 'Listare țări/ligi' },
+	{ name: 'Account', path: '/settings/account', heading: 'ACCOUNT' }
 ] as const;
 
 test.describe('page-level horizontal overflow', () => {

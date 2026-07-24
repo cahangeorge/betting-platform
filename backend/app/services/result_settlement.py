@@ -1,6 +1,7 @@
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 from sqlalchemy import select
@@ -9,9 +10,14 @@ from sqlalchemy.orm import selectinload
 
 from app.models.bankroll import Bankroll, LedgerEntry
 from app.models.ticket import Settlement, Ticket, TicketLeg
+from app.services.clv_tracking import capture_ticket_closing_quotes
 
 FINAL_MATCH_STATUSES = {"finished", "complete", "completed", "final", "ft"}
-TERMINAL_TICKET_STATUSES = {"won", "lost", "void", "cashed_out"}
+ACTIVE_TICKET_STATUSES = {"open"}
+
+
+def _money(value: object) -> Decimal:
+    return Decimal(str(value or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 @dataclass(frozen=True)
@@ -241,26 +247,28 @@ async def _write_settlement(db: AsyncSession, ticket: Ticket, outcome: TicketSet
     if outcome.return_amount is None or await _has_settlement(db, ticket.id):
         return
 
-    pnl = round(outcome.return_amount - ticket.stake, 2)
+    return_amount = _money(outcome.return_amount)
+    pnl = _money(return_amount - _money(ticket.stake))
     db.add(
         Settlement(
             ticket_id=ticket.id,
             outcome=outcome.status,
-            return_amount=outcome.return_amount,
+            return_amount=return_amount,
             pnl=pnl,
         )
     )
 
     if ticket.bankroll_id and outcome.return_amount > 0:
-        bankroll = await db.get(Bankroll, ticket.bankroll_id)
+        bankroll_result = await db.execute(select(Bankroll).where(Bankroll.id == ticket.bankroll_id).with_for_update())
+        bankroll = bankroll_result.scalar_one_or_none()
         if bankroll is not None:
-            bankroll.balance += outcome.return_amount
+            bankroll.balance = _money(bankroll.balance) + return_amount
             db.add(
                 LedgerEntry(
                     bankroll_id=ticket.bankroll_id,
                     ticket_id=ticket.id,
                     entry_type="win" if outcome.status == "won" else "void",
-                    amount=outcome.return_amount,
+                    amount=return_amount,
                     balance_after=bankroll.balance,
                 )
             )
@@ -279,12 +287,13 @@ async def settle_due_tickets(
     stmt = (
         select(Ticket)
         .options(selectinload(Ticket.legs).selectinload(TicketLeg.match))
-        .where(Ticket.user_id == user_id, Ticket.status.notin_(TERMINAL_TICKET_STATUSES))
+        .where(Ticket.user_id == user_id, Ticket.status.in_(ACTIVE_TICKET_STATUSES))
         .order_by(Ticket.created_at.asc())
         .limit(limit)
+        .with_for_update(skip_locked=True)
     )
     result = await db.execute(stmt)
-    tickets = result.scalars().unique().all()
+    tickets = [ticket for ticket in result.scalars().unique().all() if ticket.status in ACTIVE_TICKET_STATUSES]
 
     settled = won = lost = void = pending = updated_legs = 0
 
@@ -297,6 +306,7 @@ async def settle_due_tickets(
             pending += 1
             continue
 
+        await capture_ticket_closing_quotes(db, ticket)
         ticket.status = outcome.status
         ticket.updated_at = now
         await _write_settlement(db, ticket, outcome)

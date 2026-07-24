@@ -1,0 +1,186 @@
+# Production-only topology. Render with scripts/release/render.sh; it rejects mutable images.
+name: bet-production
+
+x-api-environment: &api-environment
+  BET_ENVIRONMENT: production
+  BET_DATABASE_URL: ${BET_DATABASE_URL:?set by the production secret manager}
+  BET_JWT_SECRET: ${BET_JWT_SECRET:?set by the production secret manager}
+  BET_CORS_ORIGINS: https://${BET_PUBLIC_HOST:?set the public DNS name}
+  BET_COOKIE_SECURE: "true"
+  BET_DEBUG: "false"
+  BET_AUTH_RATE_LIMIT_ENABLED: "${BET_AUTH_RATE_LIMIT_ENABLED:-true}"
+  BET_AUTH_RATE_LIMIT_WINDOW_SECONDS: "${BET_AUTH_RATE_LIMIT_WINDOW_SECONDS:-300}"
+  BET_AUTH_LOGIN_MAX_ATTEMPTS: "${BET_AUTH_LOGIN_MAX_ATTEMPTS:-10}"
+  BET_AUTH_SIGNUP_MAX_ATTEMPTS: "${BET_AUTH_SIGNUP_MAX_ATTEMPTS:-5}"
+  BET_AUTH_SOURCE_MAX_ATTEMPTS: "${BET_AUTH_SOURCE_MAX_ATTEMPTS:-1000}"
+  BET_AUTH_RATE_LIMIT_MAX_SOURCES: "${BET_AUTH_RATE_LIMIT_MAX_SOURCES:-10000}"
+  BET_AUTH_RATE_LIMIT_MAX_IDENTITIES: "${BET_AUTH_RATE_LIMIT_MAX_IDENTITIES:-100000}"
+  BET_WEBSOCKET_MAX_CONNECTIONS: "${BET_WEBSOCKET_MAX_CONNECTIONS:-100}"
+  BET_WEBSOCKET_MAX_CONNECTIONS_PER_USER: "${BET_WEBSOCKET_MAX_CONNECTIONS_PER_USER:-3}"
+  BET_WEBSOCKET_RECEIVE_TIMEOUT_SECONDS: "${BET_WEBSOCKET_RECEIVE_TIMEOUT_SECONDS:-300}"
+  BET_WEBSOCKET_SEND_TIMEOUT_SECONDS: "${BET_WEBSOCKET_SEND_TIMEOUT_SECONDS:-5}"
+  BET_WEBSOCKET_MAX_MESSAGE_BYTES: "${BET_WEBSOCKET_MAX_MESSAGE_BYTES:-8192}"
+  BET_TASK_QUEUE_BACKEND: taskiq
+  BET_REDIS_URL: ${BET_REDIS_URL:?set authenticated Redis DB 0 URL by the production secret manager}
+  BET_TASKIQ_RESULT_BACKEND_URL: ${BET_TASKIQ_RESULT_BACKEND_URL:?set authenticated Redis DB 1 URL by the production secret manager}
+  BET_TASKIQ_QUEUE_NAME: bet
+  BET_TASKIQ_CONSUMER_GROUP: bet-workers
+  BET_PENALTYBLOG_PYTHON: /usr/local/bin/python
+  BET_PENALTYBLOG_BRIDGE: /app/backend/app/bridges/penaltyblog_bridge.py
+  BET_PENALTYBLOG_ROOT: /app/penaltyblog
+  BET_SOCCERDATA_PYTHON: /usr/local/bin/python
+  BET_SOCCERDATA_BRIDGE: /app/backend/app/bridges/soccerdata_bridge.py
+  BET_SOCCERDATA_ROOT: /app/soccerdata
+  BET_ODDSHARVESTER_PYTHON: /usr/local/bin/python
+  PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+  BET_SCHEDULED_JOBS_ENABLED: "false"
+  BET_TRADING_ENABLED: "false"
+  BET_TRADING_PAPER_ENABLED: "false"
+  BET_TRADING_LIVE_ENABLED: "false"
+  BET_TRADING_BETFAIR_READ_ONLY_ENABLED: "false"
+
+x-service-defaults: &service-defaults
+  restart: unless-stopped
+  networks: [private]
+  security_opt: [no-new-privileges:true]
+  logging:
+    driver: local
+    options:
+      max-size: "${BET_CONTAINER_LOG_MAX_SIZE:-10m}"
+      max-file: "${BET_CONTAINER_LOG_MAX_FILES:-5}"
+  mem_limit: "${BET_CONTAINER_MEMORY_LIMIT:-2g}"
+  cpus: "${BET_CONTAINER_CPU_LIMIT:-2.0}"
+  pids_limit: "${BET_CONTAINER_PIDS_LIMIT:-512}"
+  stop_grace_period: 30s
+
+services:
+  postgres:
+    <<: *service-defaults
+    image: ${POSTGRES_IMAGE:?must be an immutable image digest}
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set by the production secret manager}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set by the production secret manager}
+      POSTGRES_DB: ${POSTGRES_DB:?set by the production secret manager}
+    volumes: [postgres-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  redis:
+    <<: *service-defaults
+    image: ${REDIS_IMAGE:?must be an immutable image digest}
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set by the production secret manager}
+    command:
+      - sh
+      - -ec
+      - exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"
+    volumes: [redis-data:/data]
+    healthcheck:
+      test: [CMD-SHELL, "REDISCLI_AUTH=$$REDIS_PASSWORD redis-cli ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  migrate:
+    image: ${BET_API_IMAGE:?must be an immutable image digest}
+    environment: *api-environment
+    command: [alembic, upgrade, head]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    restart: "no"
+    networks: [private]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp:rw,noexec,nosuid,size=64m]
+
+  api:
+    <<: *service-defaults
+    networks: [private, egress]
+    image: ${BET_API_IMAGE:?must be an immutable image digest}
+    environment: *api-environment
+    command: [uvicorn, app.main:app, --host, 0.0.0.0, --port, "8000"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=2)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    tmpfs: [/tmp:rw,noexec,nosuid,size=256m]
+
+  worker:
+    <<: *service-defaults
+    networks: [private, egress]
+    image: ${BET_API_IMAGE:?must be an immutable image digest}
+    environment: *api-environment
+    command: [taskiq, worker, app.tasks.broker:broker, app.tasks.jobs]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, python, -m, app.tasks.runtime, worker]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 20s
+    tmpfs: [/tmp:rw,noexec,nosuid,size=256m]
+
+  scheduler:
+    <<: *service-defaults
+    image: ${BET_API_IMAGE:?must be an immutable image digest}
+    environment: *api-environment
+    command: [python, -m, app.tasks.scheduler]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, python, -m, app.tasks.runtime, scheduler]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    tmpfs: [/tmp:rw,noexec,nosuid,size=128m]
+
+  frontend:
+    <<: *service-defaults
+    image: ${BET_FRONTEND_IMAGE:?must be an immutable image digest}
+    environment:
+      BET_API_URL: http://api:8000
+      BET_TRADING_PAPER_ENABLED: "false"
+      ORIGIN: https://${BET_PUBLIC_HOST:?set the public DNS name}
+    depends_on:
+      api: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/').then(r => { if (!r.ok && r.status !== 302) process.exit(1) }).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    tmpfs: [/tmp:rw,noexec,nosuid,size=64m]
+
+  nginx:
+    <<: *service-defaults
+    image: ${NGINX_IMAGE:?must be an immutable image digest}
+    ports:
+      - ${BET_HTTP_PORT:?set the public HTTP port}:8080
+      - ${BET_HTTPS_PORT:?set the public HTTPS port}:8443
+    volumes:
+      - ${TLS_CERT_PATH:?absolute path to the deployed certificate}:/etc/nginx/tls/tls.crt:ro
+      - ${TLS_KEY_PATH:?absolute path to the deployed private key}:/etc/nginx/tls/tls.key:ro
+    depends_on:
+      api: {condition: service_healthy}
+      frontend: {condition: service_healthy}
+
+networks:
+  private:
+    internal: true
+  egress: {}
+
+volumes:
+  postgres-data:
+  redis-data:

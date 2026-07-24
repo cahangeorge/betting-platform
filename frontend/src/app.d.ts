@@ -2,19 +2,11 @@
 
 declare namespace App {
 	interface Locals {
-		user: {
-			id: number;
-			email: string;
-			name: string;
-		} | null;
+		user: import('$lib/types').User | null;
 	}
 
 	interface PageData {
-		user?: {
-			id: number;
-			email: string;
-			name: string;
-		} | null;
+		user?: import('$lib/types').User | null;
 	}
 
 	// eslint-disable-next-line @typescript-eslint/no-empty-object-type

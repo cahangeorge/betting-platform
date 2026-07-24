@@ -3,7 +3,7 @@
 	import { ApiClientError } from '$lib/api/client';
 	import type { Bankroll, BookmakerAccount, LedgerEntry } from '$lib/types';
 	import { onMount } from 'svelte';
-	import { shouldAutoLoadAccountData } from './account-panel.helpers';
+	import { parseBankrollId, shouldAutoLoadAccountData } from './account-panel.helpers';
 	import Button from './ui/Button.svelte';
 	import Card from './ui/Card.svelte';
 	import Input from './ui/Input.svelte';
@@ -12,6 +12,7 @@
 	import Badge from './ui/Badge.svelte';
 	import Loading from './Loading.svelte';
 	import EquityCurveChart from './charts/EquityCurveChart.svelte';
+	import RiskPolicyPanel from './RiskPolicyPanel.svelte';
 
 	let {
 		serverBankrolls,
@@ -30,6 +31,7 @@
 	let error = $state('');
 	let activeTab = $state('bankrolls');
 	let hasRequestedInitialLoad = $state(false);
+	let interactive = $state(false);
 
 	// New bankroll form
 	let showNewBankroll = $state(false);
@@ -44,10 +46,41 @@
 	let newAccountName = $state('');
 	let newAccountBalance = $state('0');
 	let selectedBankrollId = $state<number | null>(null);
+	let bankrollContextGeneration = 0;
 
 	let formError = $state('');
 
+	async function loadBankrollContext(bankrollId: number) {
+		const generation = ++bankrollContextGeneration;
+		loading = true;
+		error = '';
+		try {
+			const [nextAccounts, nextLedger] = await Promise.all([
+				bankrollApi.getAccounts(bankrollId),
+				bankrollApi.getLedger(bankrollId)
+			]);
+			if (generation !== bankrollContextGeneration || selectedBankrollId !== bankrollId) return;
+			accounts = nextAccounts;
+			ledger = nextLedger;
+		} catch (err) {
+			if (generation !== bankrollContextGeneration) return;
+			error = err instanceof ApiClientError ? err.message : 'Failed to load bankroll data';
+		} finally {
+			if (generation === bankrollContextGeneration) loading = false;
+		}
+	}
+
+	function changeBankroll(event: Event) {
+		const bankrollId = parseBankrollId((event.currentTarget as HTMLSelectElement).value);
+		if (bankrollId === selectedBankrollId) return;
+		selectedBankrollId = bankrollId;
+		accounts = [];
+		ledger = [];
+		if (bankrollId) void loadBankrollContext(bankrollId);
+	}
+
 	async function loadData() {
+		const generation = ++bankrollContextGeneration;
 		loading = true;
 		error = '';
 		try {
@@ -60,15 +93,17 @@
 					])
 				: [[], []];
 			bankrolls = b;
+			if (generation !== bankrollContextGeneration) return;
 			accounts = a;
 			ledger = l;
 			if (selectedBankrollId === null && b.length > 0) {
 				selectedBankrollId = b[0].id;
 			}
 		} catch (err) {
+			if (generation !== bankrollContextGeneration) return;
 			error = err instanceof ApiClientError ? err.message : 'Failed to load account data';
 		} finally {
-			loading = false;
+			if (generation === bankrollContextGeneration) loading = false;
 		}
 	}
 
@@ -111,6 +146,7 @@
 	}
 
 	onMount(() => {
+		interactive = true;
 		bankrolls = serverBankrolls ?? [];
 		accounts = serverAccounts ?? [];
 		ledger = serverLedger ?? [];
@@ -134,7 +170,8 @@
 	const tabs = $derived([
 		{ id: 'bankrolls', label: 'Bankrolls', count: bankrolls.length },
 		{ id: 'accounts', label: 'Bookmaker Accounts', count: accounts.length },
-		{ id: 'ledger', label: 'Ledger', count: ledger.length }
+		{ id: 'ledger', label: 'Ledger', count: ledger.length },
+		{ id: 'risk', label: 'Risk & limits' }
 	]);
 
 	const ledgerCols = [
@@ -167,7 +204,7 @@
 	);
 </script>
 
-<div class="space-y-6">
+<div class="space-y-6" data-testid="account-panel" data-interactive={interactive ? 'true' : 'false'}>
 	{#if loading}
 		<Loading message="Loading account data..." />
 	{:else if error}
@@ -273,8 +310,9 @@
 								{#if bankrollOptions.length > 0}
 									<Select
 										label="Bankroll"
-										bind:value={selectedBankrollId as unknown as string}
+										value={selectedBankrollId ? String(selectedBankrollId) : ''}
 										options={bankrollOptions}
+										onchange={changeBankroll}
 									/>
 								{/if}
 								<div class="flex space-x-2">
@@ -322,6 +360,26 @@
 							{/each}
 						</tbody>
 					</table>
+				</div>
+			{:else if activeTab === 'risk'}
+				<div class="space-y-4">
+					{#if bankrolls.length === 0}
+						<div class="border border-border bg-muted/40 p-4 text-sm text-foreground">
+							Creează mai întâi un bankroll paper pentru a configura limitele de risc.
+						</div>
+					{:else}
+						<Select
+							label="Bankroll"
+							value={selectedBankrollId ? String(selectedBankrollId) : ''}
+							options={bankrollOptions}
+							onchange={changeBankroll}
+						/>
+						{#if selectedBankrollId}
+							{#key selectedBankrollId}
+								<RiskPolicyPanel bankrollId={selectedBankrollId} />
+							{/key}
+						{/if}
+					{/if}
 				</div>
 			{/if}
 		</Tabs>

@@ -1,5 +1,11 @@
 import { ApiClient, ApiClientError } from './client';
-import type { ScrapeJob, ScrapeJobCreateRequest, Dataset, League } from '$lib/types';
+import type {
+	ScrapeJob,
+	ScrapeJobCreateRequest,
+	ScrapeJobLogPage,
+	Dataset,
+	League
+} from '$lib/types';
 
 class DataApi extends ApiClient {
 	async getJobs(status?: string): Promise<ScrapeJob[]> {
@@ -10,12 +16,20 @@ class DataApi extends ApiClient {
 		return this.get<ScrapeJob>(`/api/v1/data/scrape/${id}`);
 	}
 
+	async getJobLogs(id: number): Promise<ScrapeJobLogPage> {
+		return this.get<ScrapeJobLogPage>(`/api/v1/data/scrape/${id}/logs`);
+	}
+
 	async createJob(data: ScrapeJobCreateRequest): Promise<ScrapeJob> {
 		return this.post<ScrapeJob>('/api/v1/data/scrape', data as unknown as Record<string, unknown>);
 	}
 
 	async cancelJob(id: number): Promise<ScrapeJob> {
 		throw new ApiClientError('Scrape job cancellation is not supported by the backend yet', 501);
+	}
+
+	async refreshFinalResults(matchIds: number[]): Promise<ScrapeJob> {
+		return this.post<ScrapeJob>('/api/v1/data/scrape/results-refresh', { match_ids: matchIds });
 	}
 
 	async getDatasets(): Promise<Dataset[]> {

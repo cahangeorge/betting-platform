@@ -1,6 +1,6 @@
 # Bet repo-local Codex setup.
 # Shared MCP/tool/runtime installation remains global in ~/.codex.
-# Default to the standard strong model for day-to-day cost efficiency; escalate via agents or CLI flags for high-risk work.
-model = "gpt-5.4"
+# Default to Terra for day-to-day cost efficiency; escalate via agents or CLI flags for high-risk work.
+model = "gpt-5.6-terra"
 model_reasoning_effort = "medium"
 model_instructions_file = "model-instructions.md"
