@@ -1,6 +1,6 @@
 # Bet MVP readiness checkpoint — 2026-07-24
 
-Canonical detail lives in `docs/status/current-platform-status.md` and `docs/status/mvp-readiness-program.md`. The safe dirty-checkout integration sequence is `docs/status/release-candidate-reconciliation.md`.
+Canonical detail lives in `docs/status/current-platform-status.md` and `docs/status/mvp-readiness-program.md`. The completed integration sequence and remaining external release steps are in `docs/status/release-candidate-reconciliation.md`. Clean candidate: `40352aed38f98600a621954c67c82b600faab223`.
 
 ## Phase status
 
@@ -9,7 +9,7 @@ Canonical detail lives in `docs/status/current-platform-status.md` and `docs/sta
 - Phase 2 — security/release foundation: local gates green; external credential/infrastructure/revision gates pending.
 - Phase 3 — product, responsive UX and PWA: local MVP scope green; paper execution excluded by ADR.
 - Phase 4 — adversarial QA/recovery: local gates green; protected staging/off-host/deployed evidence pending.
-- Phase 5 — release candidate/public launch: HOLD on clean revision and external operations gates.
+- Phase 5 — clean local release candidate complete; public launch HOLD on protected remote release and external operations gates.
 
 ## Fresh local evidence
 
@@ -25,7 +25,7 @@ Canonical detail lives in `docs/status/current-platform-status.md` and `docs/sta
 ## Public launch HOLD gates
 
 - Provider-side revocation/rotation proof for the previously tracked third-party credential.
-- Owner-approved reconciliation into a clean reviewed integration revision; current shared checkout remains intentionally dirty.
+- Push clean candidate `40352ae`, inspect GitHub checks, and obtain remote review evidence without rewriting the verified revision.
 - Configure protected `registry-release` environment, tag rules and package access/visibility, then run one disposable signed GHCR tag.
 - Real secret manager, production JWT/DB/TLS lifecycle, DNS, valid TLS and firewall/network policy.
 - Protected staging two-user scrape → dataset → prediction → ticket → settlement flow and worker/scheduler failure recovery.

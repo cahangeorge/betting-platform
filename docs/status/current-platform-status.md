@@ -1,15 +1,14 @@
 # Current Platform Status
 
-Updated: 2026-07-24T05:39:32+03:00
+Updated: 2026-07-24T10:52:26+03:00
 Repository/branch: `/home/gion/Projects/bet` / `agent/demo-tickets-2026-07-17`
 Dirty state at this handoff refresh:
 
 ```text
-Intentionally dirty shared checkout. At this refresh there were
-105 tracked-change status entries and 59 untracked status entries representing
-72 untracked files. The exact source of truth is
-`git status --short --branch`; no reset, clean, checkout, commit, push, or
-submodule mutation was performed.
+Clean working tree at 40352aed38f98600a621954c67c82b600faab223.
+The branch is five commits ahead of
+origin/agent/demo-tickets-2026-07-17. No reset, clean, checkout, history
+rewrite, or submodule mutation was performed.
 ```
 
 This is the first status document to read in a new coding session. Re-run
@@ -29,7 +28,8 @@ are maintained in
 the active execution register; this file remains the canonical session
 checkpoint and must summarize its latest verified state.
 
-The owner-safe path from this dirty checkout to a clean candidate is recorded
+The completed owner-safe path from the former dirty checkout to the clean
+candidate is recorded
 in
 [`docs/status/release-candidate-reconciliation.md`](release-candidate-reconciliation.md).
 
@@ -40,10 +40,41 @@ Current program state:
 - Phase 2 security/release foundation: **local gates green; external release gates pending**.
 - Phase 3 product/UX: **local implemented scope and browser/PWA gates green**.
 - Phase 4 adversarial QA/staging: **local gates green; protected staging and external operations evidence pending**.
-- Phase 5 release candidate: **in progress; blocked on external and clean-revision gates**.
+- Phase 5 release candidate: **clean local revision complete; push, protected
+  release, and external staging gates in progress**.
 - Paper execution: **excluded from public MVP** by accepted ADR
   [`2026-07-23-exclude-paper-execution-from-mvp.md`](../adr/2026-07-23-exclude-paper-execution-from-mvp.md).
-- Verdict: **local development validation GO; release/MVP launch HOLD**.
+- Verdict: **clean local release-candidate validation GO; public release/MVP
+  launch HOLD pending external evidence**.
+
+## 2026-07-24 clean release-candidate integration
+
+Owner-authorized integration produced five explicit commits without bulk
+staging or history rewriting:
+
+- `4b123b4` — backend schema, security, tenancy, idempotency, and Taskiq runtime;
+- `34a952a` — frontend session, workflow, responsive UX, and PWA;
+- `ddf0dfd` — production images, signed release workflow, security, and operations;
+- `6c4394e` — canonical status, ADRs, runbook, Serena, and continuity;
+- `40352ae` — repository-wide backend Ruff formatting required by the clean gate.
+
+Fresh verification on `40352ae`:
+
+- backend Ruff format/check passed; **530/530** tests passed; Alembic is
+  `025 (head)` with `alembic check` reporting no upgrade operations;
+- frontend `pnpm check` passed with 0 errors/0 warnings; **121/121** unit
+  cases, E2E typecheck, and production build passed;
+- root contracts **20/20**, secret scan, actionlint, YAML parse, shell syntax,
+  both Compose renders, Serena integrity, and Git diff/status checks passed;
+- Chromium hybrid **56/56** passed in 9.3m with one worker and no retries;
+  PWA production **3/3**, Firefox **1/1**, and official-container WebKit
+  **1/1** passed;
+- runtime remained ready at backend `127.0.0.1:8001`, frontend
+  `127.0.0.1:5175`, PostgreSQL `5433`, and Redis `6380`.
+
+Repomix refreshed the whole workspace at output ID `8f2867d9900ff53a`
+(1,167 files). Codebase Memory `bet-core` was reindexed in moderate mode at
+**5,237 nodes / 19,762 edges**.
 
 ## 2026-07-24 final local verification refresh
 
@@ -482,16 +513,14 @@ verification is recorded in the remediation update above.
 
 ## Exact next step
 
-Follow
-[`release-candidate-reconciliation.md`](release-candidate-reconciliation.md)
-to reconcile this intentionally dirty checkout into a clean reviewed revision,
-configure the protected `registry-release` environment/tag/package controls,
-and run one disposable signed GHCR tag. Then run the protected staging
-lifecycle against those digest-pinned images. Keep release/MVP launch **HOLD**
-until external credential rotation, secret-manager, DNS/TLS/firewall, off-host
+Push the clean branch, inspect all GitHub checks and protected
+`registry-release` environment/tag/package controls, then run one disposable
+signed GHCR tag from the verified SHA. Deploy only verified digest-pinned
+images to protected staging. Keep public release/MVP launch **HOLD** until
+external credential rotation, secret-manager, DNS/TLS/firewall, off-host
 backup storage and restore, staging two-user scrape-to-settlement evidence,
-observability/on-call/soak/canary, and protected CI build/publish/pull evidence are
-recorded.
+observability/on-call/soak/canary, and protected CI build/publish/pull evidence
+are recorded.
 
 ## Historical platform snapshot
 

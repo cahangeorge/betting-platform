@@ -1,6 +1,6 @@
 # MVP Readiness Program
 
-Updated: 2026-07-24T05:39:32+03:00
+Updated: 2026-07-24T10:52:26+03:00
 Repository: `/home/gion/Projects/bet`
 Branch: `agent/demo-tickets-2026-07-17`
 Program status: **ACTIVE — local development validation GO; release/MVP launch HOLD**
@@ -69,8 +69,10 @@ The program can be marked **MVP GO** only when:
 | QA | LOCAL GATES GREEN / STAGING HOLD | release evidence | real protected two-user staging lifecycle is absent |
 | `betfront/` | ARCHIVED/DIRTY | none | preserve; do not include in current MVP |
 
-Tracked submodules were clean at program start. The parent checkout was already
-dirty and must not be reset or cleaned.
+Tracked submodules were clean at program start and remain unchanged. The
+formerly dirty parent checkout was reconciled into clean candidate
+`40352aed38f98600a621954c67c82b600faab223` without reset, clean, or history
+rewrite.
 
 ## Verified refresh — 2026-07-24
 
@@ -454,10 +456,8 @@ placement must remain disabled.
 
 ## Immediate execution order
 
-1. Reconcile this dirty checkout into a clean reviewed revision without
-   touching nested projects, following
-   `docs/status/release-candidate-reconciliation.md`.
-2. Configure the protected `registry-release` environment/tag rules/package
+1. Push the clean reviewed revision and inspect all GitHub checks.
+2. Configure/verify the protected `registry-release` environment/tag rules/package
    access and run one disposable signed GHCR release tag from that revision.
 3. Execute protected staging lifecycle/two-user, off-host backup/restore,
    observability/soak/canary, secret-manager, and digest-pinned deployment
@@ -473,14 +473,13 @@ placement must remain disabled.
   outside the repository and remains an external launch gate if applicable.
 - Paper execution is excluded from MVP by accepted ADR
   `2026-07-23-exclude-paper-execution-from-mvp.md`.
-- The intentionally dirty checkout must be reconciled without losing existing
-  work before a release candidate can be built.
+- The clean local release candidate exists at `40352ae`; protected remote
+  build/publish/pull evidence remains open.
 
 ## Exact next step
 
-Follow `docs/status/release-candidate-reconciliation.md` to reconcile this
-intentionally dirty checkout into a clean reviewed revision,
-configure the protected GitHub release controls, run one disposable signed
-GHCR tag, then run the protected staging lifecycle against its digest-pinned
-images. Keep release/MVP launch HOLD until the external release gates in the
-verification refresh are evidenced.
+Push `40352ae`, inspect all GitHub checks, configure/verify the protected GitHub
+release controls, run one disposable signed GHCR tag, then run the protected
+staging lifecycle against its digest-pinned images. Keep public release/MVP
+launch HOLD until the external release gates in the verification refresh are
+evidenced.

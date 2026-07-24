@@ -1,20 +1,19 @@
 # Release Candidate Reconciliation Plan
 
-Updated: 2026-07-24T05:39:32+03:00
+Updated: 2026-07-24T10:52:26+03:00
 Branch: `agent/demo-tickets-2026-07-17`
-Status: **OWNER AUTHORIZED INTEGRATION; COMMIT/PUSH/RELEASE EVIDENCE IN PROGRESS**
+Status: **LOCAL INTEGRATION COMPLETE; PUSH/PROTECTED RELEASE EVIDENCE IN PROGRESS**
 
-This plan converts the intentionally dirty, locally verified MVP checkout into
-a reviewable release-candidate revision without losing existing work. It does
-not authorize staging, committing, pushing, tag creation, or production
-deployment. Those actions require an explicit owner decision because the
-checkout contains pre-existing work and release credentials/infrastructure are
-external.
+This plan converted the intentionally dirty, locally verified MVP checkout into
+a reviewable release-candidate revision without losing existing work. The owner
+explicitly authorized continuation, including commit, push, and release
+evidence. Production deployment still requires a configured target and
+verifiable external credentials/infrastructure.
 
-At this checkpoint `git status --short` reports **105 tracked-change entries**
-and **59 untracked entries** representing **72 untracked files**. The three
-tracked nested projects are clean and their current pointers must remain
-unchanged:
+The former checkout had **105 tracked-change entries** and **59 untracked
+entries** representing **72 untracked files**. It is now clean at
+`40352aed38f98600a621954c67c82b600faab223`, five commits ahead of the remote
+branch. The three tracked nested projects remain clean and unchanged:
 
 - `OddsHarvester`: `6046613805667b8d7287f7a925f937b9f0dbfde5`
 - `penaltyblog`: `dd81473a40f29ddcf62a85c006cd28e6d83acd80`
@@ -147,17 +146,21 @@ git submodule status
 
 ## Final clean-revision gate
 
-After the four reviewed commits:
+Completed local evidence:
 
-1. run the complete backend/frontend/root/browser/PWA gate from the candidate
-   revision;
-2. confirm `git status --short` is empty;
-3. confirm the three submodule pointers equal the hashes above;
-4. push a review branch, obtain review, and merge without rewriting the
-   evidence-producing revision;
-5. configure the protected `registry-release` environment and execute one
-   disposable `v*` tag;
-6. deploy only the verified registry digests to protected staging.
+1. five explicit reviewed commits, including one isolated mechanical Ruff
+   formatting commit;
+2. backend **530/530**, frontend **121/121**, root **20/20**, Alembic `025`,
+   Chromium **56/56**, PWA **3/3**, Firefox **1/1**, WebKit **1/1**;
+3. `git status --short` empty and all three submodule pointers unchanged;
+4. Serena memory integrity and Codebase Memory reindex green.
+
+Remaining external sequence:
+
+1. push the review branch and inspect all GitHub checks;
+2. configure/verify the protected `registry-release` environment and execute
+   one disposable `v*` tag;
+3. deploy only the verified registry digests to protected staging.
 
 ## External follow-on
 
