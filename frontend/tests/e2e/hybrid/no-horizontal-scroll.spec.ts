@@ -3,11 +3,11 @@ import { expect, test } from '@playwright/test';
 import { createAuthenticatedSession } from '../helpers/auth';
 import { cleanupSessionArtifacts } from '../helpers/cleanup';
 
-const viewportWidths = [1440, 1024, 390, 320] as const;
+const viewportWidths = [1920, 1440, 1024, 768, 390, 320] as const;
 
 const routes = [
 	{ name: 'Home', path: '/', heading: 'Deciziile de azi' },
-	{ name: 'Prepare', path: '/prepare', heading: 'Prepare match data' },
+	{ name: 'Prepare', path: '/prepare', heading: 'Pregătește datele meciurilor' },
 	{ name: 'Analyze', path: '/analyze', heading: 'Analiză' },
 	{ name: 'Opportunities', path: '/opportunities?view=value', heading: 'VALUE BET FEED' },
 	{ name: 'Tickets', path: '/tickets', heading: 'Bilete' },

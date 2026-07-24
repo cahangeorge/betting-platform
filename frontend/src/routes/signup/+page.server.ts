@@ -1,6 +1,6 @@
 import type { Actions, PageServerLoad } from './$types';
 import { fail, redirect } from '@sveltejs/kit';
-import { propagateAuthCookies, setAccessTokenFallback } from '$lib/server/auth-cookies';
+import { propagateAuthCookies } from '$lib/server/auth-cookies';
 import { createNoIndexPageMetaTags } from '$lib/seo/site';
 
 type SignupField = 'name' | 'email' | 'password' | 'confirmPassword' | 'legalAccepted';
@@ -81,9 +81,11 @@ export const actions: Actions = {
 				return fail(response.status, { error: errorMessage, values });
 			}
 
-			const data = await response.json();
-			if (!propagateAuthCookies(cookies, response.headers) && data.access_token) {
-				setAccessTokenFallback(cookies, data.access_token);
+			if (!propagateAuthCookies(cookies, response.headers)) {
+				return fail(502, {
+					error: 'Contul a fost creat, dar sesiunea securizată nu a putut fi inițializată. Autentifică-te din nou.',
+					values
+				});
 			}
 		} catch {
 			return fail(502, {

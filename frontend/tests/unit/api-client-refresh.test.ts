@@ -1,7 +1,10 @@
-import test from 'node:test';
+import test, { beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { ApiClient, ApiClientError, waitForSessionRefresh } from '../../src/lib/api/client.ts';
+import { sessionEpoch } from '../../src/lib/auth/session-epoch.ts';
+
+beforeEach(() => sessionEpoch.activate());
 
 class TestApiClient extends ApiClient {
 	read<T>(path: string, fetchFn: typeof fetch): Promise<T> {
@@ -121,4 +124,31 @@ test('logout coordination waits for an in-flight session refresh', async () => {
 	releaseRefresh();
 	await Promise.all([request, logoutBarrier]);
 	assert.equal(logoutMayProceed, true);
+});
+
+test('does not retry a request when logout wins while refresh is in flight', async () => {
+	const client = new TestApiClient('http://api.test');
+	let refreshStarted = false;
+	let releaseRefresh!: () => void;
+	const refreshGate = new Promise<void>((resolve) => {
+		releaseRefresh = resolve;
+	});
+	let ticketRequests = 0;
+	const fetchFn = (async (input: RequestInfo | URL) => {
+		if (String(input).endsWith('/api/v1/auth/refresh')) {
+			refreshStarted = true;
+			await refreshGate;
+			return jsonResponse(200, { refreshed: true });
+		}
+		ticketRequests += 1;
+		return jsonResponse(401, { detail: 'Expired session' });
+	}) as typeof fetch;
+
+	const request = client.read('/api/v1/tickets', fetchFn);
+	while (!refreshStarted) await new Promise((resolve) => setTimeout(resolve, 0));
+	sessionEpoch.terminate();
+	releaseRefresh();
+
+	await assert.rejects(request, (error: unknown) => error instanceof ApiClientError && error.statusCode === 401);
+	assert.equal(ticketRequests, 1);
 });

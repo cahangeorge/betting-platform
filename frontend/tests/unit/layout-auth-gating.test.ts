@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 
 import { load } from '../../src/routes/+layout.server.ts';
 import { resolveRequestUser } from '../../src/lib/server/auth-cookies.ts';
@@ -133,4 +134,19 @@ test('SSR clears rejected refresh cookies before redirecting', async () => {
 		writes.filter((write) => write.operation === 'delete').map((write) => write.name),
 		['access_token', 'refresh_token']
 	);
+});
+
+test('root layout opens the live socket only for an authenticated user', async () => {
+	const source = await readFile('src/routes/+layout.svelte', 'utf8');
+	const socketEffect = source.slice(source.indexOf('$effect(() =>'));
+
+	assert.match(socketEffect, /if \(!data\.user\) \{\s*liveSocket\.disconnect\(\);\s*return;/);
+	assert.match(socketEffect, /liveSocket\.connect\(\);\s*return \(\) => liveSocket\.disconnect\(\);/);
+});
+
+test('root layout scopes the betslip to the authenticated user before opening authenticated services', async () => {
+	const source = await readFile('src/routes/+layout.svelte', 'utf8');
+	const authenticatedEffect = source.slice(source.lastIndexOf('$effect(() =>'));
+
+	assert.match(authenticatedEffect, /betslip\.setOwner\(data\.user\?\.id \?\? null\);/);
 });

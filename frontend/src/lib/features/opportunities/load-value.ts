@@ -21,7 +21,7 @@ export async function loadValueOpportunities({ fetch }: { fetch: typeof globalTh
 			isDemo: false,
 			error:
 				message.includes('404')
-					? 'Value bet feed is unavailable because the backend endpoint is not implemented yet.'
+					? 'Fluxul Value Bets nu este disponibil momentan.'
 					: message
 		};
 	}

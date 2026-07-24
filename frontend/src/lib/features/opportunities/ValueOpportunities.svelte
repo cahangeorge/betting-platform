@@ -170,6 +170,7 @@
 
 	function timeAgo(iso: string): string {
 		const date = new Date(iso);
+		if (Number.isNaN(date.getTime())) return 'unknown';
 		const seconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000));
 		if (seconds < 60) return `${seconds}s ago`;
 		const minutes = Math.floor(seconds / 60);

@@ -38,6 +38,7 @@ class FakeWebSocket {
 
 	close() {
 		this.readyState = FakeWebSocket.CLOSED;
+		this.onclose?.();
 	}
 }
 
@@ -109,4 +110,17 @@ test('connects to the backend live websocket and publishes typed update stores',
 	});
 	assert.equal(get(matchEvents)?.event, 'goal');
 	assert.equal(get(predictionUpdates), null);
+});
+
+test('manual disconnect remains disconnected when the close event fires', () => {
+	liveSocket.connect();
+
+	const socket = FakeWebSocket.instances.at(-1);
+	assert.ok(socket);
+	socket.open();
+
+	liveSocket.disconnect();
+
+	assert.equal(get(liveSocket).status, 'disconnected');
+	assert.equal(FakeWebSocket.instances.length, 1);
 });

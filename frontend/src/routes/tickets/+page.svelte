@@ -14,6 +14,7 @@
 		bankrolls?: Bankroll[];
 		batches?: TicketBatch[];
 		tradingAccounts?: TradingAccount[];
+		paperTradingEnabled?: boolean;
 		backendStatus?: BackendLoadStatus;
 	};
 	const pageData = $derived(data as TicketsPageData);
@@ -60,5 +61,6 @@
 		serverBankrolls={pageData.bankrolls ?? []}
 		serverBatches={pageData.batches ?? []}
 		serverTradingAccounts={pageData.tradingAccounts ?? []}
+		paperTradingEnabled={pageData.paperTradingEnabled ?? false}
 	/>
 </div>

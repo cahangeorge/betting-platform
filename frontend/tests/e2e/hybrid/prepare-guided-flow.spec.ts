@@ -8,16 +8,16 @@ test('Prepare offers a compact preset-first data collection flow', async ({ page
 
 	try {
 		await page.goto('/prepare');
-		await expect(page.getByRole('heading', { name: 'Prepare match data' })).toBeVisible();
-		await expect(page.getByRole('button', { name: 'Top 5 Europe' })).toBeVisible();
-		await expect(page.getByRole('button', { name: /Show all countries/ })).toBeVisible();
+		await expect(page.getByRole('heading', { name: 'Pregătește datele meciurilor' })).toBeVisible();
+		await expect(page.getByRole('button', { name: 'Top 5 Europa' })).toBeVisible();
+		await expect(page.getByRole('button', { name: /Arată toate țările/ })).toBeVisible();
 
-		await page.getByRole('button', { name: 'Top 5 Europe' }).click();
+		await page.getByRole('button', { name: 'Top 5 Europa' }).click();
 
-		await expect(page.getByText(/5 leagues · 10y history \+ 7 upcoming days/)).toBeVisible();
+		await expect(page.getByText(/5 ligi · 10 ani de istoric \+ 7 zile viitoare/)).toBeVisible();
 		await expect(page.locator('#selection').getByText('Premier League', { exact: true }).first()).toBeVisible();
 		await expect(page.locator('#selection details').first()).not.toHaveAttribute('open', '');
-		await expect(page.getByRole('button', { name: 'Start Scraping' })).toBeEnabled();
+		await expect(page.getByRole('button', { name: 'Pornește colectarea' })).toBeEnabled();
 
 		await page.setViewportSize({ width: 390, height: 844 });
 		expect(

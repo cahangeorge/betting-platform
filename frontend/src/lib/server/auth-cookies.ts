@@ -50,15 +50,6 @@ export function propagateAuthCookies(cookies: Cookies, headers: Headers): boolea
 	return propagated;
 }
 
-export function setAccessTokenFallback(cookies: Cookies, accessToken: string): void {
-	cookies.set('access_token', accessToken, {
-		path: '/',
-		httpOnly: true,
-		sameSite: 'lax',
-		maxAge: 1800
-	});
-}
-
 export async function resolveRequestUser(
 	cookies: Cookies,
 	fetchImpl: typeof fetch,

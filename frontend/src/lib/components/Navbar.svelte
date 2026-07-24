@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { authApi } from '$lib/api/auth';
+	import { endSession } from '$lib/auth/session';
 	import { Menu, Activity, Search, Wifi, WifiOff } from 'lucide-svelte';
 	import { onMount } from 'svelte';
 	import Button from './ui/Button.svelte';
@@ -35,9 +35,8 @@
 	async function handleLogout() {
 		try {
 			await authApi.logout();
-				goto('/login');
-		} catch {
-				goto('/login');
+		} finally {
+			await endSession();
 		}
 	}
 

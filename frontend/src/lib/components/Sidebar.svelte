@@ -94,8 +94,8 @@
 			<div>
 				<p class="hidden px-3 pb-2 text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground xl:block">Flux principal</p>
 				{#each workspaceNavigation as item (item.href)}
-					<a href={item.href} class={itemClass(item.href)} aria-current={isActive(item.href) ? 'page' : undefined} title={item.label}>
-						<item.icon class="h-4 w-4 shrink-0" />
+						<a href={item.href} class={itemClass(item.href)} aria-current={isActive(item.href) ? 'page' : undefined} aria-label={item.label} title={item.label}>
+							<item.icon class="h-4 w-4 shrink-0" aria-hidden="true" />
 						<span class="hidden xl:inline">{item.label}</span>
 					</a>
 				{/each}
@@ -103,8 +103,8 @@
 			<div>
 				<p class="hidden px-3 pb-2 text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground xl:block">Instrumente</p>
 				{#each utilityNavigation as item (item.href)}
-					<a href={item.href} class={itemClass(item.href)} aria-current={isActive(item.href) ? 'page' : undefined} title={item.label}>
-						<item.icon class="h-4 w-4 shrink-0" />
+						<a href={item.href} class={itemClass(item.href)} aria-current={isActive(item.href) ? 'page' : undefined} aria-label={item.label} title={item.label}>
+							<item.icon class="h-4 w-4 shrink-0" aria-hidden="true" />
 						<span class="hidden xl:inline">{item.label}</span>
 					</a>
 				{/each}
@@ -112,8 +112,8 @@
 			<div>
 				<p class="hidden px-3 pb-2 text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground xl:block">Configurații</p>
 				{#each configurationNavigation as item (item.href)}
-					<a href={item.href} class={itemClass(item.href)} aria-current={isActive(item.href) ? 'page' : undefined} title={item.label}>
-						<item.icon class="h-4 w-4 shrink-0" />
+						<a href={item.href} class={itemClass(item.href)} aria-current={isActive(item.href) ? 'page' : undefined} aria-label={item.label} title={item.label}>
+							<item.icon class="h-4 w-4 shrink-0" aria-hidden="true" />
 						<span class="hidden xl:inline">{item.label}</span>
 					</a>
 				{/each}

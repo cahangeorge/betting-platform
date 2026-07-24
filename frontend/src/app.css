@@ -222,6 +222,19 @@
 		@apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
 	}
 
+	/* System-color fallback when High Contrast suppresses box-shadow focus rings. */
+	@media (forced-colors: active) {
+		a:focus-visible,
+		button:focus-visible,
+		input:focus-visible,
+		select:focus-visible,
+		textarea:focus-visible,
+		[tabindex]:focus-visible {
+			outline: 2px solid CanvasText !important;
+			outline-offset: 2px !important;
+		}
+	}
+
 	/* Reduced motion: disable all animations and transitions */
 	@media (prefers-reduced-motion: reduce) {
 		*,

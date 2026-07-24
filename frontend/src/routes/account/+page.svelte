@@ -10,6 +10,7 @@
 		accounts?: BookmakerAccount[];
 		ledger?: LedgerEntry[];
 		tradingAccounts?: TradingAccount[];
+		paperTradingEnabled?: boolean;
 		backendStatus?: BackendLoadStatus;
 	};
 	const pageData = $derived(data as AccountPageData);
@@ -31,7 +32,9 @@
 			<span class="font-medium">Partial backend data.</span> {backendStatus.message}
 		</div>
 	{/if}
-	<PaperTradingPanel serverAccounts={pageData.tradingAccounts ?? []} />
+	{#if pageData.paperTradingEnabled}
+		<PaperTradingPanel serverAccounts={pageData.tradingAccounts ?? []} />
+	{/if}
 	<AccountPanel
 		serverBankrolls={pageData.bankrolls ?? []}
 		serverAccounts={pageData.accounts ?? []}

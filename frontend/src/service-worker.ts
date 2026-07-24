@@ -8,14 +8,14 @@ const sw = self as unknown as ServiceWorkerGlobalScope;
 import { build, files, version } from '$service-worker';
 
 // Create a unique cache name for this deployment
-const CACHE = `betfront-${version}`;
+const CACHE_PREFIX = 'betfront-';
+const CACHE = `${CACHE_PREFIX}${version}`;
 const OFFLINE_FALLBACK = '/offline.html';
 
-const ASSETS = [
-	...build, // the app itself
-	...files, // everything in `static`
-	OFFLINE_FALLBACK
-];
+// `files` already contains the contents of `static`, including the offline page.
+// Keep the explicit fallback for custom serviceWorker.files configurations, while
+// deduplicating because Cache.addAll rejects duplicate requests.
+const ASSETS = Array.from(new Set([...build, ...files, OFFLINE_FALLBACK]));
 
 // Install service worker
 sw.addEventListener('install', (event) => {
@@ -36,7 +36,11 @@ sw.addEventListener('message', (event) => {
 sw.addEventListener('activate', (event) => {
 	async function deleteOldCaches() {
 		const keys = await caches.keys();
-		await Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key)));
+		await Promise.all(
+			keys
+				.filter((key) => key.startsWith(CACHE_PREFIX) && key !== CACHE)
+				.map((key) => caches.delete(key))
+		);
 		// Take control of all open tabs immediately
 		await sw.clients.claim();
 	}
@@ -56,16 +60,20 @@ sw.addEventListener('fetch', (event) => {
 	const isNavigationRequest =
 		event.request.mode === 'navigate' ||
 		(event.request.destination === 'document' && isSameOrigin);
-	const isApiCall = url.pathname.startsWith('/api/') || url.hostname !== self.location.hostname;
+	const isApiCall = url.pathname.startsWith('/api/');
 	const isAsset = ASSETS.includes(url.pathname);
 
-	if (isNavigationRequest) {
+	// Never intercept cross-origin requests or persist authenticated API responses.
+	if (!isSameOrigin) {
+		return;
+	}
+
+	if (isApiCall) {
+		event.respondWith(fetch(event.request));
+	} else if (isNavigationRequest) {
 		event.respondWith(navigationFallback(event.request));
-	} else if (isApiCall) {
-		// Network-first for API calls — don't cache failures
-		event.respondWith(networkFirst(event.request));
-	} else if (isAsset || isSameOrigin) {
-		// Cache-first for app assets
+	} else if (isAsset) {
+		// Only the versioned, known-public static asset list is cacheable.
 		event.respondWith(cacheFirst(event.request));
 	}
 });
@@ -78,9 +86,6 @@ async function cacheFirst(request: Request): Promise<Response> {
 	}
 	try {
 		const response = await fetch(request);
-		if (response.ok && new URL(request.url).origin === self.location.origin) {
-			cache.put(request, response.clone());
-		}
 		return response;
 	} catch {
 		// Return offline fallback for assets
@@ -88,45 +93,11 @@ async function cacheFirst(request: Request): Promise<Response> {
 	}
 }
 
-async function networkFirst(request: Request): Promise<Response> {
-	try {
-		const response = await fetch(request);
-		// Only cache successful responses, not errors
-		if (response.ok) {
-			const cache = await caches.open(CACHE);
-			cache.put(request, response.clone());
-		}
-		return response;
-	} catch {
-		// Try cache as fallback
-		const cache = await caches.open(CACHE);
-		const cached = await cache.match(request);
-		if (cached) {
-			return cached;
-		}
-		// Return a clear error — don't pretend we're offline if the server is just slow
-		return new Response(JSON.stringify({ error: 'Network request failed' }), {
-			status: 503,
-			headers: { 'Content-Type': 'application/json' }
-		});
-	}
-}
-
 async function navigationFallback(request: Request): Promise<Response> {
 	try {
-		const response = await fetch(request);
-		if (response.ok) {
-			const cache = await caches.open(CACHE);
-			cache.put(request, response.clone());
-		}
-		return response;
+		return await fetch(request);
 	} catch {
 		const cache = await caches.open(CACHE);
-		const cached = await cache.match(request);
-		if (cached) {
-			return cached;
-		}
-
 		const offlinePage = await cache.match(OFFLINE_FALLBACK);
 		if (offlinePage) {
 			return offlinePage;

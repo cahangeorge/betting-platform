@@ -64,28 +64,28 @@ test('scheduled jobs can be saved from UI controls and toggled in hybrid mode', 
 	try {
 		await page.goto('/prepare');
 		const scrapeMain = page.locator('#main-content');
-		await expect(scrapeMain.getByRole('heading', { name: 'Prepare match data', exact: true })).toBeVisible();
+		await expect(scrapeMain.getByRole('heading', { name: 'Pregătește datele meciurilor', exact: true })).toBeVisible();
 		await expect(page.getByTestId('prepare-panel')).toHaveAttribute('data-interactive', 'true');
-		await scrapeMain.getByText('Advanced run settings', { exact: true }).click();
-		const autoScrapeToggle = scrapeMain.getByLabel('Enable auto-scrape schedule');
+		await scrapeMain.getByText('Setări avansate de rulare', { exact: true }).click();
+		const autoScrapeToggle = scrapeMain.getByLabel('Activează programarea automată a colectării');
 		await autoScrapeToggle.evaluate((element: HTMLInputElement) => element.click());
 		await expect(autoScrapeToggle).toBeChecked();
 
-		const autoscrapeJob = await createScheduledJobFromButton(page, scrapeMain, 'Save autoscrape schedule');
+		const autoscrapeJob = await createScheduledJobFromButton(page, scrapeMain, 'Salvează programarea automată');
 		expect(autoscrapeJob.task_type).toBe('scrape_odds');
 		expect(autoscrapeJob.config?.source_page).toBe('scrape');
 		expect(autoscrapeJob.config?.area).toBe('scrape');
 		createdJobIds.push(autoscrapeJob.id);
 
-		await scrapeMain.getByText('Automation & specialist workflows', { exact: true }).click();
+		await scrapeMain.getByText('Automatizare și fluxuri specializate', { exact: true }).click();
 		const autoscrapeButton = scrapeMain
 			.getByRole('button', { name: new RegExp(escapeRegExp(autoscrapeJob.name), 'i') })
 			.first();
 		await expect(autoscrapeButton).toBeVisible();
-		await expect(autoscrapeButton).toContainText('running');
+		await expect(autoscrapeButton).toContainText('activ');
 		await autoscrapeButton.click();
 		await expect.poll(async () => (await getScheduledJob(session, autoscrapeJob.id)).enabled).toBe(false);
-		await expect(autoscrapeButton).toContainText('paused');
+		await expect(autoscrapeButton).toContainText('pauzat');
 
 		await page.goto('/tickets');
 		const ticketsMain = page.locator('#main-content');

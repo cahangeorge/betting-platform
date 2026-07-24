@@ -58,6 +58,7 @@
 		serverBankrolls,
 		serverBatches,
 		serverTradingAccounts,
+		paperTradingEnabled = false,
 		handoff
 	}: {
 		serverTickets?: Ticket[];
@@ -66,6 +67,7 @@
 		serverBankrolls?: Bankroll[];
 		serverBatches?: TicketBatch[];
 		serverTradingAccounts?: TradingAccount[];
+		paperTradingEnabled?: boolean;
 		handoff: TicketHandoff;
 	} = $props();
 
@@ -360,6 +362,7 @@
 	}
 
 	async function executePaperTicket(ticket: Ticket) {
+		if (!paperTradingEnabled) return;
 		const account = tradingAccounts.find((candidate) => candidate.enabled && candidate.mode === 'paper');
 		if (!account) {
 			paperExecutionMessages = { ...paperExecutionMessages, [ticket.id]: 'Creează mai întâi un cont de simulare activ în pagina Cont.' };
@@ -1117,7 +1120,7 @@
 		stats = serverStats ?? { total: 0, won: 0, lost: 0, profit_loss: 0 };
 		bankrolls = serverBankrolls ?? [];
 		batches = serverBatches ?? [];
-		tradingAccounts = serverTradingAccounts ?? [];
+		tradingAccounts = paperTradingEnabled ? (serverTradingAccounts ?? []) : [];
 		const restoredBatchId = restoreGeneratedDrafts(tickets, batches);
 		if (restoredBatchId !== null) void loadFullGeneratedBatch(restoredBatchId);
 		if (handoff.runIds[0]) {
@@ -1714,7 +1717,7 @@
 				{#if activeTickets.length === 0}
 					<div class="border border-border bg-card py-12 text-center"><h2 class="text-lg font-semibold text-foreground">Nu există bilete active</h2><p class="mt-2 text-sm text-muted-foreground">Generează un lot nou sau înregistrează un bilet manual.</p><Button class="mt-4" onclick={() => (activeTab = 'generate')}>Mergi la Generează</Button></div>
 				{:else}
-					<div class="grid min-w-0 gap-4 xl:grid-cols-2">{#each activeTickets as ticket (ticket.id)}<article class="min-w-0 border border-border bg-card p-4"><div class="flex flex-wrap items-start justify-between gap-3"><div><div class="flex flex-wrap items-center gap-2"><span class="font-mono text-sm text-foreground">#{ticket.reference}</span><Badge variant="info">{localizedTicketTypeLabel(ticketTypeLabel(ticket))}</Badge><Badge variant={statusBadge[ticket.status] ?? 'default'}>{ticketStatusLabel(ticket.status)}</Badge></div><p class="mt-2 text-sm text-muted-foreground">{ticket.legs.filter((leg) => leg.status !== 'pending').length}/{ticket.legs.length} selecții finalizate · {new Date(ticket.created_at).toLocaleString('ro-RO')}</p></div><div class="text-right"><p class="font-mono text-lg text-football-green">x{ticket.total_odds.toFixed(2)}</p><p class="text-sm text-muted-foreground">retur {ticket.potential_return.toFixed(2)}</p></div></div><div class="mt-4 h-1.5 bg-muted"><div class="h-full bg-football-green" style={`width: ${ticket.legs.length > 0 ? (ticket.legs.filter((leg) => leg.status !== 'pending').length / ticket.legs.length) * 100 : 0}%`}></div></div><div class="mt-4 space-y-2">{#each ticket.legs as leg (leg.id)}<div class="border border-border bg-muted/20 p-3 text-sm"><div class="flex flex-wrap justify-between gap-2"><span class="font-medium text-foreground">{leg.match?.home_team ?? 'Meci'} vs {leg.match?.away_team ?? '?'}</span><Badge variant={leg.status === 'won' ? 'success' : leg.status === 'lost' ? 'danger' : 'neutral'}>{ticketStatusLabel(leg.status)}</Badge></div><p class="mt-1 text-sm text-muted-foreground">{matchStatusText(leg.match)} · {leg.market}/{leg.selection} @ {leg.odds.toFixed(2)}{leg.match?.status === 'finished' ? ` · scor ${leg.match.home_score ?? '?'}-${leg.match.away_score ?? '?'}` : ''}</p></div>{/each}</div><div class="mt-4 flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:items-center"><Button class="min-h-11" variant="secondary" size="sm" disabled={paperExecutingTicketId === ticket.id || paperExecutions[ticket.id]?.status === 'filled'} onclick={() => executePaperTicket(ticket)}>{paperExecutingTicketId === ticket.id ? 'Se execută simularea...' : 'Simulează BACK LIMIT'}</Button><span class="text-sm text-muted-foreground">Simulare locală · fără ordin extern</span></div>{#if paperExecutionMessages[ticket.id]}<p class="mt-2 text-sm text-muted-foreground" role="status">{paperExecutionMessages[ticket.id]}</p>{/if}</article>{/each}</div>
+					<div class="grid min-w-0 gap-4 xl:grid-cols-2">{#each activeTickets as ticket (ticket.id)}<article class="min-w-0 border border-border bg-card p-4"><div class="flex flex-wrap items-start justify-between gap-3"><div><div class="flex flex-wrap items-center gap-2"><span class="font-mono text-sm text-foreground">#{ticket.reference}</span><Badge variant="info">{localizedTicketTypeLabel(ticketTypeLabel(ticket))}</Badge><Badge variant={statusBadge[ticket.status] ?? 'default'}>{ticketStatusLabel(ticket.status)}</Badge></div><p class="mt-2 text-sm text-muted-foreground">{ticket.legs.filter((leg) => leg.status !== 'pending').length}/{ticket.legs.length} selecții finalizate · {new Date(ticket.created_at).toLocaleString('ro-RO')}</p></div><div class="text-right"><p class="font-mono text-lg text-football-green">x{ticket.total_odds.toFixed(2)}</p><p class="text-sm text-muted-foreground">retur {ticket.potential_return.toFixed(2)}</p></div></div><div class="mt-4 h-1.5 bg-muted"><div class="h-full bg-football-green" style={`width: ${ticket.legs.length > 0 ? (ticket.legs.filter((leg) => leg.status !== 'pending').length / ticket.legs.length) * 100 : 0}%`}></div></div><div class="mt-4 space-y-2">{#each ticket.legs as leg (leg.id)}<div class="border border-border bg-muted/20 p-3 text-sm"><div class="flex flex-wrap justify-between gap-2"><span class="font-medium text-foreground">{leg.match?.home_team ?? 'Meci'} vs {leg.match?.away_team ?? '?'}</span><Badge variant={leg.status === 'won' ? 'success' : leg.status === 'lost' ? 'danger' : 'neutral'}>{ticketStatusLabel(leg.status)}</Badge></div><p class="mt-1 text-sm text-muted-foreground">{matchStatusText(leg.match)} · {leg.market}/{leg.selection} @ {leg.odds.toFixed(2)}{leg.match?.status === 'finished' ? ` · scor ${leg.match.home_score ?? '?'}-${leg.match.away_score ?? '?'}` : ''}</p></div>{/each}</div>{#if paperTradingEnabled}<div class="mt-4 flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:items-center"><Button class="min-h-11" variant="secondary" size="sm" disabled={paperExecutingTicketId === ticket.id || paperExecutions[ticket.id]?.status === 'filled'} onclick={() => executePaperTicket(ticket)}>{paperExecutingTicketId === ticket.id ? 'Se execută simularea...' : 'Simulează BACK LIMIT'}</Button><span class="text-sm text-muted-foreground">Simulare locală · fără ordin extern</span></div>{#if paperExecutionMessages[ticket.id]}<p class="mt-2 text-sm text-muted-foreground" role="status">{paperExecutionMessages[ticket.id]}</p>{/if}{/if}</article>{/each}</div>
 				{/if}
 			</div>
 		{:else if activeTab === 'history'}

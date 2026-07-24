@@ -31,6 +31,16 @@
 		parseScrapeCatalog,
 		type CatalogAvailability
 	} from './catalog.helpers';
+	import {
+		safeScrapeFailureReason,
+		scrapeAttemptNotice,
+		type FailedScrapeAttempt
+	} from './scrape-attempts.helpers';
+	import {
+		autoScrapeIntervalHours,
+		PREPARE_INTERVAL_UNIT_OPTIONS,
+		type PrepareIntervalUnit
+	} from './interval.helpers';
 
 	const BASE_URL = apiBaseUrl();
 
@@ -79,7 +89,7 @@
 		quality_reasons?: string[];
 	};
 
-	type WorldCupDifficultyTicket = {
+	type WorldCupDifficultyBilet = {
 		rank: number;
 		ticket_id: number | null;
 		ticket_type: string;
@@ -95,7 +105,7 @@
 		label: string;
 		leg_count: number;
 		difficulty: string;
-		tickets: WorldCupDifficultyTicket[];
+		tickets: WorldCupDifficultyBilet[];
 	};
 
 	type WorldCupPipelineResponse = {
@@ -149,8 +159,10 @@ function tomorrowLocalDate(): string {
 	let validatingCatalog = $state(false);
 	let catalogValidationMessage = $state('');
 	let catalogValidationError = $state('');
+	let catalogLoadError = $state('');
+	let jobsLoadError = $state('');
 
-	// Past History
+	// Past Istoric
 	let pastEnabled = $state(true);
 	let pastFrom = $state('');
 	let pastTo = $state('');
@@ -161,7 +173,7 @@ function tomorrowLocalDate(): string {
 	let historicMonths = $state('0');
 	let historicYears = $state('10');
 
-	// Future Matches
+	// Future Mecies
 	let futureEnabled = $state(true);
 	let futureDays = $state('7');
 	let futureWeeks = $state('0');
@@ -171,16 +183,16 @@ function tomorrowLocalDate(): string {
 	// Options
 	let autoScrape = $state(false);
 	let autoIntervalNumber = $state('24');
-	let autoIntervalUnit = $state('Hours');
+	let autoIntervalUnit = $state<PrepareIntervalUnit>('Hours');
 	let autoRunPredictions = $state(false);
 	let autoPredictionStrategyIds = $state('');
 	let autoPredictionMarkets = $state<string[]>(['1x2']);
 	let autoCreateTickets = $state(false);
 	let autoTicketCount = $state('3');
 	let autoTicketDifficulty = $state('balanced');
-	let autoTicketMinOdds = $state('1.20');
-	let autoTicketMaxOdds = $state('5.00');
-	let autoTicketStake = $state('10');
+	let autoTicketMinCote = $state('1.20');
+	let autoTicketMaxCote = $state('5.00');
+	let autoTicketMiză = $state('10');
 	let scraperEngine = $state('auto');
 	let dedupSkip = $state(true);
 
@@ -193,7 +205,7 @@ function tomorrowLocalDate(): string {
 	let savingScheduledJob = $state(false);
 	let interactive = $state(false);
 	let expandedJobId = $state<number | null>(null);
-	let logsPanelOpen = $state(false);
+	let logsPanelDeschide = $state(false);
 	let loadingJobLogs = $state(false);
 	let selectedLogJobId = $state<number | null>(null);
 	let jobLogs = $state<ScrapeJobLogEntry[]>([]);
@@ -203,13 +215,16 @@ function tomorrowLocalDate(): string {
 	let submitting = $state(false);
 	let submitSuccess = $state('');
 	let submitError = $state('');
+	let submitPartial = $state('');
+	let failedScrapeAttempts = $state<FailedScrapeAttempt[]>([]);
+	let retryingFailedScrapes = $state(false);
 	let pipelineRunning = $state(false);
 	let pipelineError = $state('');
 	let pipelineResult = $state<WorldCupPipelineResponse | null>(null);
 	let pipelineStartedJobId = $state<number | null>(null);
 	let pipelineTargetDate = $state(tomorrowLocalDate());
 	let pipelineTicketCount = $state('5');
-	let pipelineTicketStake = $state('10');
+	let pipelineTicketMiză = $state('10');
 	let pipelineAllowExperimental = $state(true);
 
 	let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -283,17 +298,13 @@ function tomorrowLocalDate(): string {
 	const automaticScrapeJobs = $derived(scheduledJobsForArea(scheduledJobs, 'scrape'));
 	const orchestrationJobs = $derived(scheduledJobsForArea(scheduledJobs, 'orchestration'));
 
-	const intervalUnitOptions = [
-		{ value: 'Hours', label: 'Hours' },
-		{ value: 'Days', label: 'Days' },
-		{ value: 'Weeks', label: 'Weeks' }
-	];
+	const intervalUnitOptions = PREPARE_INTERVAL_UNIT_OPTIONS;
 
 	const scraperEngineOptions = [
-		{ value: 'auto', label: 'Auto: Scrapling then Playwright fallback' },
-		{ value: 'playwright', label: 'Playwright only (safest compatibility)' },
-		{ value: 'scrapling-http', label: 'Scrapling HTTP only (fast core markets)' },
-		{ value: 'scrapling-stealth', label: 'Scrapling stealth browser only' }
+		{ value: 'auto', label: 'Automat: Scrapling, apoi rezervă Playwright' },
+		{ value: 'playwright', label: 'Numai Playwright (compatibilitate maximă)' },
+		{ value: 'scrapling-http', label: 'Numai Scrapling HTTP (rapid pentru piețele principale)' },
+		{ value: 'scrapling-stealth', label: 'Numai browserul discret Scrapling' }
 	];
 
 	const predictionMarketOptions = [
@@ -332,40 +343,42 @@ function tomorrowLocalDate(): string {
 	);
 	const setupSummary = $derived.by(() => {
 		const scope = selectedLeagues.length > 0
-			? `${selectedLeagues.length} league${selectedLeagues.length === 1 ? '' : 's'}`
+			? `${selectedLeagues.length} ${selectedLeagues.length === 1 ? 'ligă' : 'ligi'}`
 			: selectedCountries.length > 0
-				? `${selectedCountries.length} countr${selectedCountries.length === 1 ? 'y' : 'ies'}`
-				: 'No competition selected';
+				? `${selectedCountries.length} ${selectedCountries.length === 1 ? 'țară' : 'țări'}`
+				: 'Nicio competiție selectată';
 		const ranges: string[] = [];
-		if (pastEnabled) ranges.push(`${historyPresetYears || 'custom'}y history`);
-		if (futureEnabled && futureIntervalDays > 0) ranges.push(`${futureIntervalDays} upcoming days`);
-		return `${scope} · ${ranges.length > 0 ? ranges.join(' + ') : 'No coverage selected'}`;
+		if (pastEnabled) ranges.push(`${historyPresetYears || 'personalizat'} ani de istoric`);
+		if (futureEnabled && futureIntervalDays > 0) ranges.push(`${futureIntervalDays} zile viitoare`);
+		return `${scope} · ${ranges.length > 0 ? ranges.join(' + ') : 'Nicio acoperire selectată'}`;
 	});
 
 	const unsupportedControlNotes = $derived.by(() => {
 		const notes: string[] = [];
 		if (dedupSkip) {
-			notes.push('Avoid re-scraping is enforced by the backend for duplicate completed jobs with the same scrape inputs.');
+			notes.push('Backendul evită recolectarea joburilor finalizate care au aceiași parametri de intrare.');
 		}
 		if (autoScrape) {
-			notes.push('Autoscrape can be saved as a persistent /api/v1/jobs action with the Save autoscrape button above.');
+			notes.push('Colectarea automată poate fi salvată ca acțiune persistentă prin /api/v1/jobs.');
 		}
 		if (autoRunPredictions) {
-			notes.push('Scrape -> predict orchestration will queue predictions automatically after each scheduled scrape.');
+			notes.push('Orchestrarea colectare → predicții va pune automat predicțiile în coadă după fiecare colectare programată.');
 		}
 		if (autoCreateTickets) {
-			notes.push('Scheduled orchestration will also create tickets from the latest prediction pool after predictions finish.');
+			notes.push('Orchestrarea programată va crea și bilete din cel mai recent lot după finalizarea predicțiilor.');
 		}
 		if (pastEnabled && (positiveInteger(historicDays) > 0 || positiveInteger(historicWeeks) > 0 || positiveInteger(historicMonths) > 0)) {
-			notes.push('Historic day/week/month inputs are converted to a date range and seasons; OddsHarvester historic execution supports seasons, not exact historic day windows.');
+			notes.push('Valorile istorice în zile/săptămâni/luni sunt transformate într-un interval și sezoane; colectarea istorică OddsHarvester suportă sezoane, nu ferestre exacte pe zile.');
 		}
 		return notes;
 	});
 
 	// --- Data Fetching ---
 	async function fetchCatalog() {
+		catalogLoadError = '';
 		try {
 			const res = await fetch(`${BASE_URL}/api/v1/catalog/countries`, { credentials: 'include' });
+			if (!res.ok) throw new Error(`HTTP ${res.status}`);
 			if (res.ok) {
 				const catalog = parseScrapeCatalog(await res.json());
 				countries = catalog.countries;
@@ -374,8 +387,8 @@ function tomorrowLocalDate(): string {
 				catalogStatus = catalog.status;
 				catalogLastRefreshedAt = catalog.lastRefreshedAt;
 			}
-		} catch {
-			// silently handle — catalog may not be available yet
+		} catch (error) {
+			catalogLoadError = error instanceof Error ? error.message : 'Catalogul nu a putut fi încărcat.';
 		} finally {
 			loadingCatalog = false;
 		}
@@ -394,35 +407,37 @@ function tomorrowLocalDate(): string {
 				body: JSON.stringify({ country: selectedCountries[0], limit: 25 })
 			});
 			if (!res.ok) {
-				const err = await res.json().catch(() => ({ detail: 'Catalog validation failed' }));
+				const err = await res.json().catch(() => ({ detail: 'Validarea catalogului a eșuat' }));
 				throw new Error(err.detail || `HTTP ${res.status}`);
 			}
 			const result = (await res.json()) as FootballCatalogValidationResponse;
-			catalogValidationMessage = `Checked ${result.checked}: ${result.results_page_ok} results pages verified, ${result.unavailable} unavailable, ${result.pending} deferred for retry.`;
+			catalogValidationMessage = `Verificate ${result.checked}: ${result.results_page_ok} pagini de rezultate validate, ${result.unavailable} indisponibile, ${result.pending} amânate pentru reîncercare.`;
 			await fetchCatalog();
 		} catch (err) {
-			catalogValidationError = err instanceof Error ? err.message : 'Catalog validation failed';
+			catalogValidationError = err instanceof Error ? err.message : 'Validarea catalogului a eșuat';
 		} finally {
 			validatingCatalog = false;
 		}
 	}
 
 	async function fetchJobs() {
+		jobsLoadError = '';
 		try {
 			const res = await fetch(`${BASE_URL}/api/v1/data/scrape`, { credentials: 'include' });
+			if (!res.ok) throw new Error(`HTTP ${res.status}`);
 			if (res.ok) {
 				jobs = await res.json();
 				if (selectedLogJobId === null && jobs.length > 0) {
 					selectedLogJobId = jobs[0].id;
 				}
 			}
-		} catch {
-			// silently handle
+		} catch (error) {
+			jobsLoadError = error instanceof Error ? error.message : 'Joburile nu au putut fi încărcate.';
 		} finally {
 			loadingJobs = false;
 		}
 
-		if (logsPanelOpen) {
+		if (logsPanelDeschide) {
 			void fetchJobLogs(selectedLogJobId ?? jobs[0]?.id ?? null);
 		}
 	}
@@ -433,7 +448,7 @@ function tomorrowLocalDate(): string {
 		try {
 			scheduledJobs = await jobsApi.getScheduledJobs();
 		} catch (err) {
-			scheduledJobsError = err instanceof ApiClientError ? err.message : 'Scheduled scraping jobs are unavailable';
+			scheduledJobsError = err instanceof ApiClientError ? err.message : 'Joburile programate de colectare nu sunt disponibile';
 		} finally {
 			loadingScheduledJobs = false;
 		}
@@ -445,11 +460,11 @@ function tomorrowLocalDate(): string {
 			const updated = await jobsApi.toggleJob(jobId);
 			scheduledJobs = scheduledJobs.map((job) => (job.id === jobId ? updated : job));
 		} catch (err) {
-			scheduledJobsError = err instanceof ApiClientError ? err.message : 'Could not toggle scheduled scraping job';
+			scheduledJobsError = err instanceof ApiClientError ? err.message : 'Starea jobului programat nu a putut fi schimbată';
 		}
 	}
 
-	async function saveAutomaticScrapeAction() {
+	async function saveAutomatScrapeAction() {
 		savingScheduledJob = true;
 		scheduledJobsError = '';
 		try {
@@ -459,7 +474,7 @@ function tomorrowLocalDate(): string {
 				.map((value) => Number.parseInt(value.trim(), 10))
 				.filter((value) => Number.isFinite(value) && value > 0);
 			if (autoRunPredictions && strategyIds.length === 0) {
-				scheduledJobsError = 'Add at least one strategy id before saving scrape → predict automation';
+				scheduledJobsError = 'Adaugă cel puțin un ID de strategie înainte de salvarea automatizării colectare → predicții';
 				return;
 			}
 			const orchestrationTaskType = autoRunPredictions
@@ -468,7 +483,7 @@ function tomorrowLocalDate(): string {
 					: 'scrape_then_predict'
 				: 'scrape_odds';
 			const created = await jobsApi.createScheduledJob({
-				name: `${autoRunPredictions ? 'Autoscrape + predict' : 'Autoscrape'} ${selectedLeagues.length > 0 ? selectedLeagues.length : 'all'} league${selectedLeagues.length === 1 ? '' : 's'}`,
+				name: `${autoRunPredictions ? 'Colectare + predicții' : 'Colectare automată'} ${selectedLeagues.length > 0 ? selectedLeagues.length : 'toate'} ${selectedLeagues.length === 1 ? 'ligă' : 'ligi'}`,
 				task_type: orchestrationTaskType,
 				cron_expression: cronFromInterval(autoIntervalNumber, autoIntervalUnit),
 				config: {
@@ -487,9 +502,9 @@ function tomorrowLocalDate(): string {
 								ticket_count: parseInt(autoTicketCount, 10) || 1,
 								difficulty: autoTicketDifficulty,
 								market_types: autoPredictionMarkets,
-								min_odds: parseFloat(autoTicketMinOdds) || 1.01,
-								max_odds: parseFloat(autoTicketMaxOdds) || 100,
-								stake: parseFloat(autoTicketStake) || 10
+								min_odds: parseFloat(autoTicketMinCote) || 1.01,
+								max_odds: parseFloat(autoTicketMaxCote) || 100,
+								stake: parseFloat(autoTicketMiză) || 10
 							}
 						: undefined,
 					params: {
@@ -510,7 +525,7 @@ function tomorrowLocalDate(): string {
 			});
 			scheduledJobs = [created, ...scheduledJobs.filter((job) => job.id !== created.id)];
 		} catch (err) {
-			scheduledJobsError = err instanceof ApiClientError ? err.message : 'Could not save automatic scraping action';
+			scheduledJobsError = err instanceof ApiClientError ? err.message : 'Acțiunea de colectare automată nu a putut fi salvată';
 		} finally {
 			savingScheduledJob = false;
 		}
@@ -519,7 +534,7 @@ function tomorrowLocalDate(): string {
 	async function fetchJobLogs(jobId = selectedLogJobId) {
 		if (jobId === null) {
 			jobLogs = [];
-			jobLogsError = 'Select a scrape job to view its logs';
+			jobLogsError = 'Selectează un job de colectare pentru a vedea jurnalul';
 			return;
 		}
 
@@ -529,14 +544,14 @@ function tomorrowLocalDate(): string {
 		try {
 			const res = await fetch(`${BASE_URL}/api/v1/data/scrape/${jobId}/logs?page=1&per_page=200`, { credentials: 'include' });
 			if (!res.ok) {
-				const err = await res.json().catch(() => ({ detail: 'Scrape job logs are unavailable' }));
+				const err = await res.json().catch(() => ({ detail: 'Jurnalele jobului de colectare nu sunt disponibile' }));
 				throw new Error(err.detail || `HTTP ${res.status}`);
 			}
 			const payload = (await res.json()) as ScrapeJobLogPage;
 			jobLogs = payload.items;
 		} catch (err) {
 			jobLogs = [];
-			jobLogsError = err instanceof Error ? err.message : 'Scrape job logs are unavailable';
+			jobLogsError = err instanceof Error ? err.message : 'Jurnalele jobului de colectare nu sunt disponibile';
 		} finally {
 			loadingJobLogs = false;
 		}
@@ -570,11 +585,11 @@ function tomorrowLocalDate(): string {
 	}
 
 	function applyHistoricInterval() {
-		const days = historicIntervalDays;
-		if (days <= 0) return;
+		const zile = historicIntervalDays;
+		if (zile <= 0) return;
 		const end = new SvelteDate();
 		const start = new SvelteDate();
-		start.setDate(start.getDate() - days);
+		start.setDate(start.getDate() - zile);
 		pastEnabled = true;
 		pastFrom = localDateString(start);
 		pastTo = localDateString(end);
@@ -599,46 +614,74 @@ function tomorrowLocalDate(): string {
 
 		if (autoScrape) {
 			const num = parseInt(autoIntervalNumber, 10) || 24;
-			const unitMap: Record<string, number> = { Hours: 1, Days: 24, Weeks: 168 };
-			params.auto_interval_hours = num * (unitMap[autoIntervalUnit] ?? 1);
+			params.auto_interval_hours = autoScrapeIntervalHours(String(num), autoIntervalUnit);
 		}
 
 		return params;
 	}
 
-	async function createAndExecuteScrapeJob(params: Record<string, unknown>, league?: string) {
-		const createRes = await fetch(`${BASE_URL}/api/v1/data/scrape`, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			credentials: 'include',
-			body: JSON.stringify({ job_type: 'scrape_odds', league, params })
-		});
+	class ScrapeLaunchError extends Error {
+		jobId?: number;
 
-		if (!createRes.ok) {
-			const err = await createRes.json().catch(() => ({ detail: 'Failed to create job' }));
-			throw new Error(err.detail || `HTTP ${createRes.status}`);
+		constructor(message: string, jobId?: number) {
+			super(message);
+			this.jobId = jobId;
 		}
+	}
 
-		const createdJob = (await createRes.json()) as { id: number };
-		const executeRes = await fetch(`${BASE_URL}/api/v1/data/scrape/${createdJob.id}/execute-background`, {
+	async function executeScrapeJob(jobId: number): Promise<number> {
+		const executeRes = await fetch(`${BASE_URL}/api/v1/data/scrape/${jobId}/execute-background`, {
 			method: 'POST',
 			credentials: 'include'
 		});
 
 		if (!executeRes.ok) {
-			const err = await executeRes.json().catch(() => ({ detail: 'Failed to execute job' }));
-			throw new Error(err.detail || `HTTP ${executeRes.status}`);
+			const err = await executeRes.json().catch(() => ({ detail: 'Jobul creat nu a putut fi pornit' }));
+			throw new ScrapeLaunchError(err.detail || `HTTP ${executeRes.status}`, jobId);
 		}
 
-		return createdJob.id;
+		return jobId;
+	}
+
+	function newScrapeIdempotencyKey(): string {
+		const uuid = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+			? crypto.randomUUID()
+			: `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+		return `prepare-scrape-${uuid}`;
+	}
+
+	async function createAndExecuteScrapeJob(
+		params: Record<string, unknown>,
+		league: string | undefined,
+		idempotencyKey: string
+	): Promise<number> {
+		const createRes = await fetch(`${BASE_URL}/api/v1/data/scrape`, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				'Idempotency-Key': idempotencyKey
+			},
+			credentials: 'include',
+			body: JSON.stringify({ job_type: 'scrape_odds', league, params })
+		});
+
+		if (!createRes.ok) {
+			const err = await createRes.json().catch(() => ({ detail: 'Jobul nu a putut fi creat' }));
+			throw new ScrapeLaunchError(err.detail || `HTTP ${createRes.status}`);
+		}
+
+		const createdJob = (await createRes.json()) as { id: number };
+		return executeScrapeJob(createdJob.id);
 	}
 
 	async function startScrape() {
 		submitError = '';
 		submitSuccess = '';
+		submitPartial = '';
+		failedScrapeAttempts = [];
 
 		if (largeScopeWarning && !isLargeScopeAcknowledged) {
-			submitError = 'Acknowledge the large historical scrape scope before starting.';
+			submitError = 'Confirmă aria mare de colectare istorică înainte de pornire.';
 			return;
 		}
 
@@ -646,12 +689,12 @@ function tomorrowLocalDate(): string {
 
 		const scrapeLeagueSlugs = buildScrapeLeagueSlugs(allLeagues, selectedLeagues);
 		if (selectedLeagues.length > 0 && scrapeLeagueSlugs.length !== selectedLeagues.length) {
-			submitError = 'Some selected leagues are not supported by the scraper yet';
+			submitError = 'Unele ligi selectate nu sunt încă suportate de motorul de colectare';
 			submitting = false;
 			return;
 		}
 		if (pastEnabled && scrapeLeagueSlugs.length === 0) {
-			submitError = 'Select at least one supported league before scraping historical seasons';
+			submitError = 'Selectează cel puțin o ligă suportată înainte de colectarea sezoanelor istorice.';
 			submitting = false;
 			return;
 		}
@@ -660,7 +703,7 @@ function tomorrowLocalDate(): string {
 			scrapeLeagueSlugs.includes('world-cup') &&
 			scrapeLeagueSlugs.some((slug) => slug !== 'world-cup')
 		) {
-			submitError = 'For historical scraping, run World Cup separately from seasonal leagues';
+			submitError = 'Pentru colectarea istorică, rulează Cupa Mondială separat de ligile pe sezoane';
 			submitting = false;
 			return;
 		}
@@ -668,41 +711,52 @@ function tomorrowLocalDate(): string {
 		try {
 			const baseParams = buildBaseScrapeParams(scrapeLeagueSlugs);
 			const createdJobIds: number[] = [];
+			const failedAttempts: FailedScrapeAttempt[] = [];
 
 			if (pastEnabled && (!pastFrom || !pastTo)) {
 				applyHistoricInterval();
 			}
 
 			if (pastEnabled && pastFrom && pastTo) {
-				const seasons = buildHistoricSeasons(pastFrom, pastTo, scrapeLeagueSlugs);
+				const sezoane = buildHistoricSeasons(pastFrom, pastTo, scrapeLeagueSlugs);
 				const historicMetadata = historicRangeMetadata(pastFrom, pastTo, historicIntervalDays);
-				if (seasons.length === 0) {
-					throw new Error('No historical seasons found for the selected range');
+				if (sezoane.length === 0) {
+					throw new Error('Nu există sezoane istorice pentru intervalul selectat.');
 				}
 
 				const maxPages = Number.parseInt(historicMaxPages, 10) || 3;
 				const isWorldCupOnly = scrapeLeagueSlugs.length > 0 && scrapeLeagueSlugs.every((slug) => slug === 'world-cup');
-				for (const season of seasons) {
-					const jobId = await createAndExecuteScrapeJob(
-						{
-							...baseParams,
-							command: 'historic',
-							season,
-							past_from: pastFrom,
-							past_to: pastTo,
-							historic_range_days: historicMetadata.days || undefined,
-							history_years: historicMetadata.years || undefined,
-							max_pages: isWorldCupOnly ? Math.max(maxPages, 3) : maxPages,
-							timeout_seconds: isWorldCupOnly ? 2400 : undefined
-						},
-						scrapeLeagueSlugs.length === 1 ? scrapeLeagueSlugs[0] : undefined
-					);
-					createdJobIds.push(jobId);
+				for (const season of sezoane) {
+					const params = {
+						...baseParams,
+						command: 'historic',
+						season,
+						past_from: pastFrom,
+						past_to: pastTo,
+						historic_range_days: historicMetadata.days || undefined,
+						history_years: historicMetadata.years || undefined,
+						max_pages: isWorldCupOnly ? Math.max(maxPages, 3) : maxPages,
+						timeout_seconds: isWorldCupOnly ? 2400 : undefined
+					};
+					const league = scrapeLeagueSlugs.length === 1 ? scrapeLeagueSlugs[0] : undefined;
+					const idempotencyKey = newScrapeIdempotencyKey();
+					try {
+						createdJobIds.push(await createAndExecuteScrapeJob(params, league, idempotencyKey));
+					} catch (error) {
+						failedAttempts.push({
+							label: `sezonul ${season}`,
+							params,
+							league,
+							jobId: error instanceof ScrapeLaunchError ? error.jobId : undefined,
+							idempotencyKey,
+							reason: safeScrapeFailureReason(error)
+						});
+					}
 				}
 			}
 
 			if (futureEnabled && futureIntervalDays > 0) {
-				const jobId = await createAndExecuteScrapeJob({
+				const params = {
 					...baseParams,
 					command: 'upcoming',
 					future_days: futureIntervalDays,
@@ -712,22 +766,62 @@ function tomorrowLocalDate(): string {
 						months: positiveInteger(futureMonths),
 						years: positiveInteger(futureYears)
 					}
-				});
-				createdJobIds.push(jobId);
+				};
+				const idempotencyKey = newScrapeIdempotencyKey();
+				try {
+					createdJobIds.push(await createAndExecuteScrapeJob(params, undefined, idempotencyKey));
+				} catch (error) {
+					failedAttempts.push({
+						label: 'meciurile viitoare',
+						params,
+						jobId: error instanceof ScrapeLaunchError ? error.jobId : undefined,
+						idempotencyKey,
+						reason: safeScrapeFailureReason(error)
+					});
+				}
 			}
 
-			if (createdJobIds.length === 0) {
-				throw new Error('Enable past history or future matches before starting scrape');
+			if (createdJobIds.length === 0 && failedAttempts.length === 0) {
+				throw new Error('Activează istoricul sau meciurile viitoare înainte de pornirea colectării.');
 			}
 
-			submitSuccess = `Queued ${createdJobIds.length} scrape job${createdJobIds.length === 1 ? '' : 's'} successfully`;
+			failedScrapeAttempts = failedAttempts;
+			submitSuccess = failedAttempts.length === 0 ? scrapeAttemptNotice(createdJobIds, failedAttempts) : '';
+			submitPartial = failedAttempts.length ? scrapeAttemptNotice(createdJobIds, failedAttempts) : '';
 			await fetchJobs();
 			setTimeout(() => (submitSuccess = ''), 4000);
 		} catch (err) {
-			submitError = err instanceof Error ? err.message : 'Failed to start scrape';
+			submitError = err instanceof Error ? err.message : 'Colectarea nu a putut fi pornită';
 		} finally {
 			submitting = false;
 		}
+	}
+
+	async function retryFailedScrapes() {
+		if (!failedScrapeAttempts.length || retryingFailedScrapes) return;
+		retryingFailedScrapes = true;
+		const remaining: FailedScrapeAttempt[] = [];
+		const created: number[] = [];
+		for (const attempt of failedScrapeAttempts) {
+			try {
+				created.push(
+					attempt.jobId
+						? await executeScrapeJob(attempt.jobId)
+						: await createAndExecuteScrapeJob(attempt.params, attempt.league, attempt.idempotencyKey)
+				);
+			} catch (error) {
+				remaining.push({
+					...attempt,
+					jobId: error instanceof ScrapeLaunchError ? error.jobId ?? attempt.jobId : attempt.jobId,
+					reason: safeScrapeFailureReason(error)
+				});
+			}
+		}
+		failedScrapeAttempts = remaining;
+		submitPartial = remaining.length ? scrapeAttemptNotice(created, remaining) : '';
+		submitSuccess = remaining.length === 0 ? `Reluare reușită. Joburi pornite: #${created.join(', ')}.` : '';
+		retryingFailedScrapes = false;
+		await fetchJobs();
 	}
 
 	async function runWorldCupPipeline() {
@@ -739,7 +833,7 @@ function tomorrowLocalDate(): string {
 			const targetStart = new Date(`${pipelineTargetDate}T00:00:00`);
 			const targetEnd = new Date(`${pipelineTargetDate}T23:59:59.999`);
 			const ticketCount = Number.parseInt(pipelineTicketCount, 10) || 5;
-			const ticketStake = Number.parseFloat(pipelineTicketStake) || 10;
+			const ticketMiză = Number.parseFloat(pipelineTicketMiză) || 10;
 			const res = await fetch(`${BASE_URL}/api/v1/data/world-cup-pipeline`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -755,7 +849,7 @@ function tomorrowLocalDate(): string {
 					max_historic_pages: 1,
 					scraper_engine: scraperEngine,
 					ticket_count: ticketCount,
-					ticket_stake: ticketStake,
+					ticket_stake: ticketMiză,
 					create_tickets: true,
 					allow_experimental_tickets: pipelineAllowExperimental,
 					training_limit: 120
@@ -763,7 +857,7 @@ function tomorrowLocalDate(): string {
 			});
 
 			if (!res.ok) {
-				const err = await res.json().catch(() => ({ detail: 'World Cup pipeline failed' }));
+				const err = await res.json().catch(() => ({ detail: 'Fluxul pentru Cupa Mondială a eșuat' }));
 				throw new Error(err.detail || `HTTP ${res.status}`);
 			}
 
@@ -772,7 +866,7 @@ function tomorrowLocalDate(): string {
 			jobs = [job, ...jobs.filter((entry) => entry.id !== job.id)];
 			await fetchJobs();
 		} catch (err) {
-			pipelineError = err instanceof Error ? err.message : 'World Cup pipeline failed';
+			pipelineError = err instanceof Error ? err.message : 'Fluxul pentru Cupa Mondială a eșuat';
 		} finally {
 			pipelineRunning = false;
 		}
@@ -836,9 +930,9 @@ function tomorrowLocalDate(): string {
 		acknowledgedLargeScopeKey = null;
 	}
 
-	function setFuturePreset(days: number) {
+	function setFuturePreset(zile: number) {
 		futureEnabled = true;
-		futureDays = String(days);
+		futureDays = String(zile);
 		futureWeeks = '0';
 		futureMonths = '0';
 		futureYears = '0';
@@ -872,15 +966,15 @@ function tomorrowLocalDate(): string {
 
 
 	function handleLogsDetailsToggle(event: Event) {
-		logsPanelOpen = (event.currentTarget as HTMLDetailsElement).open;
-		if (logsPanelOpen && jobLogs.length === 0) {
+		logsPanelDeschide = (event.currentTarget as HTMLDetailsElement).open;
+		if (logsPanelDeschide && jobLogs.length === 0) {
 			void fetchJobLogs(selectedLogJobId ?? jobs[0]?.id ?? null);
 		}
 	}
 
 	function openLogsForJob(jobId: number) {
 		selectedLogJobId = jobId;
-		logsPanelOpen = true;
+		logsPanelDeschide = true;
 		void fetchJobLogs(jobId);
 	}
 
@@ -904,6 +998,17 @@ function tomorrowLocalDate(): string {
 		return map[status] ?? 'default';
 	}
 
+	function statusLabel(status: string): string {
+		const labels: Record<string, string> = {
+			completed: 'finalizat',
+			running: 'în desfășurare',
+			queued: 'în așteptare',
+			failed: 'eșuat',
+			cancelled: 'anulat'
+		};
+		return labels[status] ?? status;
+	}
+
 	function logLevelVariant(level: string): 'default' | 'success' | 'warning' | 'danger' | 'info' | 'neutral' {
 		const normalized = level.toLowerCase();
 		if (normalized === 'error') return 'danger';
@@ -913,7 +1018,7 @@ function tomorrowLocalDate(): string {
 	}
 
 	function jobLabel(job: ScrapeJob): string {
-		return job.job_type || 'unknown';
+		return job.job_type || 'necunoscut';
 	}
 
 	function jobProgress(job: ScrapeJob): number {
@@ -945,7 +1050,7 @@ function tomorrowLocalDate(): string {
 </script>
 
 <svelte:head>
-	<title>Prepare match data · Betfront</title>
+	<title>Pregătire date meciuri · Bet</title>
 </svelte:head>
 
 <div
@@ -956,40 +1061,40 @@ function tomorrowLocalDate(): string {
 >
 	<header class="order-1 space-y-5">
 		<div class="max-w-3xl">
-			<p class="text-xs font-semibold uppercase tracking-[0.16em] text-football-blue">Data preparation</p>
-			<h1 class="mt-1 text-2xl font-extrabold font-sport text-foreground sm:text-3xl">Prepare match data</h1>
-			<p class="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">A short guided setup for collecting match data. Pick a scope, choose coverage, then review one clear action.</p>
+			<p class="text-xs font-semibold uppercase tracking-[0.16em] text-football-blue">Pregătire date</p>
+			<h1 class="mt-1 text-2xl font-extrabold font-sport text-foreground sm:text-3xl">Pregătește datele meciurilor</h1>
+			<p class="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">Configurează colectarea datelor: alege aria, acoperirea și apoi confirmă o singură acțiune.</p>
 		</div>
 
-		<nav aria-label="Scrape preparation steps" class="grid grid-cols-1 gap-2 sm:grid-cols-3">
+		<nav aria-label="Pașii pregătirii colectării" class="grid grid-cols-1 gap-2 sm:grid-cols-3">
 			<a href="#selection" class={cn('flex min-w-0 items-center gap-3 border px-4 py-3 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-football-blue', scopeReady ? 'border-football-green/40 bg-football-green/5' : 'border-football-blue/40 bg-football-blue/5')}>
 				<span class={cn('grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-bold', scopeReady ? 'bg-football-green text-background' : 'bg-football-blue text-background')}>{scopeReady ? '✓' : '1'}</span>
-				<span><span class="block text-sm font-semibold text-foreground">Choose scope</span><span class="block text-xs text-muted-foreground">{selectedLeagues.length || 0} leagues selected</span></span>
+				<span><span class="block text-sm font-semibold text-foreground">Alege aria</span><span class="block text-xs text-muted-foreground">{selectedLeagues.length || 0} ligi selectate</span></span>
 			</a>
 			<a href="#coverage" class={cn('flex min-w-0 items-center gap-3 border px-4 py-3 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-football-blue', coverageReady ? 'border-football-green/40 bg-football-green/5' : 'border-border bg-muted/20')}>
 				<span class={cn('grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-bold', coverageReady ? 'bg-football-green text-background' : 'bg-muted text-foreground')}>{coverageReady ? '✓' : '2'}</span>
-				<span><span class="block text-sm font-semibold text-foreground">Set coverage</span><span class="block text-xs text-muted-foreground">History and upcoming data</span></span>
+				<span><span class="block text-sm font-semibold text-foreground">Stabilește acoperirea</span><span class="block text-xs text-muted-foreground">Istoric și meciuri viitoare</span></span>
 			</a>
 			<a href="#controls" class={cn('flex min-w-0 items-center gap-3 border px-4 py-3 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-football-blue', canStartScrape ? 'border-football-green/40 bg-football-green/5' : 'border-border bg-muted/20')}>
 				<span class={cn('grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-bold', canStartScrape ? 'bg-football-green text-background' : 'bg-muted text-foreground')}>{canStartScrape ? '✓' : '3'}</span>
-				<span><span class="block text-sm font-semibold text-foreground">Review and run</span><span class="block text-xs text-muted-foreground">One final action</span></span>
+				<span><span class="block text-sm font-semibold text-foreground">Verifică și pornește</span><span class="block text-xs text-muted-foreground">O singură acțiune finală</span></span>
 			</a>
 		</nav>
 
 		<div class="flex flex-col gap-3 border border-border bg-muted/20 px-4 py-3 sm:flex-row sm:items-center sm:justify-between" aria-live="polite">
 			<div class="min-w-0">
-				<p class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Current setup</p>
+				<p class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Configurarea curentă</p>
 				<p class="mt-1 truncate text-sm font-medium text-foreground">{setupSummary}</p>
 			</div>
-			<a href="#controls" class="shrink-0 text-sm font-semibold text-football-blue hover:text-football-green">Review setup →</a>
+			<a href="#controls" class="shrink-0 text-sm font-semibold text-football-blue hover:text-football-green">Verifică configurarea →</a>
 		</div>
 	</header>
 
 		<Card variant="prediction" class="order-6">
 			<details id="automation" class="group">
 				<summary class="flex cursor-pointer list-none items-center justify-between gap-4 rounded px-1 py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-football-blue">
-					<span><span class="block text-lg font-semibold text-foreground">Automation &amp; specialist workflows</span><span class="mt-1 block text-sm text-muted-foreground">Optional schedules, scrape-to-predict orchestration, and the World Cup pipeline.</span></span>
-					<span class="shrink-0 text-xs font-medium text-football-blue group-open:hidden">Show</span><span class="hidden shrink-0 text-xs font-medium text-football-blue group-open:inline">Hide</span>
+					<span><span class="block text-lg font-semibold text-foreground">Automatizare și fluxuri specializate</span><span class="mt-1 block text-sm text-muted-foreground">Programări opționale, orchestrare colectare-predicții și fluxul pentru Cupa Mondială.</span></span>
+					<span class="shrink-0 text-xs font-medium text-football-blue group-open:hidden">Arată</span><span class="hidden shrink-0 text-xs font-medium text-football-blue group-open:inline">Ascunde</span>
 				</summary>
 			<div class="space-y-5">
 				<div class="space-y-3 border border-border bg-muted/20 p-3">
@@ -997,7 +1102,7 @@ function tomorrowLocalDate(): string {
 						<div>
 							<p class="text-sm font-semibold text-foreground">Scraping-uri automate salvate</p>
 							<p class="text-xs text-muted-foreground">
-								Butoanele de mai jos vin din endpoint-ul persistent <span class="font-mono">/api/v1/jobs</span>.
+								Butoanele de mai jos provin din endpoint-ul persistent <span class="font-mono">/api/v1/jobs</span>.
 							</p>
 						</div>
 						<div class="flex flex-wrap gap-2">
@@ -1007,7 +1112,7 @@ function tomorrowLocalDate(): string {
 								onclick={fetchScheduledJobs}
 								disabled={!interactive || loadingScheduledJobs}
 							>
-								Refresh
+								Reîmprospătează
 							</Button>
 						</div>
 					</div>
@@ -1017,7 +1122,7 @@ function tomorrowLocalDate(): string {
 					{/if}
 
 					{#if loadingScheduledJobs}
-						<p class="text-xs text-muted-foreground">Loading saved scraping actions...</p>
+						<p class="text-xs text-muted-foreground">Se încarcă acțiunile de colectare salvate...</p>
 					{:else if automaticScrapeJobs.length === 0}
 						<p class="text-xs text-muted-foreground">Nu exista inca scraping-uri automate salvate.</p>
 					{:else}
@@ -1031,7 +1136,7 @@ function tomorrowLocalDate(): string {
 								>
 									{scheduledJob.name}
 									<span class="ml-1 font-mono text-[10px]">
-										{scheduledJob.enabled ? 'running' : 'paused'}
+										{scheduledJob.enabled ? 'activ' : 'pauzat'}
 									</span>
 								</Button>
 							{/each}
@@ -1039,13 +1144,13 @@ function tomorrowLocalDate(): string {
 					{/if}
 				</div>
 
-				<ScheduledJobRunTable jobs={[...automaticScrapeJobs, ...orchestrationJobs]} title="Recent scrape automation runs" />
+				<ScheduledJobRunTable jobs={[...automaticScrapeJobs, ...orchestrationJobs]} title="Rulări recente ale automatizării de colectare" />
 
 				<div class="space-y-3 border border-border bg-muted/20 p-3">
 					<div>
-						<p class="text-sm font-semibold text-foreground">Optional scrape → predict orchestration</p>
+						<p class="text-sm font-semibold text-foreground">Orchestrare opțională colectare → predicții</p>
 						<p class="text-xs text-muted-foreground">
-							Transforms the saved scrape job into a composite orchestration workflow.
+							Transformă jobul de colectare salvat într-un flux compus de orchestrare.
 						</p>
 					</div>
 					<label class="flex items-center gap-2 text-sm text-foreground">
@@ -1054,17 +1159,17 @@ function tomorrowLocalDate(): string {
 							class="h-4 w-4 accent-football-blue"
 							bind:checked={autoRunPredictions}
 						/>
-						<span>Run predictions automatically after each autoscrape cycle</span>
+						<span>Rulează predicțiile automat după fiecare ciclu de colectare</span>
 					</label>
 					<div class="grid grid-cols-1 gap-3 md:grid-cols-2">
 						<Input
-							label="Strategy IDs (comma separated)"
-							placeholder="e.g. 1,2,5"
+							label="ID-uri strategii (separate prin virgulă)"
+							placeholder="ex. 1,2,5"
 							bind:value={autoPredictionStrategyIds}
 							disabled={!autoRunPredictions}
 						/>
 						<div class="space-y-2">
-							<p class="text-xs text-muted-foreground">Prediction markets</p>
+							<p class="text-xs text-muted-foreground">Piețe de predicție</p>
 							<div class="flex flex-wrap gap-2">
 								{#each predictionMarketOptions as option (option.value)}
 									<label
@@ -1101,30 +1206,30 @@ function tomorrowLocalDate(): string {
 							bind:checked={autoCreateTickets}
 							disabled={!autoRunPredictions}
 						/>
-						<span>Create tickets automatically after predictions finish</span>
+						<span>Creează bilete automat după finalizarea predicțiilor</span>
 					</label>
 					{#if autoRunPredictions && autoCreateTickets}
 						<div class="grid grid-cols-1 gap-3 md:grid-cols-3">
-							<Input label="Ticket count" type="number" min="1" max="50" bind:value={autoTicketCount} />
+							<Input label="Număr bilete" type="number" min="1" max="50" bind:value={autoTicketCount} />
 							<Select
-								label="Ticket difficulty"
+								label="Dificultatea biletelor"
 								bind:value={autoTicketDifficulty}
 								options={[
-									{ value: 'safe', label: 'Safe' },
-									{ value: 'balanced', label: 'Balanced' },
-									{ value: 'aggressive', label: 'Aggressive' }
+									{ value: 'safe', label: 'Sigur' },
+									{ value: 'balanced', label: 'Echilibrat' },
+									{ value: 'aggressive', label: 'Agresiv' }
 								]}
 							/>
-							<Input label="Stake" type="number" min="0.5" step="0.5" bind:value={autoTicketStake} />
-							<Input label="Min odds" type="number" min="1.01" step="0.01" bind:value={autoTicketMinOdds} />
-							<Input label="Max odds" type="number" min="1.01" step="0.01" bind:value={autoTicketMaxOdds} />
+							<Input label="Miză" type="number" min="0.5" step="0.5" bind:value={autoTicketMiză} />
+							<Input label="Cotă minimă" type="number" min="1.01" step="0.01" bind:value={autoTicketMinCote} />
+							<Input label="Cotă maximă" type="number" min="1.01" step="0.01" bind:value={autoTicketMaxCote} />
 						</div>
 					{/if}
 					{#if orchestrationJobs.length > 0}
 						<div class="flex flex-wrap gap-2">
 							{#each orchestrationJobs as scheduledJob (scheduledJob.id)}
 								<Badge variant={scheduledJob.enabled ? 'info' : 'default'}>
-									{scheduledJob.name} · {scheduledJob.enabled ? 'running' : 'paused'}
+									{scheduledJob.name} · {scheduledJob.enabled ? 'activ' : 'pauzat'}
 								</Badge>
 							{/each}
 						</div>
@@ -1133,41 +1238,41 @@ function tomorrowLocalDate(): string {
 
 				<details id="world-cup" class="group rounded border border-border bg-muted/10 p-3">
 					<summary class="flex cursor-pointer list-none items-center justify-between gap-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-football-blue">
-						<span><span class="block text-sm font-semibold text-foreground">World Cup ticket pipeline</span><span class="mt-1 block text-xs text-muted-foreground">Specialist pipeline: scrape, predict, and create tickets for one target date.</span></span>
-						<span class="shrink-0 text-xs font-medium text-football-blue group-open:hidden">Configure</span><span class="hidden shrink-0 text-xs font-medium text-football-blue group-open:inline">Hide</span>
+						<span><span class="block text-sm font-semibold text-foreground">Flux de bilete pentru Cupa Mondială</span><span class="mt-1 block text-xs text-muted-foreground">Flux specializat: colectează, prezice și creează bilete pentru o dată țintă.</span></span>
+						<span class="shrink-0 text-xs font-medium text-football-blue group-open:hidden">Configurează</span><span class="hidden shrink-0 text-xs font-medium text-football-blue group-open:inline">Ascunde</span>
 					</summary>
 					<div class="mt-4 space-y-5">
 				<div class="grid grid-cols-2 md:grid-cols-4 gap-3">
 					<div class="border border-border bg-muted/30 p-3">
-						<p class="text-[10px] uppercase tracking-wide text-muted-foreground">Target date</p>
+						<p class="text-[10px] uppercase tracking-wide text-muted-foreground">Data țintă</p>
 						<p class="mt-1 font-mono text-lg text-foreground">{pipelineTargetDate}</p>
 					</div>
 					<div class="border border-border bg-muted/30 p-3">
-						<p class="text-[10px] uppercase tracking-wide text-muted-foreground">History</p>
-						<p class="mt-1 font-mono text-lg text-foreground">external</p>
+						<p class="text-[10px] uppercase tracking-wide text-muted-foreground">Istoric</p>
+						<p class="mt-1 font-mono text-lg text-foreground">extern</p>
 					</div>
 					<div class="border border-border bg-muted/30 p-3">
-						<p class="text-[10px] uppercase tracking-wide text-muted-foreground">Odds</p>
-						<p class="mt-1 font-mono text-lg text-foreground">Core</p>
+						<p class="text-[10px] uppercase tracking-wide text-muted-foreground">Cote</p>
+						<p class="mt-1 font-mono text-lg text-foreground">Principal</p>
 					</div>
 					<div class="border border-border bg-muted/30 p-3">
-						<p class="text-[10px] uppercase tracking-wide text-muted-foreground">Tickets</p>
-						<p class="mt-1 font-mono text-lg text-foreground">{pipelineTicketCount} x tiers</p>
+						<p class="text-[10px] uppercase tracking-wide text-muted-foreground">Bilete</p>
+						<p class="mt-1 font-mono text-lg text-foreground">{pipelineTicketCount} niveluri</p>
 					</div>
 				</div>
 
 				<div class="grid grid-cols-1 gap-3 md:grid-cols-4">
 					<div>
-						<label for="world-cup-target-date" class="mb-1 block text-xs text-muted-foreground">Tomorrow / target date</label>
+						<label for="world-cup-target-date" class="mb-1 block text-xs text-muted-foreground">Mâine / data țintă</label>
 						<Input id="world-cup-target-date" type="date" bind:value={pipelineTargetDate} />
 					</div>
 					<div>
-						<label for="world-cup-ticket-count" class="mb-1 block text-xs text-muted-foreground">Tickets per tier</label>
+						<label for="world-cup-ticket-count" class="mb-1 block text-xs text-muted-foreground">Bilete pe nivel</label>
 						<Input id="world-cup-ticket-count" type="number" min="1" max="50" bind:value={pipelineTicketCount} />
 					</div>
 					<div>
-						<label for="world-cup-ticket-stake" class="mb-1 block text-xs text-muted-foreground">Stake</label>
-						<Input id="world-cup-ticket-stake" type="number" min="0" step="0.5" bind:value={pipelineTicketStake} />
+						<label for="world-cup-ticket-stake" class="mb-1 block text-xs text-muted-foreground">Miză</label>
+						<Input id="world-cup-ticket-stake" type="number" min="0" step="0.5" bind:value={pipelineTicketMiză} />
 					</div>
 					<label class="flex items-center gap-2 border border-border bg-muted/20 px-3 py-2 text-sm text-foreground">
 						<input
@@ -1176,16 +1281,16 @@ function tomorrowLocalDate(): string {
 							class="h-4 w-4 accent-football-blue"
 							bind:checked={pipelineAllowExperimental}
 						/>
-						<span>Create watchlist tickets if safe tickets are blocked</span>
+						<span>Creează bilete de urmărire dacă biletele sigure sunt blocate</span>
 					</label>
 				</div>
 
 				<div class="flex flex-wrap items-center gap-3">
 					<Button variant="glow" onclick={runWorldCupPipeline} disabled={pipelineRunning}>
-						{pipelineRunning ? 'Generating tomorrow tickets...' : 'Generate Tomorrow World Cup Tickets'}
+						{pipelineRunning ? 'Se generează biletele pentru mâine...' : 'Generează bilete pentru Cupa Mondială de mâine'}
 					</Button>
-					<a href="/analyze" class="text-sm text-football-blue hover:text-football-green">Open predictions</a>
-					<a href="/tickets" class="text-sm text-football-blue hover:text-football-green">Open tickets</a>
+					<a href="/analyze" class="text-sm text-football-blue hover:text-football-green">Deschide predicțiile</a>
+					<a href="/tickets" class="text-sm text-football-blue hover:text-football-green">Deschide biletele</a>
 				</div>
 
 				{#if pipelineError}
@@ -1198,7 +1303,7 @@ function tomorrowLocalDate(): string {
 					<div class="flex flex-wrap items-center gap-2 text-sm">
 						<Badge variant={statusVariant(latestPipelineJob.status)}>Job #{latestPipelineJob.id} · {latestPipelineJob.status}</Badge>
 						{#if latestPipelineJob.status === 'running'}
-							<span class="font-mono text-xs text-muted-foreground">Pipeline is running in background</span>
+							<span class="font-mono text-xs text-muted-foreground">Fluxul rulează în fundal</span>
 						{/if}
 						{#if latestPipelineJob.error}
 							<span class="text-xs text-destructive">{latestPipelineJob.error}</span>
@@ -1210,23 +1315,23 @@ function tomorrowLocalDate(): string {
 					<div class="space-y-4 border border-border bg-muted/20 p-4">
 						<div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
 							<div>
-								<p class="text-xs text-muted-foreground">Scrape jobs</p>
+								<p class="text-xs text-muted-foreground">Joburi de colectare</p>
 								<p class="font-mono text-foreground">{displayedPipelineResult.summary.completed_scrape_jobs}/{displayedPipelineResult.summary.scrape_jobs}</p>
 							</div>
 							<div>
-								<p class="text-xs text-muted-foreground">Target matches</p>
+								<p class="text-xs text-muted-foreground">Meciuri țintă</p>
 								<p class="font-mono text-foreground">{displayedPipelineResult.summary.target_matches}</p>
 							</div>
 							<div>
-								<p class="text-xs text-muted-foreground">Prediction runs</p>
+								<p class="text-xs text-muted-foreground">Rulări de predicție</p>
 								<p class="font-mono text-foreground">{displayedPipelineResult.summary.completed_prediction_runs}/{displayedPipelineResult.summary.prediction_runs}</p>
 							</div>
 							<div>
-								<p class="text-xs text-muted-foreground">Created tickets</p>
+								<p class="text-xs text-muted-foreground">Bilete create</p>
 								<p class="font-mono text-foreground">
 									{displayedPipelineResult.summary.created_tickets}
 									{#if displayedPipelineResult.summary.created_experimental_tickets}
-										<span class="text-football-gold">+{displayedPipelineResult.summary.created_experimental_tickets} watchlist</span>
+										<span class="text-football-gold">+{displayedPipelineResult.summary.created_experimental_tickets} în lista de urmărire</span>
 									{/if}
 								</p>
 								{#if displayedPipelineResult.summary.ticket_generation_mode}
@@ -1238,14 +1343,14 @@ function tomorrowLocalDate(): string {
 						{#if displayedPipelineResult.created_ticket_ids.length > 0}
 							<div class="space-y-2">
 								<p class="text-xs uppercase tracking-wide text-muted-foreground">
-									Created ticket IDs ({displayedPipelineResult.created_ticket_ids.length})
+									ID-uri de bilete create ({displayedPipelineResult.created_ticket_ids.length})
 								</p>
 								<div class="flex flex-wrap gap-1.5">
 									{#each displayedPipelineResult.created_ticket_ids.slice(0, 24) as ticketId (ticketId)}
-									<Badge variant="success">Ticket #{ticketId}</Badge>
+									<Badge variant="success">Bilet #{ticketId}</Badge>
 									{/each}
 									{#if displayedPipelineResult.created_ticket_ids.length > 24}
-										<Badge variant="info">+{displayedPipelineResult.created_ticket_ids.length - 24} more</Badge>
+										<Badge variant="info">+{displayedPipelineResult.created_ticket_ids.length - 24} în plus</Badge>
 									{/if}
 								</div>
 							</div>
@@ -1254,14 +1359,14 @@ function tomorrowLocalDate(): string {
 						{#if (displayedPipelineResult.created_experimental_ticket_ids?.length ?? 0) > 0}
 							<div class="space-y-2">
 								<p class="text-xs uppercase tracking-wide text-muted-foreground">
-									Watchlist ticket IDs ({displayedPipelineResult.created_experimental_ticket_ids?.length ?? 0})
+									ID-uri de bilete în lista de urmărire ({displayedPipelineResult.created_experimental_ticket_ids?.length ?? 0})
 								</p>
 								<div class="flex flex-wrap gap-1.5">
 									{#each (displayedPipelineResult.created_experimental_ticket_ids ?? []).slice(0, 24) as ticketId (ticketId)}
-										<Badge variant="warning">Watchlist #{ticketId}</Badge>
+										<Badge variant="warning">Urmărire #{ticketId}</Badge>
 									{/each}
 									{#if (displayedPipelineResult.created_experimental_ticket_ids?.length ?? 0) > 24}
-										<Badge variant="info">+{(displayedPipelineResult.created_experimental_ticket_ids?.length ?? 0) - 24} more</Badge>
+										<Badge variant="info">+{(displayedPipelineResult.created_experimental_ticket_ids?.length ?? 0) - 24} în plus</Badge>
 									{/if}
 								</div>
 							</div>
@@ -1270,9 +1375,9 @@ function tomorrowLocalDate(): string {
 						{#if displayedPipelineResult.difficulty_tiers?.length > 0}
 							<div class="space-y-4">
 								<div>
-									<p class="text-sm font-semibold text-foreground">Difficulty ladders</p>
+									<p class="text-sm font-semibold text-foreground">Niveluri de dificultate</p>
 									<p class="text-xs text-muted-foreground">
-										Top 10 per level: level 1 is safest singles, level 7 is seven-leg accumulators.
+										Primele 10 pe nivel: nivelul 1 conține selecții simple mai sigure, iar nivelul 7 acumulatoare cu șapte selecții.
 									</p>
 								</div>
 								<div class="space-y-3">
@@ -1281,10 +1386,10 @@ function tomorrowLocalDate(): string {
 											<div class="flex flex-wrap items-center justify-between gap-2">
 												<div>
 													<p class="text-sm font-semibold text-foreground">
-														Level {tier.level}: {tier.label}
+														Nivelul {tier.level}: {tier.label}
 													</p>
 													<p class="text-xs text-muted-foreground">
-														{tier.leg_count} legs · {tier.tickets.length} ticket candidates
+														{tier.leg_count} selecții · {tier.tickets.length} bilete candidate
 													</p>
 												</div>
 												<Badge variant={tier.level <= 2 ? 'success' : tier.level <= 4 ? 'info' : 'warning'}>
@@ -1297,12 +1402,12 @@ function tomorrowLocalDate(): string {
 													<table class="w-full text-xs">
 														<thead class="uppercase text-muted-foreground">
 															<tr>
-																<th class="py-2 text-left">Rank</th>
-																<th class="py-2 text-left">Ticket</th>
-																<th class="py-2 text-left">Selections</th>
-																<th class="py-2 text-right">Probability</th>
-																<th class="py-2 text-right">Odds</th>
-																<th class="py-2 text-right">EV score</th>
+																<th class="py-2 text-left">Rang</th>
+																<th class="py-2 text-left">Bilet</th>
+																<th class="py-2 text-left">Selecții</th>
+																<th class="py-2 text-right">Probabilitate</th>
+																<th class="py-2 text-right">Cote</th>
+																<th class="py-2 text-right">Scor EV</th>
 															</tr>
 														</thead>
 														<tbody>
@@ -1311,7 +1416,7 @@ function tomorrowLocalDate(): string {
 																	<td class="py-2 pr-3 font-mono text-muted-foreground">#{ticket.rank}</td>
 																	<td class="py-2 pr-3">
 																		<div class="font-mono text-foreground">
-																			{ticket.ticket_id ? `#${ticket.ticket_id}` : 'not created'}
+																			{ticket.ticket_id ? `#${ticket.ticket_id}` : 'necreat'}
 																		</div>
 																		<div class="text-muted-foreground">{ticket.ticket_type}</div>
 																	</td>
@@ -1340,7 +1445,7 @@ function tomorrowLocalDate(): string {
 												</div>
 											{:else}
 												<p class="mt-3 text-xs text-muted-foreground">
-													Not enough unique World Cup matches for this difficulty level yet.
+													Nu există încă suficiente meciuri unice de la Cupa Mondială pentru acest nivel de dificultate.
 												</p>
 											{/if}
 										</div>
@@ -1354,10 +1459,10 @@ function tomorrowLocalDate(): string {
 								<table class="w-full text-sm">
 									<thead class="text-xs uppercase text-muted-foreground">
 										<tr>
-											<th class="py-2 text-left">Match</th>
-											<th class="py-2 text-left">Pick</th>
-											<th class="py-2 text-right">Probability</th>
-											<th class="py-2 text-right">Odds</th>
+											<th class="py-2 text-left">Meci</th>
+											<th class="py-2 text-left">Selecție</th>
+											<th class="py-2 text-right">Probabilitate</th>
+											<th class="py-2 text-right">Cote</th>
 										</tr>
 									</thead>
 									<tbody>
@@ -1369,7 +1474,7 @@ function tomorrowLocalDate(): string {
 												</td>
 												<td class="py-2 pr-3">
 													<div class="font-mono text-foreground">{candidate.market} · {candidate.selection}</div>
-													<div class="text-xs text-muted-foreground">{candidate.bookmaker ?? 'best available'}</div>
+													<div class="text-xs text-muted-foreground">{candidate.bookmaker ?? 'cea mai bună disponibilă'}</div>
 												</td>
 												<td class="py-2 text-right font-mono text-football-green">{formatProbability(candidate.probability)}</td>
 												<td class="py-2 text-right font-mono text-foreground">{candidate.odds.toFixed(2)}</td>
@@ -1383,19 +1488,19 @@ function tomorrowLocalDate(): string {
 						{#if (displayedPipelineResult.watchlist_candidates?.length ?? 0) > 0}
 							<div class="overflow-x-auto">
 								<div class="mb-2">
-									<p class="text-sm font-semibold text-foreground">Watchlist candidates</p>
+									<p class="text-sm font-semibold text-foreground">Candidați de urmărire</p>
 									<p class="text-xs text-muted-foreground">
-										These are generated when safe tickets are blocked by insufficient history or fallback model usage.
+										Acești candidați apar când biletele sigure sunt blocate de istoricul insuficient sau de folosirea unui model de rezervă.
 									</p>
 								</div>
 								<table class="w-full text-sm">
 									<thead class="text-xs uppercase text-muted-foreground">
 										<tr>
-											<th class="py-2 text-left">Match</th>
-											<th class="py-2 text-left">Pick</th>
-											<th class="py-2 text-left">Reliability</th>
-											<th class="py-2 text-right">Probability</th>
-											<th class="py-2 text-right">Odds</th>
+											<th class="py-2 text-left">Meci</th>
+											<th class="py-2 text-left">Selecție</th>
+											<th class="py-2 text-left">Fiabilitate</th>
+											<th class="py-2 text-right">Probabilitate</th>
+											<th class="py-2 text-right">Cote</th>
 										</tr>
 									</thead>
 									<tbody>
@@ -1407,10 +1512,10 @@ function tomorrowLocalDate(): string {
 												</td>
 												<td class="py-2 pr-3">
 													<div class="font-mono text-foreground">{candidate.market} · {candidate.selection}</div>
-													<div class="text-xs text-muted-foreground">{candidate.bookmaker ?? 'best available'}</div>
+													<div class="text-xs text-muted-foreground">{candidate.bookmaker ?? 'cea mai bună disponibilă'}</div>
 												</td>
 												<td class="py-2 pr-3">
-													<Badge variant="warning">{candidate.reliability ?? 'watchlist'}</Badge>
+													<Badge variant="warning">{candidate.reliability ?? 'de urmărit'}</Badge>
 													<div class="max-w-72 truncate text-[10px] text-muted-foreground" title={(candidate.quality_reasons ?? []).join(', ')}>
 														{(candidate.quality_reasons ?? []).join(', ')}
 													</div>
@@ -1440,26 +1545,26 @@ function tomorrowLocalDate(): string {
 		</Card>
 
 		<!-- Section 2: Data selection -->
-	<Card id="selection" title="1. Choose competitions" variant="data" class="order-2 scroll-mt-24">
+	<Card id="selection" title="1. Alege competițiile" variant="data" class="order-2 scroll-mt-24">
 		<div class="space-y-5">
 			<div class="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-end">
 				<div>
-					<p class="text-sm font-semibold text-foreground">Start with a preset</p>
-					<p class="mt-1 text-xs leading-5 text-muted-foreground">One click chooses a sensible primary league. You can fine-tune the catalog below.</p>
+					<p class="text-sm font-semibold text-foreground">Începe cu o presetare</p>
+					<p class="mt-1 text-xs leading-5 text-muted-foreground">Un clic alege o ligă principală potrivită. Poți ajusta catalogul mai jos.</p>
 					<div class="mt-3 flex flex-wrap gap-2">
 						<Button variant="secondary" size="sm" onclick={() => applyScopePreset('romania')}>Romania</Button>
-						<Button variant="secondary" size="sm" onclick={() => applyScopePreset('top-five')}>Top 5 Europe</Button>
-						<Button variant="secondary" size="sm" onclick={() => applyScopePreset('world-cup')}>World Cup</Button>
+						<Button variant="secondary" size="sm" onclick={() => applyScopePreset('top-five')}>Top 5 Europa</Button>
+						<Button variant="secondary" size="sm" onclick={() => applyScopePreset('world-cup')}>Cupa Mondială</Button>
 					</div>
 				</div>
 				{#if selectedCountries.length > 0 || selectedLeagues.length > 0}
-					<Button variant="ghost" size="sm" onclick={clearScope}>Clear selection</Button>
+					<Button variant="ghost" size="sm" onclick={clearScope}>Golește selecția</Button>
 				{/if}
 			</div>
 
 			{#if selectedLeagueBadges.length > 0}
 				<div class="flex flex-wrap items-center gap-2 border border-football-green/30 bg-football-green/5 p-3">
-					<span class="text-xs font-semibold uppercase tracking-wide text-football-green">Selected</span>
+					<span class="text-xs font-semibold uppercase tracking-wide text-football-green">Selectate</span>
 					{#each selectedLeagueBadges as badge (badge.value)}
 						<Badge variant="info">{badge.label}</Badge>
 					{/each}
@@ -1468,17 +1573,17 @@ function tomorrowLocalDate(): string {
 
 			<details class="group border border-border bg-muted/10" open={selectedLeagues.length === 0}>
 				<summary class="flex cursor-pointer list-none items-center justify-between gap-4 px-4 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-football-blue">
-					<span><span class="block text-sm font-semibold text-foreground">Browse the full catalog</span><span class="mt-1 block text-xs text-muted-foreground">Search countries first, then only their leagues are shown.</span></span>
-					<span class="text-xs font-medium text-football-blue group-open:hidden">Open</span><span class="hidden text-xs font-medium text-football-blue group-open:inline">Close</span>
+					<span><span class="block text-sm font-semibold text-foreground">Răsfoiește catalogul complet</span><span class="mt-1 block text-xs text-muted-foreground">Caută mai întâi țări, apoi sunt afișate doar ligile lor.</span></span>
+					<span class="text-xs font-medium text-football-blue group-open:hidden">Deschide</span><span class="hidden text-xs font-medium text-football-blue group-open:inline">Închide</span>
 				</summary>
 				<div class="space-y-6 border-t border-border p-4">
-			<!-- Countries -->
+			<!-- Țări -->
 			<div>
 				<div class="mb-3 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
 					<div>
-						<p class="text-sm font-medium text-foreground">Countries</p>
+						<p class="text-sm font-medium text-foreground">Țări</p>
 						<p class="mt-1 text-xs text-muted-foreground">
-							{countries.length} countries from the {catalogSource ?? 'OddsHarvester football'} catalog.
+							{countries.length} țări din catalogul {catalogSource ?? 'fotbal OddsHarvester'}.
 						</p>
 						{#if catalogStatusLabel || catalogRefreshLabel}
 							<div class="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground" aria-live="polite">
@@ -1488,16 +1593,16 @@ function tomorrowLocalDate(): string {
 									</Badge>
 								{/if}
 								{#if catalogRefreshLabel}
-									<span>Last refreshed {catalogRefreshLabel}</span>
+									<span>Ultima actualizare {catalogRefreshLabel}</span>
 								{/if}
 							</div>
 						{/if}
 					</div>
 					<Input
 						id="country-catalog-search"
-						label="Find a country"
+						label="Caută o țară"
 						bind:value={countryQuery}
-						placeholder="Search countries"
+						placeholder="Caută țări"
 						autocomplete="off"
 						class="w-full sm:max-w-xs"
 					/>
@@ -1507,10 +1612,12 @@ function tomorrowLocalDate(): string {
 						<Skeleton class="h-6 w-full" />
 						<Skeleton class="h-6 w-3/4" />
 					</div>
+				{:else if catalogLoadError}
+					<div class="border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive" role="alert">Catalog indisponibil: {catalogLoadError} <Button variant="ghost" size="sm" onclick={fetchCatalog}>Reîncearcă</Button></div>
 				{:else if countries.length === 0}
-					<p class="text-sm text-muted-foreground">No countries available</p>
+					<p class="text-sm text-muted-foreground">Catalogul este disponibil, dar nu conține țări pentru acest cont.</p>
 				{:else if filteredCountries.length === 0}
-					<p class="text-sm text-muted-foreground" role="status">No countries match your search.</p>
+					<p class="text-sm text-muted-foreground" role="status">Nicio țară nu corespunde căutării.</p>
 				{:else}
 					<div class="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
 						{#each displayedCountries as country (country.country)}
@@ -1534,7 +1641,7 @@ function tomorrowLocalDate(): string {
 					{#if !countryQuery.trim() && (hiddenCountryCount > 0 || showAllCountries)}
 						<div class="mt-3 flex justify-center">
 							<Button variant="ghost" size="sm" onclick={() => (showAllCountries = !showAllCountries)}>
-								{showAllCountries ? 'Show fewer countries' : `Show all countries (${hiddenCountryCount} more)`}
+								{showAllCountries ? 'Arată mai puține țări' : `Arată toate țările (${hiddenCountryCount} în plus)`}
 							</Button>
 						</div>
 					{/if}
@@ -1548,13 +1655,13 @@ function tomorrowLocalDate(): string {
 					{#if selectedCountries.length === 1 && catalogValidationBatchSize > 0}
 						<div class="mt-3 flex flex-wrap items-center gap-2 border border-dashed border-football-blue/40 bg-football-blue/5 p-3">
 							<div class="min-w-0 flex-1">
-								<p class="text-xs font-semibold text-foreground">Validate pending league pages</p>
+								<p class="text-xs font-semibold text-foreground">Validează paginile de ligi în așteptare</p>
 								<p class="mt-0.5 text-xs text-muted-foreground">
-									Checks up to {catalogValidationBatchSize} rendered OddsPortal Results pages for {selectedCountries[0]}; it does not scrape odds or auto-enable the leagues.
+									Verifică până la {catalogValidationBatchSize} pagini de rezultate CotePortal pentru {selectedCountries[0]}; nu colectează cote și nu activează automat ligile.
 								</p>
 							</div>
 							<Button variant="secondary" size="sm" disabled={validatingCatalog} onclick={validatePendingCatalogCandidates}>
-								{validatingCatalog ? 'Validating…' : `Validate ${catalogValidationBatchSize} pending`}
+								{validatingCatalog ? 'Se validează…' : `Validează ${catalogValidationBatchSize} în așteptare`}
 							</Button>
 						</div>
 					{/if}
@@ -1573,11 +1680,11 @@ function tomorrowLocalDate(): string {
 			<div>
 				<div class="mb-3 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
 					<div>
-						<p class="text-sm font-medium text-foreground">OddsHarvester leagues</p>
+						<p class="text-sm font-medium text-foreground">Ligi OddsHarvester</p>
 						<p class="mt-1 text-xs text-muted-foreground">
-							{allLeagues.length} available from the catalog
+							{allLeagues.length} disponibile în catalog
 							{#if selectedCountries.length > 0}
-								· {selectedCountries.length} country filter{selectedCountries.length === 1 ? '' : 's'} active
+								· {selectedCountries.length} filtru de țări activ
 							{/if}
 						</p>
 					</div>
@@ -1588,8 +1695,8 @@ function tomorrowLocalDate(): string {
 							class="self-start text-xs text-football-blue transition-colors hover:text-football-green sm:self-auto"
 						>
 							{filteredLeagues.filter(isLeagueScrapeSelectable).every((l) => selectedLeagues.includes(l.id))
-								? 'Deselect visible supported'
-								: 'Select visible supported'}
+								? 'Deselectează ligile suportate vizibile'
+								: 'Selectează ligile suportate vizibile'}
 						</button>
 					{/if}
 				</div>
@@ -1601,22 +1708,22 @@ function tomorrowLocalDate(): string {
 				{:else}
 					<Input
 						id="league-catalog-search"
-						label="Find a league"
+						label="Caută o ligă"
 						bind:value={leagueQuery}
-						placeholder="Search by country, league, or OddsHarvester slug"
+						placeholder="Caută după țară, ligă sau slug OddsHarvester"
 						autocomplete="off"
 					/>
 					{#if selectedCountries.length === 0 && !leagueQuery.trim()}
 						<div class="mt-3 border border-dashed border-border bg-muted/20 p-5 text-center">
-							<p class="text-sm font-medium text-foreground">Choose a country first</p>
-							<p class="mt-1 text-xs text-muted-foreground">This keeps the catalog compact instead of rendering every league at once.</p>
+							<p class="text-sm font-medium text-foreground">Alege mai întâi o țară</p>
+							<p class="mt-1 text-xs text-muted-foreground">Astfel catalogul rămâne compact, fără a afișa toate ligile simultan.</p>
 						</div>
 					{:else if displayedLeagueGroups.length === 0}
 						<p class="mt-3 text-sm text-muted-foreground" role="status">
-							No catalog leagues match the active country filter or search.
+							Nicio ligă din catalog nu corespunde filtrului de țară sau căutării.
 						</p>
 					{:else}
-						<div class="mt-3 space-y-4" aria-label="OddsHarvester league catalog">
+						<div class="mt-3 space-y-4" aria-label="Catalog de ligi OddsHarvester">
 							{#each displayedLeagueGroups as country (country.country)}
 								<section class="overflow-hidden border border-border">
 									<div class="flex items-center justify-between border-b border-border bg-muted/40 px-3 py-2">
@@ -1645,7 +1752,7 @@ function tomorrowLocalDate(): string {
 															{catalogAvailabilityLabel(availability)}
 												</Badge>
 											{:else if !selectable}
-												<span class="text-[10px] uppercase tracking-wide text-muted-foreground">Unavailable</span>
+												<span class="text-[10px] uppercase tracking-wide text-muted-foreground">Indisponibilă</span>
 											{/if}
 												<span class="ml-auto shrink-0 font-mono text-xs text-muted-foreground">{league.matches_count}</span>
 											</label>
@@ -1663,19 +1770,19 @@ function tomorrowLocalDate(): string {
 	</Card>
 
 	<!-- Section 3: Historic and future ranges -->
-	<Card id="coverage" title="2. Set coverage" variant="data" class="order-3 scroll-mt-24">
+	<Card id="coverage" title="2. Stabilește acoperirea" variant="data" class="order-3 scroll-mt-24">
 		<div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
-			<!-- Past History -->
+			<!-- Past Istoric -->
 			<div class={cn('space-y-4 border p-4', pastEnabled ? 'border-football-blue/40 bg-football-blue/5' : 'border-border bg-muted/10')}>
 				<div class="flex items-center justify-between">
 					<div>
-						<p class="text-sm font-semibold text-foreground">Historical results</p>
-						<p class="mt-1 text-xs text-muted-foreground">Train and validate models with previous seasons.</p>
+						<p class="text-sm font-semibold text-foreground">Rezultate istorice</p>
+						<p class="mt-1 text-xs text-muted-foreground">Antrenează și validează modelele folosind sezoane anterioare.</p>
 					</div>
 					<label class="relative inline-flex items-center cursor-pointer">
 						<input
 							type="checkbox"
-							aria-label="Include historical results"
+							aria-label="Include rezultatele istorice"
 							checked={pastEnabled}
 							onchange={() => (pastEnabled = !pastEnabled)}
 							class="sr-only peer"
@@ -1686,13 +1793,13 @@ function tomorrowLocalDate(): string {
 				{#if pastEnabled}
 					<div class="space-y-4" transition:slide={{ duration: 160 }}>
 						<div>
-							<p class="mb-2 text-xs font-medium text-muted-foreground">Quick range</p>
+							<p class="mb-2 text-xs font-medium text-muted-foreground">Interval rapid</p>
 							<div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
 								{#each historyPresetOptions.slice(0, 4) as option (option.value)}
 									<button
 										type="button"
 										class={cn('border px-3 py-2 text-xs font-semibold transition-colors', historyPresetYears === option.value ? 'border-football-blue bg-football-blue text-background' : 'border-border bg-background hover:bg-muted')}
-										onclick={() => applyHistoryPreset(option.value)}
+									onclick={() => applyHistoryPreset(option.value)}
 									>{option.label}</button>
 								{/each}
 							</div>
@@ -1708,46 +1815,46 @@ function tomorrowLocalDate(): string {
 							</div>
 						</div>
 						<div class="max-w-48">
-							<label for="scrape-history-pages" class="mb-1 block text-xs text-muted-foreground">Pages per season</label>
+							<label for="scrape-history-pages" class="mb-1 block text-xs text-muted-foreground">Pagini pe sezon</label>
 							<Input id="scrape-history-pages" type="number" min="1" max="50" bind:value={historicMaxPages} />
 						</div>
 						<div class="border border-border bg-background/60 p-3 text-xs text-muted-foreground">
 							{#if historicSeasonPreview.length > 0}
 								<p>
-									<span class="font-semibold text-foreground">{historicSeasonPreview.length} seasons:</span>
+									<span class="font-semibold text-foreground">{historicSeasonPreview.length} sezoane:</span>
 									<span class="font-mono text-foreground">{historicSeasonPreview.join(', ')}</span>
 								</p>
 							{:else}
-								<p>Choose a range to preview the seasons.</p>
+								<p>Alege un interval pentru previzualizarea sezoanelor.</p>
 							{/if}
 						</div>
 						<details class="group border-t border-border pt-3">
-							<summary class="cursor-pointer list-none text-xs font-semibold text-football-blue focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-football-blue">Custom interval <span class="group-open:hidden">+</span><span class="hidden group-open:inline">−</span></summary>
+							<summary class="cursor-pointer list-none text-xs font-semibold text-football-blue focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-football-blue">Interval personalizat <span class="group-open:hidden">+</span><span class="hidden group-open:inline">−</span></summary>
 							<div class="mt-3 space-y-3">
 								<div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
-									<Input label="Days" name="scrape-historic-days" type="number" min="0" bind:value={historicDays} />
-									<Input label="Weeks" name="scrape-historic-weeks" type="number" min="0" bind:value={historicWeeks} />
-									<Input label="Months" name="scrape-historic-months" type="number" min="0" bind:value={historicMonths} />
-									<Input label="Years" name="scrape-historic-years" type="number" min="0" bind:value={historicYears} />
+									<Input label="Zile" name="scrape-historic-zile" type="number" min="0" bind:value={historicDays} />
+									<Input label="Săptămâni" name="scrape-historic-weeks" type="number" min="0" bind:value={historicWeeks} />
+									<Input label="Luni" name="scrape-historic-months" type="number" min="0" bind:value={historicMonths} />
+									<Input label="Ani" name="scrape-historic-years" type="number" min="0" bind:value={historicYears} />
 								</div>
-								<Button variant="secondary" size="sm" onclick={applyHistoricInterval} disabled={historicIntervalDays <= 0}>Apply custom interval</Button>
+								<Button variant="secondary" size="sm" onclick={applyHistoricInterval} disabled={historicIntervalDays <= 0}>Aplică intervalul personalizat</Button>
 							</div>
 						</details>
 					</div>
 				{/if}
 			</div>
 
-			<!-- Future Matches -->
+			<!-- Future Mecies -->
 			<div class={cn('space-y-4 border p-4', futureEnabled ? 'border-football-green/40 bg-football-green/5' : 'border-border bg-muted/10')}>
 				<div class="flex items-center justify-between">
 					<div>
-						<p class="text-sm font-semibold text-foreground">Upcoming fixtures</p>
-						<p class="mt-1 text-xs text-muted-foreground">Collect the next matches and current odds.</p>
+						<p class="text-sm font-semibold text-foreground">Meciuri viitoare</p>
+						<p class="mt-1 text-xs text-muted-foreground">Colectează următoarele meciuri și cotele curente.</p>
 					</div>
 					<label class="relative inline-flex items-center cursor-pointer">
 						<input
 							type="checkbox"
-							aria-label="Include upcoming fixtures"
+							aria-label="Include meciurile viitoare"
 							checked={futureEnabled}
 							onchange={() => (futureEnabled = !futureEnabled)}
 							class="sr-only peer"
@@ -1758,23 +1865,23 @@ function tomorrowLocalDate(): string {
 				{#if futureEnabled}
 					<div class="space-y-4" transition:slide={{ duration: 160 }}>
 						<div>
-							<p class="mb-2 text-xs font-medium text-muted-foreground">Quick horizon</p>
+							<p class="mb-2 text-xs font-medium text-muted-foreground">Orizont rapid</p>
 							<div class="grid grid-cols-3 gap-2">
-								{#each [1, 7, 30] as days (days)}
-									<button type="button" class={cn('border px-3 py-2 text-xs font-semibold transition-colors', futureIntervalDays === days ? 'border-football-green bg-football-green text-background' : 'border-border bg-background hover:bg-muted')} onclick={() => setFuturePreset(days)}>{days === 1 ? 'Tomorrow' : `${days} days`}</button>
+								{#each [1, 7, 30] as zile (zile)}
+									<button type="button" class={cn('border px-3 py-2 text-xs font-semibold transition-colors', futureIntervalDays === zile ? 'border-football-green bg-football-green text-background' : 'border-border bg-background hover:bg-muted')} onclick={() => setFuturePreset(zile)}>{zile === 1 ? 'Mâine' : `${zile} zile`}</button>
 								{/each}
 							</div>
 						</div>
 						<div class="max-w-48">
-							<Input label="Upcoming days" name="scrape-future-days" type="number" min="0" bind:value={futureDays} />
+							<Input label="Viitor zile" name="scrape-future-zile" type="number" min="0" bind:value={futureDays} />
 						</div>
-						<div class="border border-border bg-background/60 p-3 text-xs text-muted-foreground">The scrape will cover the next <span class="font-mono font-semibold text-foreground">{futureIntervalDays}</span> days.</div>
+						<div class="border border-border bg-background/60 p-3 text-xs text-muted-foreground">Colectarea va acoperi următoarele <span class="font-mono font-semibold text-foreground">{futureIntervalDays}</span> zile.</div>
 						<details class="group border-t border-border pt-3">
-							<summary class="cursor-pointer list-none text-xs font-semibold text-football-blue focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-football-blue">Longer custom horizon <span class="group-open:hidden">+</span><span class="hidden group-open:inline">−</span></summary>
+							<summary class="cursor-pointer list-none text-xs font-semibold text-football-blue focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-football-blue">Orizont personalizat mai lung <span class="group-open:hidden">+</span><span class="hidden group-open:inline">−</span></summary>
 							<div class="mt-3 grid grid-cols-3 gap-2">
-								<Input label="Weeks" name="scrape-future-weeks" type="number" min="0" bind:value={futureWeeks} />
-								<Input label="Months" name="scrape-future-months" type="number" min="0" bind:value={futureMonths} />
-								<Input label="Years" name="scrape-future-years" type="number" min="0" bind:value={futureYears} />
+								<Input label="Săptămâni" name="scrape-future-weeks" type="number" min="0" bind:value={futureWeeks} />
+								<Input label="Luni" name="scrape-future-months" type="number" min="0" bind:value={futureMonths} />
+								<Input label="Ani" name="scrape-future-years" type="number" min="0" bind:value={futureYears} />
 							</div>
 						</details>
 					</div>
@@ -1784,42 +1891,42 @@ function tomorrowLocalDate(): string {
 	</Card>
 
 	<!-- Section 4: Controls -->
-	<Card id="controls" title="3. Review and run" variant="data" class="order-4 scroll-mt-24">
+	<Card id="controls" title="3. Verifică și pornește" variant="data" class="order-4 scroll-mt-24">
 		<div class="space-y-4">
 			<div class="grid gap-3 sm:grid-cols-3">
 				<div class="border border-border bg-muted/20 p-3">
-					<p class="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Scope</p>
-					<p class="mt-1 text-sm font-semibold text-foreground">{selectedLeagues.length} league{selectedLeagues.length === 1 ? '' : 's'}</p>
-					<p class="mt-1 truncate text-xs text-muted-foreground">{selectedCountries.join(', ') || 'Choose a preset above'}</p>
+					<p class="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Arie</p>
+					<p class="mt-1 text-sm font-semibold text-foreground">{selectedLeagues.length} {selectedLeagues.length === 1 ? 'ligă' : 'ligi'}</p>
+					<p class="mt-1 truncate text-xs text-muted-foreground">{selectedCountries.join(', ') || 'Alege o presetare de mai sus'}</p>
 				</div>
 				<div class="border border-border bg-muted/20 p-3">
-					<p class="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Historical</p>
-					<p class="mt-1 text-sm font-semibold text-foreground">{pastEnabled ? `${historicSeasonPreview.length} seasons` : 'Off'}</p>
-					<p class="mt-1 text-xs text-muted-foreground">{pastEnabled ? `${pastFrom || '—'} → ${pastTo || '—'}` : 'No historic jobs'}</p>
+					<p class="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Istoric</p>
+					<p class="mt-1 text-sm font-semibold text-foreground">{pastEnabled ? `${historicSeasonPreview.length} sezoane` : 'Dezactivat'}</p>
+					<p class="mt-1 text-xs text-muted-foreground">{pastEnabled ? `${pastFrom || '—'} → ${pastTo || '—'}` : 'Fără joburi istorice'}</p>
 				</div>
 				<div class="border border-border bg-muted/20 p-3">
-					<p class="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Upcoming</p>
-					<p class="mt-1 text-sm font-semibold text-foreground">{futureEnabled ? `${futureIntervalDays} days` : 'Off'}</p>
-					<p class="mt-1 text-xs text-muted-foreground">Engine: {scraperEngine === 'auto' ? 'Automatic' : scraperEngine}</p>
+					<p class="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Viitor</p>
+					<p class="mt-1 text-sm font-semibold text-foreground">{futureEnabled ? `${futureIntervalDays} zile` : 'Dezactivat'}</p>
+					<p class="mt-1 text-xs text-muted-foreground">Motor: {scraperEngine === 'auto' ? 'Automat' : scraperEngine}</p>
 				</div>
 			</div>
 
 			<details class="group border border-border bg-muted/10">
 				<summary class="flex cursor-pointer list-none items-center justify-between gap-4 px-4 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-football-blue">
-					<span><span class="block text-sm font-semibold text-foreground">Advanced run settings</span><span class="mt-1 block text-xs text-muted-foreground">Scheduling, scraper engine and duplicate handling use safe defaults.</span></span>
-					<span class="text-xs font-medium text-football-blue group-open:hidden">Customize</span><span class="hidden text-xs font-medium text-football-blue group-open:inline">Hide</span>
+					<span><span class="block text-sm font-semibold text-foreground">Setări avansate de rulare</span><span class="mt-1 block text-xs text-muted-foreground">Programarea, motorul de colectare și gestionarea duplicatelor folosesc valori sigure.</span></span>
+					<span class="text-xs font-medium text-football-blue group-open:hidden">Personalizează</span><span class="hidden text-xs font-medium text-football-blue group-open:inline">Ascunde</span>
 				</summary>
 				<div class="space-y-4 border-t border-border p-4">
-			<!-- Auto-scrape -->
+			<!-- Colectare automată -->
 			<div class="flex items-center justify-between">
 				<div>
-					<p class="text-sm font-medium text-foreground">Auto-scrape</p>
-					<p class="text-xs text-muted-foreground">Automatically run scrape jobs on a schedule</p>
+					<p class="text-sm font-medium text-foreground">Colectare automată</p>
+					<p class="text-xs text-muted-foreground">Rulează automat joburile de colectare după o programare</p>
 				</div>
 				<label class="relative inline-flex items-center cursor-pointer">
 					<input
 						type="checkbox"
-						aria-label="Enable auto-scrape schedule"
+						aria-label="Activează programarea automată a colectării"
 						checked={autoScrape}
 						onchange={() => (autoScrape = !autoScrape)}
 						class="sr-only peer"
@@ -1839,9 +1946,9 @@ function tomorrowLocalDate(): string {
 					</div>
 					</div>
 					<div class="flex flex-col gap-2 rounded border border-football-green/30 bg-football-green/5 p-3 sm:flex-row sm:items-center sm:justify-between">
-						<p class="text-xs leading-5 text-muted-foreground">Save this schedule with the competitions and coverage selected above. Optional prediction and ticket steps remain in Automation.</p>
-						<Button variant="secondary" size="sm" onclick={saveAutomaticScrapeAction} disabled={!interactive || savingScheduledJob}>
-							{savingScheduledJob ? 'Saving...' : 'Save autoscrape schedule'}
+						<p class="text-xs leading-5 text-muted-foreground">Salvează programarea cu competițiile și acoperirea selectate mai sus. Pașii opționali de predicții și bilete rămân în Automatizare.</p>
+						<Button variant="secondary" size="sm" onclick={saveAutomatScrapeAction} disabled={!interactive || savingScheduledJob}>
+							{savingScheduledJob ? 'Se salvează...' : 'Salvează programarea automată'}
 						</Button>
 					</div>
 				</div>
@@ -1852,12 +1959,12 @@ function tomorrowLocalDate(): string {
 			<div class="space-y-2">
 				<Select
 					bind:value={scraperEngine}
-					label="Scraper engine"
+					label="Motor de colectare"
 					name="scrape-engine"
 					options={scraperEngineOptions}
 				/>
 				<p class="text-xs text-muted-foreground">
-					Auto incearca Scrapling pentru flow-urile football/core-market si revine la Playwright cand cererea nu este suportata. Pentru all_markets sau odds_history foloseste Playwright.
+					Modul automat încearcă Scrapling pentru fluxurile de fotbal și piețele principale, apoi revine la Playwright când solicitarea nu este suportată. Pentru toate piețele sau istoricul cotelor folosește Playwright.
 				</p>
 			</div>
 
@@ -1866,13 +1973,13 @@ function tomorrowLocalDate(): string {
 			<!-- Dedup -->
 			<div class="flex items-center justify-between">
 				<div>
-					<p class="text-sm font-medium text-foreground">Skip existing matches</p>
-					<p class="text-xs text-muted-foreground">Avoid re-scraping data already in the database</p>
+					<p class="text-sm font-medium text-foreground">Omite meciurile existente</p>
+					<p class="text-xs text-muted-foreground">Evită recolectarea datelor deja din baza de date</p>
 				</div>
 				<label class="relative inline-flex items-center cursor-pointer">
 					<input
 						type="checkbox"
-						aria-label="Skip existing matches"
+						aria-label="Omite meciurile existente"
 						checked={dedupSkip}
 						onchange={() => (dedupSkip = !dedupSkip)}
 						class="sr-only peer"
@@ -1893,13 +2000,13 @@ function tomorrowLocalDate(): string {
 
 			<div class="space-y-3">
 				{#if pastEnabled && selectedScrapeLeagueSlugs.length === 0}
-					<p class="rounded border border-football-gold/30 bg-football-gold/10 p-3 text-xs leading-5 text-football-gold" role="status">Historical coverage needs at least one supported league. Choose it in step 1 before starting the scrape.</p>
+					<p class="rounded border border-football-gold/30 bg-football-gold/10 p-3 text-xs leading-5 text-football-gold" role="status">Colectarea istorică necesită cel puțin o ligă suportată. Alege liga la pasul 1 înainte de pornire.</p>
 				{/if}
 				{#if largeScopeWarning}
 					<div class="space-y-3 rounded border border-football-gold/40 bg-football-gold/10 p-3" role="alert">
 						<div>
-							<p class="text-sm font-semibold text-foreground">Large historical scrape scope</p>
-							<p class="mt-1 text-xs leading-5 text-muted-foreground">{largeScopeWarning.message} Jobs run in the background and may take a long time or put pressure on the source. Narrow the scope if this is not intentional.</p>
+							<p class="text-sm font-semibold text-foreground">Arie mare de colectare istorică</p>
+							<p class="mt-1 text-xs leading-5 text-muted-foreground">{largeScopeWarning.message} Joburile rulează în fundal și pot dura mult sau pot încărca sursa. Restrânge aria dacă nu este intenționat.</p>
 						</div>
 						<label class="flex cursor-pointer items-start gap-2 text-xs leading-5 text-foreground">
 							<input
@@ -1912,7 +2019,7 @@ function tomorrowLocalDate(): string {
 								}}
 								class="mt-0.5 h-4 w-4 shrink-0 accent-[hsl(var(--football-green))]"
 							/>
-							<span>I understand this will queue a large batch of historical scrapes.</span>
+							<span>Înțeleg că se va pune în coadă un lot mare de colectări istorice.</span>
 						</label>
 					</div>
 				{/if}
@@ -1921,13 +2028,28 @@ function tomorrowLocalDate(): string {
 						{submitSuccess}
 					</div>
 				{/if}
+				{#if submitPartial}
+					<div class="space-y-3 border border-football-gold/30 bg-football-gold/10 p-3 text-sm text-foreground" role="status">
+						<p>{submitPartial}</p>
+						{#if failedScrapeAttempts.length}
+							<ul class="space-y-1 text-xs text-muted-foreground">
+								{#each failedScrapeAttempts as attempt (attempt.label)}
+									<li><span class="font-medium text-foreground">{attempt.label}:</span> {attempt.reason}</li>
+								{/each}
+							</ul>
+							<Button variant="secondary" size="sm" disabled={retryingFailedScrapes} onclick={retryFailedScrapes}>
+								{retryingFailedScrapes ? 'Se reia...' : 'Reîncearcă doar părțile eșuate'}
+							</Button>
+						{/if}
+					</div>
+				{/if}
 				{#if submitError}
 					<div class="p-3 text-sm bg-destructive/10 border border-destructive/30 text-destructive" transition:slide={{ duration: 200 }}>
 						{submitError}
 					</div>
 				{/if}
 				{#if !canStartScrape && !submitting}
-					<p class="text-center text-xs text-muted-foreground">Select at least one supported league and keep one coverage range enabled.</p>
+					<p class="text-center text-xs text-muted-foreground">Selectează cel puțin o ligă suportată și păstrează activă o acoperire.</p>
 				{/if}
 				<Button
 					variant="glow"
@@ -1939,10 +2061,10 @@ function tomorrowLocalDate(): string {
 					{#if submitting}
 						<span class="flex items-center justify-center gap-2">
 							<span class="h-4 w-4 border-2 border-foreground border-t-transparent animate-spin"></span>
-							Starting...
+							Se pornește...
 						</span>
 					{:else}
-						Start Scraping
+						Pornește colectarea
 					{/if}
 				</Button>
 			</div>
@@ -1951,11 +2073,11 @@ function tomorrowLocalDate(): string {
 
 			<details id="logs" class="group rounded border border-border bg-muted/10 p-3" ontoggle={handleLogsDetailsToggle}>
 				<summary class="flex cursor-pointer list-none items-center justify-between gap-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-football-blue">
-					<span><span class="block text-sm font-medium text-foreground">Job logs</span><span class="mt-1 block text-xs text-muted-foreground">Inspect persistent action-by-action logs only when a job needs attention.</span></span>
-					<span class="shrink-0 text-xs font-medium text-football-blue group-open:hidden">Show</span><span class="hidden shrink-0 text-xs font-medium text-football-blue group-open:inline">Hide</span>
+					<span><span class="block text-sm font-medium text-foreground">Jurnalele joburilor</span><span class="mt-1 block text-xs text-muted-foreground">Inspectează jurnalul persistent, pas cu pas, numai când un job necesită atenție.</span></span>
+					<span class="shrink-0 text-xs font-medium text-football-blue group-open:hidden">Arată</span><span class="hidden shrink-0 text-xs font-medium text-football-blue group-open:inline">Ascunde</span>
 				</summary>
 				<div class="mt-3">
-					{#if logsPanelOpen}
+					{#if logsPanelDeschide}
 						<div class="space-y-3 border border-border bg-muted/30 p-3" transition:slide={{ duration: 200 }}>
 							{#if jobs.length > 0}
 								<div class="flex flex-wrap gap-2">
@@ -1976,11 +2098,11 @@ function tomorrowLocalDate(): string {
 								</div>
 							{/if}
 							{#if loadingJobLogs}
-								<p class="text-sm text-muted-foreground">Loading job logs...</p>
+								<p class="text-sm text-muted-foreground">Se încarcă jurnalele jobului...</p>
 							{:else if jobLogsError}
 								<p class="text-sm text-destructive">{jobLogsError}</p>
 							{:else if jobLogs.length === 0}
-								<p class="text-sm text-muted-foreground">No job logs available yet.</p>
+								<p class="text-sm text-muted-foreground">Încă nu există jurnale pentru job.</p>
 							{:else}
 								<div class="max-h-64 space-y-2 overflow-y-auto pr-1">
 									{#each jobLogs as log (log.id)}
@@ -2007,25 +2129,27 @@ function tomorrowLocalDate(): string {
 	</Card>
 
 	<!-- Section 4: Job Table -->
-	<Card id="jobs" title="Recent scrape jobs" variant="data" class="order-5 scroll-mt-24">
+	<Card id="jobs" title="Joburi recente de colectare" variant="data" class="order-5 scroll-mt-24">
 		{#if loadingJobs}
 			<div class="space-y-3">
 				<Skeleton class="h-12 w-full" />
 				<Skeleton class="h-12 w-full" />
 				<Skeleton class="h-12 w-full" />
 			</div>
+		{:else if jobsLoadError}
+			<div class="border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive" role="alert">Istoricul joburilor nu este disponibil: {jobsLoadError} <Button variant="ghost" size="sm" onclick={fetchJobs}>Reîncearcă</Button></div>
 		{:else if jobs.length === 0}
-			<p class="text-sm text-muted-foreground text-center py-8">No scraping jobs yet</p>
+			<p class="text-sm text-muted-foreground text-center py-8">Încă nu există joburi de colectare. Acesta este un rezultat gol, nu o eroare.</p>
 		{:else}
 			<div class="overflow-x-auto">
 				<table class="w-full text-sm">
 					<thead class="text-xs uppercase bg-muted border-b border-border text-muted-foreground">
 						<tr>
-							<th class="px-3 py-2 text-left">Name</th>
-							<th class="px-3 py-2 text-left">Status</th>
-							<th class="px-3 py-2 text-left">Created</th>
-							<th class="px-3 py-2 text-left">Duration</th>
-							<th class="px-3 py-2 text-left">Progress</th>
+							<th class="px-3 py-2 text-left">Nume</th>
+							<th class="px-3 py-2 text-left">Stare</th>
+							<th class="px-3 py-2 text-left">Creat</th>
+							<th class="px-3 py-2 text-left">Durată</th>
+							<th class="px-3 py-2 text-left">Progres</th>
 							<th class="px-3 py-2 w-8"></th>
 						</tr>
 					</thead>
@@ -2039,7 +2163,7 @@ function tomorrowLocalDate(): string {
 									{jobLabel(job)}
 								</td>
 								<td class="px-3 py-2.5">
-									<Badge variant={statusVariant(job.status)}>{job.status}</Badge>
+									<Badge variant={statusVariant(job.status)}>{statusLabel(job.status)}</Badge>
 								</td>
 								<td class="px-3 py-2.5 text-muted-foreground font-mono text-xs">
 									{new Date(job.created_at).toLocaleString()}
@@ -2067,11 +2191,11 @@ function tomorrowLocalDate(): string {
 									<td colspan="6" class="px-3 py-3 bg-muted/50">
 										<div class="grid grid-cols-2 gap-4 text-xs">
 											<div>
-												<span class="text-muted-foreground">Job ID:</span>
+												<span class="text-muted-foreground">ID job:</span>
 												<span class="ml-2 font-mono text-foreground">{job.id}</span>
 											</div>
 											<div>
-												<span class="text-muted-foreground">Type:</span>
+												<span class="text-muted-foreground">Tip:</span>
 												<span class="ml-2 font-mono text-foreground">{jobLabel(job)}</span>
 											</div>
 											{#if job.error}
@@ -2081,13 +2205,13 @@ function tomorrowLocalDate(): string {
 											{/if}
 											{#if job.params && Object.keys(job.params).length > 0}
 												<div class="col-span-2">
-													<span class="text-muted-foreground">Params:</span>
+													<span class="text-muted-foreground">Parametri:</span>
 													<pre class="mt-1 p-2 bg-background border border-border font-mono text-xs overflow-x-auto">{JSON.stringify(job.params, null, 2)}</pre>
 												</div>
 											{/if}
 											<div class="col-span-2">
 												<Button variant="secondary" size="sm" onclick={() => openLogsForJob(job.id)}>
-													View complete logs
+													Vezi jurnalul complet
 												</Button>
 											</div>
 										</div>

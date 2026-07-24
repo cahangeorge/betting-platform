@@ -4,7 +4,7 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<meta name="theme-color" content="#060B14" />
-		<title>Betfront Offline</title>
+		<title>Bet — Offline</title>
 		<style>
 			:root {
 				color-scheme: dark;
@@ -86,16 +86,15 @@
 	<body>
 		<section class="panel">
 			<div class="status">Offline</div>
-			<h1>Betfront is temporarily disconnected</h1>
+			<h1>Bet este temporar deconectat</h1>
 			<p>
-				The app shell is still cached, but live odds, scraping, predictions, and ticket placement need a working connection.
+				Cotele live, colectarea, predicțiile și gestionarea biletelor necesită conexiune. Datele contului și acțiunile nefinalizate nu sunt stocate pentru utilizare offline.
 			</p>
 			<p>
-				Reconnect and refresh when you are back online. If you already visited a route before losing signal, the service worker can restore it from cache.
+				Reconectează-te și reîncarcă pagina. Bet nu restaurează rutele vizitate și nu retrimite automat acțiunile nefinalizate.
 			</p>
 			<div class="actions">
-				<button type="button" onclick="window.location.reload()">Retry</button>
-				<a href="/">Open dashboard</a>
+				<button type="button" onclick="window.location.reload()">Reîncearcă</button>
 			</div>
 		</section>
 	</body>

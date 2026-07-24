@@ -281,22 +281,6 @@ export interface EnsembleResult {
 	results: PredictionResult[];
 }
 
-export interface BacktestRequest {
-	model_type: ModelType;
-	date_from: string;
-	date_to: string;
-	parameters?: Record<string, unknown>;
-}
-
-export interface BacktestResult {
-	model_type: ModelType;
-	total_matches: number;
-	accuracy: number;
-	profit_loss: number;
-	roi: number;
-	results: PredictionResult[];
-}
-
 export interface ValueBetTrustMetadata {
 	is_ticket_eligible?: boolean | null;
 	block_reasons?: string[];

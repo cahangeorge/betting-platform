@@ -83,11 +83,26 @@ export function normalizeValueBetItem(item: RawValueBetItem): ValueBetItem {
 
 export function normalizeValueBetFeed(response: RawValueBetFeed | RawValueBetItem[]): ValueBetFeed {
 	if (Array.isArray(response)) {
+		const unverifiedReason = 'legacy_feed_missing_trust_and_freshness';
 		return {
-			items: response.map(normalizeValueBetItem),
-			source: 'prediction',
-			is_demo: false,
-			generated_at: new Date().toISOString()
+			items: response.map((item) =>
+				normalizeValueBetItem({
+					...item,
+					is_betslip_eligible: false,
+					is_ticket_eligible: false,
+					source_ok: false,
+					block_reasons: [...(item.block_reasons ?? []), unverifiedReason],
+					trust: {
+						...(item.trust ?? {}),
+						is_ticket_eligible: false,
+						source_ok: false,
+						block_reasons: [...(item.trust?.block_reasons ?? []), unverifiedReason]
+					}
+				})
+			),
+			source: 'legacy-unverified',
+			is_demo: true,
+			generated_at: ''
 		};
 	}
 

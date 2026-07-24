@@ -4,8 +4,6 @@ import type {
 	RunRequest,
 	PredictionModel,
 	EnsembleResult,
-	BacktestRequest,
-	BacktestResult,
 	PaginatedResponse,
 	PredictionVerification,
 	ValueBetFeed,
@@ -56,18 +54,6 @@ class PredictionsApi extends ApiClient {
 
 	async getEnsemble(runId: number): Promise<EnsembleResult> {
 		return this.post<EnsembleResult>(`/api/v1/predictions/ensemble`, { run_id: runId } as unknown as Record<string, unknown>);
-	}
-
-	async runBacktest(data: BacktestRequest): Promise<BacktestResult> {
-		// Backend doesn't have a dedicated backtest endpoint yet — return empty
-		return {
-			model_type: data.model_type,
-			total_matches: 0,
-			accuracy: 0,
-			profit_loss: 0,
-			roi: 0,
-			results: []
-		};
 	}
 
 	async verify(runId?: number): Promise<PredictionVerification> {

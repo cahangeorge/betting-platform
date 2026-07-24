@@ -2,6 +2,7 @@
   "name": "betfront-svelte",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@10.34.5",
   "type": "module",
   "scripts": {
     "dev": "vite dev --host 127.0.0.1 --port 5175 --strictPort",
@@ -10,8 +11,10 @@
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "test:unit": "node --test --experimental-strip-types tests/unit/**/*.test.ts",
     "test:e2e": "npx playwright test --project=chromium-hybrid",
+    "test:e2e:cross-browser": "npx playwright test --project=firefox-hybrid-smoke --project=webkit-hybrid-smoke",
     "test:e2e:live": "E2E_MODE=live npx playwright test --project=chromium-live",
-    "check:e2e": "tsc --noEmit --pretty false --moduleResolution bundler --module ESNext --target ESNext --strict --esModuleInterop --allowImportingTsExtensions --resolveJsonModule --skipLibCheck --lib ESNext,DOM --types node,@playwright/test ./tests/e2e/helpers/*.ts ./tests/e2e/hybrid/*.ts ./tests/e2e/live/*.ts"
+    "test:e2e:pwa": "npx playwright test --config=playwright.pwa.config.ts",
+    "check:e2e": "tsc --noEmit --pretty false --moduleResolution bundler --module ESNext --target ESNext --strict --esModuleInterop --allowImportingTsExtensions --resolveJsonModule --skipLibCheck --lib ESNext,DOM --types node,@playwright/test ./tests/e2e/helpers/*.ts ./tests/e2e/hybrid/*.ts ./tests/e2e/live/*.ts ./tests/e2e/pwa/*.ts"
   },
   "dependencies": {
     "bits-ui": "^2.18.1",

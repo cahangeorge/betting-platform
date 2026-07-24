@@ -23,8 +23,10 @@ test('manual ticket with a stale client stake shows the server policy validation
 		await futureTab.click();
 		await expect(page.getByRole('heading', { name: 'Meciuri și predicții viitoare' })).toBeVisible();
 		await expect(page.getByText(fixtures.scheduledMatchLabel).first()).toBeVisible();
-		await page.getByRole('button', { name: /1\s+1\.91/ }).first().click();
-		await page.getByRole('button', { name: 'Review Ticket' }).first().click();
+		await page
+			.getByRole('button', { name: `Selectează 1 pentru ${fixtures.scheduledMatchLabel}`, exact: true })
+			.click();
+		await page.getByRole('button', { name: 'Revizuiește biletul' }).first().click();
 
 		await expect(page).toHaveURL(/\/tickets$/);
 		await expect(page.getByTestId('tickets-panel')).toHaveAttribute('data-interactive', 'true');

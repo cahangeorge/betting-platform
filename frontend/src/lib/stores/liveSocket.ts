@@ -58,6 +58,7 @@ function createLiveSocketStore() {
   const reconnectDelay = 3000;
   const maxReconnectDelay = 30000;
   let currentDelay = reconnectDelay;
+  let shouldReconnect = false;
 
   function getWsUrl(): string {
     // Compute at call time — never during SSR
@@ -65,16 +66,19 @@ function createLiveSocketStore() {
   }
 
   function connect() {
-    if (ws?.readyState === WebSocket.OPEN) return;
     if (typeof window === 'undefined') return;
+    if (ws?.readyState === WebSocket.OPEN || ws?.readyState === WebSocket.CONNECTING) return;
+
+    shouldReconnect = true;
 
     set({ status: 'connecting', lastMessage: null, error: null });
 
     try {
       const wsUrl = getWsUrl();
-      ws = new WebSocket(wsUrl);
+      const socket = new WebSocket(wsUrl);
+      ws = socket;
 
-      ws.onopen = () => {
+      socket.onopen = () => {
         currentDelay = reconnectDelay;
         set({ status: 'connected', lastMessage: null, error: null });
         // Subscribe to all channels
@@ -85,7 +89,7 @@ function createLiveSocketStore() {
         }, 30000);
       };
 
-      ws.onmessage = (event) => {
+      socket.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data) as LiveMessage;
           update((s) => ({ ...s, lastMessage: msg }));
@@ -94,16 +98,21 @@ function createLiveSocketStore() {
         }
       };
 
-      ws.onclose = () => {
+      socket.onclose = () => {
         if (pingTimer) {
           clearInterval(pingTimer);
           pingTimer = null;
         }
+        if (ws === socket) {
+          ws = null;
+        }
         update((s) => ({ ...s, status: 'disconnected' }));
-        scheduleReconnect();
+        if (shouldReconnect) {
+          scheduleReconnect();
+        }
       };
 
-      ws.onerror = () => {
+      socket.onerror = () => {
         update((s) => ({ ...s, status: 'disconnected', error: 'WebSocket error' }));
       };
     } catch (err) {
@@ -123,6 +132,7 @@ function createLiveSocketStore() {
   }
 
   function disconnect() {
+    shouldReconnect = false;
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
@@ -131,8 +141,9 @@ function createLiveSocketStore() {
       clearInterval(pingTimer);
       pingTimer = null;
     }
-    ws?.close();
+    const socket = ws;
     ws = null;
+    socket?.close();
     set({ status: 'disconnected', lastMessage: null, error: null });
   }
 

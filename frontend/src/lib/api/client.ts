@@ -1,6 +1,8 @@
 import type { ApiError } from '$lib/types';
 import { apiBaseUrl } from './base.ts';
 import { formatApiErrorDetail } from './error-detail.ts';
+import { notifySessionExpired } from '../auth/session-event.ts';
+import { sessionEpoch } from '../auth/session-epoch.ts';
 
 // Use empty base URL (same-origin) so auth cookies set by SvelteKit are sent
 // with API requests. The Vite dev server proxies /api/* to the backend.
@@ -14,6 +16,8 @@ function canRefreshSession(path: string): boolean {
 }
 
 async function refreshSession(baseUrl: string, fetchImpl: typeof fetch): Promise<boolean> {
+	const epoch = sessionEpoch.current();
+	if (!sessionEpoch.canRefresh(epoch)) return false;
 	let refreshPromise = sessionRefreshPromises.get(fetchImpl);
 	if (!refreshPromise) {
 		refreshPromise = (async () => {
@@ -22,7 +26,7 @@ async function refreshSession(baseUrl: string, fetchImpl: typeof fetch): Promise
 					method: 'POST',
 					credentials: 'include'
 				});
-				return response.ok;
+				return response.ok && sessionEpoch.canRefresh(epoch);
 			} catch {
 				return false;
 			}
@@ -92,6 +96,11 @@ export class ApiClient {
 				(await refreshSession(baseUrl, fetchImpl))
 			) {
 				return this.request<T>(method, path, body, options, fetchFn, true);
+			}
+
+			if (response.status === 401 && canRefreshSession(path)) {
+				sessionEpoch.terminate();
+				notifySessionExpired();
 			}
 
 			if (!response.ok) {

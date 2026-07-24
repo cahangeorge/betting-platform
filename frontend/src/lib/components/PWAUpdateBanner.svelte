@@ -1,10 +1,11 @@
 <script lang="ts">
 	import { updated } from '$app/state';
 	import { onMount } from 'svelte';
+	import { betslipHasUnsavedDraft } from '$lib/stores/betslip';
 
 	let waitingRegistration = $state<ServiceWorkerRegistration | null>(null);
 	let dismissed = $state(false);
-	let reloading = false;
+	let reloadAfterActivation = false;
 	const hasVersionUpdate = $derived(updated.current);
 	const showBanner = $derived((!!waitingRegistration || hasVersionUpdate) && !dismissed);
 
@@ -34,7 +35,15 @@
 	}
 
 	async function applyUpdate() {
+		const confirmed = window.confirm($betslipHasUnsavedDraft
+			? 'Ai un bilet nefinalizat. Selecțiile sunt păstrate în sesiunea acestui browser, dar alte formulare deschise se pot pierde. Continui?'
+			: 'Reîncărcarea poate pierde modificările din formularele nefinalizate. Continui?');
+		if (!confirmed) {
+			return;
+		}
+
 		if (waitingRegistration?.waiting) {
+			reloadAfterActivation = true;
 			waitingRegistration.waiting.postMessage({ type: 'SKIP_WAITING' });
 			return;
 		}
@@ -61,10 +70,10 @@
 		};
 
 		const handleControllerChange = () => {
-			if (reloading) {
+			if (!reloadAfterActivation) {
 				return;
 			}
-			reloading = true;
+			reloadAfterActivation = false;
 			window.location.reload();
 		};
 
@@ -84,7 +93,12 @@
 			<div>
 				<div class="font-semibold">Actualizare disponibilă</div>
 				<p class="mt-1 text-fuchsia-100/85">
-					O versiune nouă Betfront este pregătită. Reîncarcă pentru a aplica rutele, vizualizările și resursele actualizate.
+					O versiune nouă Bet este pregătită.
+					{#if $betslipHasUnsavedDraft}
+						Biletul curent este păstrat în sesiunea browserului înainte de reîncărcare.
+					{:else}
+						Reîncarcă pentru a aplica rutele, vizualizările și resursele actualizate.
+					{/if}
 				</p>
 			</div>
 			<div class="flex shrink-0 items-center gap-2">

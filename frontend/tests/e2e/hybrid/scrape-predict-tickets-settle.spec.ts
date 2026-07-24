@@ -88,10 +88,13 @@ test('scheduled ticket drafts and result settlement remain separate until explic
 		await expect(page.getByText(verificationJob.name).first()).toBeVisible();
 
 		await forceScheduledJobDue(generationJob.id);
-		const firstRun = await backendRequest<ScheduledRunResult[]>('/api/v1/jobs/run-due?limit=10', {
-			method: 'POST',
-			headers: withBearerToken(session.token.access_token)
-		});
+		const firstRun = await backendRequest<ScheduledRunResult[]>(
+			`/api/v1/jobs/run-due?job_id=${generationJob.id}&limit=10`,
+			{
+				method: 'POST',
+				headers: withBearerToken(session.token.access_token)
+			}
+		);
 
 		const queuedGenerationRun = firstRun.find((item) => item.job_id === generationJob.id);
 		expect(queuedGenerationRun?.id).toBeTruthy();
@@ -138,10 +141,13 @@ test('scheduled ticket drafts and result settlement remain separate until explic
 		});
 
 		await forceScheduledJobDue(verificationJob.id);
-		const secondRun = await backendRequest<ScheduledRunResult[]>('/api/v1/jobs/run-due?limit=10', {
-			method: 'POST',
-			headers: withBearerToken(session.token.access_token)
-		});
+		const secondRun = await backendRequest<ScheduledRunResult[]>(
+			`/api/v1/jobs/run-due?job_id=${verificationJob.id}&limit=10`,
+			{
+				method: 'POST',
+				headers: withBearerToken(session.token.access_token)
+			}
+		);
 
 		const queuedVerificationRun = secondRun.find((item) => item.job_id === verificationJob.id);
 		expect(queuedVerificationRun?.id).toBeTruthy();

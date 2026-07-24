@@ -520,7 +520,7 @@
 				{#if ticketsLoading || outcomesLoading}
 					<Card>
 						<div class="grid grid-cols-3 gap-3 sm:grid-cols-6">
-							{#each Array(6) as _}
+							{#each Array(6) as _, index (index)}
 								<Skeleton class="h-40 w-full" />
 							{/each}
 						</div>
@@ -724,7 +724,7 @@
 
 				{#if upcomingLoading || valueBetsLoading}
 					<div class="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-2">
-						{#each Array(4) as _}
+						{#each Array(4) as _, index (index)}
 							<Skeleton class="h-56 w-full" />
 						{/each}
 					</div>
@@ -775,13 +775,25 @@
 									{/if}
 
 									<div class="grid grid-cols-3 gap-2">
-										<button class="rounded-md border border-border p-2 text-center hover:bg-secondary" onclick={() => addMatchToBetSlip(match, { key: 'home', label: 'Home', odds: match.home_odds })}>
+										<button
+											class="rounded-md border border-border p-2 text-center hover:bg-secondary"
+											aria-label={`Selectează 1 pentru ${match.home_team} vs ${match.away_team}`}
+											onclick={() => addMatchToBetSlip(match, { key: 'home', label: 'Home', odds: match.home_odds })}
+										>
 											<p class="text-[10px] text-muted-foreground">1</p><p class="font-mono text-sm font-semibold text-football-green">{match.home_odds?.toFixed(2) ?? '--'}</p>
 										</button>
-										<button class="rounded-md border border-border p-2 text-center hover:bg-secondary" onclick={() => addMatchToBetSlip(match, { key: 'draw', label: 'Draw', odds: match.draw_odds })}>
+										<button
+											class="rounded-md border border-border p-2 text-center hover:bg-secondary"
+											aria-label={`Selectează X pentru ${match.home_team} vs ${match.away_team}`}
+											onclick={() => addMatchToBetSlip(match, { key: 'draw', label: 'Draw', odds: match.draw_odds })}
+										>
 											<p class="text-[10px] text-muted-foreground">X</p><p class="font-mono text-sm font-semibold text-football-blue">{match.draw_odds?.toFixed(2) ?? '--'}</p>
 										</button>
-										<button class="rounded-md border border-border p-2 text-center hover:bg-secondary" onclick={() => addMatchToBetSlip(match, { key: 'away', label: 'Away', odds: match.away_odds })}>
+										<button
+											class="rounded-md border border-border p-2 text-center hover:bg-secondary"
+											aria-label={`Selectează 2 pentru ${match.home_team} vs ${match.away_team}`}
+											onclick={() => addMatchToBetSlip(match, { key: 'away', label: 'Away', odds: match.away_odds })}
+										>
 											<p class="text-[10px] text-muted-foreground">2</p><p class="font-mono text-sm font-semibold text-football-gold">{match.away_odds?.toFixed(2) ?? '--'}</p>
 										</button>
 									</div>

@@ -1,36 +1,82 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { ShoppingCart, X } from 'lucide-svelte';
+	import { onMount } from 'svelte';
 	import { betslip, betslipCombinedOdds, betslipPotentialReturn } from '$lib/stores/betslip';
 	import Badge from './ui/Badge.svelte';
 	import Button from './ui/Button.svelte';
 
 	let {
-		open = $bindable(false)
+		closeBetslip
 	}: {
-		open?: boolean;
+		closeBetslip: () => void;
 	} = $props();
+
+	let dialog = $state<HTMLDivElement | null>(null);
+	let closeButton = $state<HTMLButtonElement | null>(null);
 
 	const quickStakes = [5, 10, 25, 50, 100];
 
 	async function reviewTicket() {
-		open = false;
+		closeBetslip();
 		await goto('/tickets');
 	}
+
+	function handleKeydown(event: KeyboardEvent) {
+		if (event.key === 'Escape') {
+			event.preventDefault();
+			closeBetslip();
+			return;
+		}
+
+		if (event.key !== 'Tab') return;
+		const focusable = Array.from(
+			dialog?.querySelectorAll<HTMLElement>(
+				'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+			) ?? []
+		);
+		if (focusable.length === 0) return;
+		const first = focusable[0];
+		const last = focusable.at(-1);
+		if (event.shiftKey && document.activeElement === first) {
+			event.preventDefault();
+			last?.focus();
+		} else if (!event.shiftKey && document.activeElement === last) {
+			event.preventDefault();
+			first.focus();
+		}
+	}
+
+	onMount(() => {
+		const previousOverflow = document.body.style.overflow;
+		document.body.style.overflow = 'hidden';
+		closeButton?.focus();
+		return () => {
+			document.body.style.overflow = previousOverflow;
+		};
+	});
 </script>
 
-<div class="flex flex-col bg-card">
+<svelte:window onkeydown={handleKeydown} />
+
+<div
+	bind:this={dialog}
+	role="dialog"
+	aria-modal="true"
+	aria-labelledby="betslip-dialog-title"
+	class="flex flex-col bg-card"
+>
 	<div class="flex items-center justify-between px-4 py-3 border-b border-border">
 		<div class="flex items-center gap-2">
 			<ShoppingCart class="w-4 h-4 text-football-green" />
-			<span class="text-xs font-bold tracking-widest font-sport text-foreground">SLIP DE PARIURI</span>
+			<span id="betslip-dialog-title" class="text-xs font-bold tracking-widest font-sport text-foreground">SLIP DE PARIURI</span>
 			{#if $betslip.legs.length > 0}
 				<Badge variant="success">{$betslip.legs.length}</Badge>
 			{/if}
 		</div>
-		<Button variant="ghost" size="sm" class="min-h-11 min-w-11 p-1 lg:hidden" onclick={() => (open = false)} aria-label="Închide slipul de pariuri">
-			<X class="w-5 h-5 text-muted-foreground" />
-		</Button>
+			<button bind:this={closeButton} type="button" class="touch-target inline-flex min-h-11 min-w-11 items-center justify-center p-1 text-muted-foreground hover:bg-muted hover:text-foreground" onclick={closeBetslip} aria-label="Închide slipul de pariuri">
+				<X class="w-5 h-5 text-muted-foreground" />
+			</button>
 	</div>
 
 	<div class="flex-1 overflow-y-auto scroll-thin">
@@ -131,7 +177,7 @@
 			<Button
 				class="w-full bg-football-green py-3 text-sm font-bold tracking-wider text-primary-foreground hover:bg-football-green/90"
 				onclick={reviewTicket}
-				aria-label="Review Ticket"
+				aria-label="Revizuiește biletul"
 			>
 				REVIZUIEȘTE BILETUL
 			</Button>

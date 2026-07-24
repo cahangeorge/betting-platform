@@ -20,3 +20,25 @@ test('authenticated user can open the dashboard with a real backend session', as
 		await cleanupSessionArtifacts(session);
 	}
 });
+
+test('live websocket connects only after the browser has an authenticated layout', async ({ page, context }) => {
+	const websocketUrls: string[] = [];
+	page.on('websocket', (socket) => websocketUrls.push(socket.url()));
+
+	await page.goto('/about');
+	await expect(
+		page.getByRole('heading', { name: 'Un flux mai clar pentru analiza pariurilor sportive' })
+	).toBeVisible();
+	await page.waitForTimeout(250);
+	expect(websocketUrls.filter((url) => url.includes('/api/v1/live/ws'))).toEqual([]);
+
+	const session = await createAuthenticatedSession(context);
+	try {
+		await page.goto('/');
+		await expect
+			.poll(() => websocketUrls.some((url) => url.includes('/api/v1/live/ws')))
+			.toBe(true);
+	} finally {
+		await cleanupSessionArtifacts(session);
+	}
+});

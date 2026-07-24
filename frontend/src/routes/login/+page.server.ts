@@ -1,7 +1,7 @@
 import type { PageServerLoad, Actions } from './$types';
 import { redirect, fail } from '@sveltejs/kit';
 import { createNoIndexPageMetaTags } from '../../lib/seo/site.ts';
-import { propagateAuthCookies, setAccessTokenFallback } from '$lib/server/auth-cookies';
+import { propagateAuthCookies } from '$lib/server/auth-cookies';
 
 export const load: PageServerLoad = async ({ cookies, url }) => {
 	const token = cookies.get('access_token');
@@ -54,13 +54,12 @@ export const actions: Actions = {
 				return fail(res.status, { error: err.detail || 'Autentificarea a eșuat.', email });
 			}
 
-			const data = await res.json();
-
 			const propagatedAuthCookies = propagateAuthCookies(cookies, res.headers);
-
-			// Fall back to the JSON response body if the runtime did not expose Set-Cookie headers.
-			if (!propagatedAuthCookies && data.access_token) {
-				setAccessTokenFallback(cookies, data.access_token);
+			if (!propagatedAuthCookies) {
+				return fail(502, {
+					error: 'Autentificarea a reușit, dar sesiunea securizată nu a putut fi inițializată. Reîncearcă.',
+					email
+				});
 			}
 		} catch (err) {
 			return fail(502, { error: 'Serviciul de autentificare nu este disponibil. Reîncearcă.', email });

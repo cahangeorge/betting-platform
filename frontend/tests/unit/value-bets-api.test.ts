@@ -34,6 +34,19 @@ test('value bets frontend maps backend betslip eligibility to the canonical tick
 	assert.equal('is_betslip_eligible' in response.items[0], false);
 });
 
+test('legacy value bet arrays fail closed when feed trust and freshness are unavailable', () => {
+	const response = normalizeValueBetFeed([{ ...rawValueBet, is_betslip_eligible: true }]);
+
+	assert.equal(response.source, 'legacy-unverified');
+	assert.equal(response.is_demo, true);
+	assert.equal(response.generated_at, '');
+	assert.equal(response.items[0].is_ticket_eligible, false);
+	assert.equal(response.items[0].source_ok, false);
+	assert.equal(response.items[0].trust?.is_ticket_eligible, false);
+	assert.equal(response.items[0].trust?.source_ok, false);
+	assert.ok(response.items[0].block_reasons?.includes('legacy_feed_missing_trust_and_freshness'));
+});
+
 test('value bets frontend client normalizes trust metadata from the backend feed', async () => {
 	const source = await readFile('src/lib/api/value-bet-normalization.ts', 'utf8');
 
@@ -54,6 +67,7 @@ test('value bets route uses trust metadata to make add-to-betslip locking honest
 	assert.match(source, /bet\.source_ok === false \|\| bet\.trust\?\.source_ok === false/);
 	assert.match(source, /bet\.model_drift_flag \|\| bet\.trust\?\.model_drift_flag/);
 	assert.match(source, /function getBetTrustReasons/);
+	assert.match(source, /Number\.isNaN\(date\.getTime\(\)\)\) return 'unknown'/);
 	assert.match(source, /Betslip ready: \{trustReadyCount\}\/\{filteredBets\.length\}/);
 	assert.match(source, /BetslipReviewCallout label=\{betslipReviewLabel\}/);
 	assert.match(source, /bet\.quality_reasons\.map\(formatTrustReason\)\.join\(' · '\)/);

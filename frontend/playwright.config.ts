@@ -57,7 +57,7 @@ export default defineConfig({
 	fullyParallel: false,
 	forbidOnly: !!process.env.CI,
 	workers: 1,
-	retries: isLiveMode ? 0 : 1,
+	retries: 0,
 	timeout: isLiveMode ? 180_000 : 90_000,
 	expect: {
 		timeout: 10_000
@@ -117,6 +117,20 @@ export default defineConfig({
 			grep: /@live/,
 			use: {
 				browserName: 'chromium'
+			}
+		},
+		{
+			name: 'firefox-hybrid-smoke',
+			testMatch: /hybrid\/cross-browser-smoke\.spec\.(t|j)s$/,
+			use: {
+				browserName: 'firefox'
+			}
+		},
+		{
+			name: 'webkit-hybrid-smoke',
+			testMatch: /hybrid\/cross-browser-smoke\.spec\.(t|j)s$/,
+			use: {
+				browserName: 'webkit'
 			}
 		}
 	]

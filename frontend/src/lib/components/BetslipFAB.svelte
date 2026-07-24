@@ -6,19 +6,19 @@
 	let {
 		onclick
 	}: {
-		onclick?: () => void;
+		onclick?: (event: MouseEvent) => void;
 	} = $props();
 </script>
 
 <button
 	class={cn(
-		'mobile-above-nav touch-target fixed right-4 z-40 flex h-14 w-14 items-center justify-center shadow-lg lg:bottom-6 lg:right-6 lg:h-12 lg:w-auto lg:gap-2 lg:px-4',
+		'bottom-[calc(var(--mobile-nav-height)+var(--mobile-floating-gap)+5.5rem)] touch-target fixed right-4 z-40 flex h-14 w-14 items-center justify-center shadow-lg lg:bottom-6 lg:right-6 lg:h-12 lg:w-auto lg:gap-2 lg:px-4',
 		'bg-football-green text-primary-foreground',
 		'active:scale-95 transition-transform duration-150',
 		'backdrop-blur-xl border border-football-green/30'
 	)}
 	onclick={onclick}
-	aria-label="Review Ticket"
+	aria-label="Revizuiește biletul"
 >
 	<ShoppingCart class="w-6 h-6" />
 		<span class="hidden text-sm font-semibold lg:inline">Revizuiește biletul</span>

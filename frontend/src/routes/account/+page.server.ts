@@ -1,4 +1,5 @@
 import type { PageServerLoad } from './$types';
+import { env } from '$env/dynamic/private';
 import { redirect } from '@sveltejs/kit';
 import { createBackendPageLoader, summarizeBackendLoad } from '$lib/server/backend-load';
 import type { Bankroll, BookmakerAccount, LedgerEntry, TradingAccount } from '$lib/types';
@@ -10,6 +11,7 @@ export const load: PageServerLoad = async ({ cookies, fetch }) => {
 	}
 
 	const apiBase = process.env.BET_API_URL || 'http://localhost:8001';
+	const paperTradingEnabled = env.BET_TRADING_PAPER_ENABLED === 'true';
 	const { fetchJson } = createBackendPageLoader(apiBase, token, fetch);
 	const bankrollsResult = await fetchJson<Bankroll[]>('/bankroll', [], 'bankrolls');
 	const primaryBankrollId = bankrollsResult.data[0]?.id;
@@ -23,13 +25,16 @@ export const load: PageServerLoad = async ({ cookies, fetch }) => {
 				{ data: [] as BookmakerAccount[], ok: true, endpointLabel: 'bookmaker accounts' },
 				{ data: [] as LedgerEntry[], ok: true, endpointLabel: 'ledger' }
 			];
-	const tradingAccountsResult = await fetchJson<TradingAccount[]>('/trading/accounts', [], 'paper trading accounts');
+	const tradingAccountsResult = paperTradingEnabled
+		? await fetchJson<TradingAccount[]>('/trading/accounts', [], 'paper trading accounts')
+		: { data: [] as TradingAccount[], ok: true, endpointLabel: 'paper trading accounts' };
 
 	return {
 		bankrolls: bankrollsResult.data,
 		accounts: accountsResult.data,
 		ledger: ledgerResult.data,
 		tradingAccounts: tradingAccountsResult.data,
+		paperTradingEnabled,
 		backendStatus: summarizeBackendLoad([bankrollsResult, accountsResult, ledgerResult, tradingAccountsResult])
 	};
 };
