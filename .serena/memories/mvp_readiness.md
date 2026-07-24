@@ -14,11 +14,11 @@ Treat fresh checkout and CI state as authoritative over this snapshot.
 ## Current checkout and GitHub state
 
 - Local branch: `agent/release-ruff-gate-2026-07-24`.
-- Code HEAD before the documentation refresh: `1131157` (`fix(ci): install Ruff in backend dev extras`), synchronized with origin.
+- Implementation commit `1131157` (`fix(ci): install Ruff in backend dev extras`) is followed by the committed documentation/Serena handoff on the same synchronized branch. Read the current PR head from Git rather than relying on a documentation-commit SHA.
 - Tracked nested projects remain clean/unchanged: OddsHarvester `6046613`, penaltyblog `dd81473`, soccerdata `6d0ccab`.
 - PR #7 merged the complete MVP candidate into `main` at signed merge commit `881a436971d28ef1736bf8c74894a0f9124ade83`.
 - Post-merge exact-SHA runs passed: Backend `30084042800`, Frontend `30084042748`, Security `30084042782`.
-- PR #8 is open and mergeable against `main` from commit `1131157`. Backend, Frontend, and Security are green; Hybrid E2E run `30084630886` was IN_PROGRESS when this checkpoint was saved.
+- PR #8 is open against `main` and contains implementation commit `1131157` plus the durable handoff. Before the handoff push, Backend, Frontend, and Security were green and Hybrid E2E run `30084630886` was in progress. The push restarts applicable checks; inspect fresh PR state next session.
 
 ## Release controls and evidence
 

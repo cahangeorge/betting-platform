@@ -5,10 +5,11 @@ Repository/branch: `/home/gion/Projects/bet` / `agent/release-ruff-gate-2026-07-
 Dirty state at this handoff refresh:
 
 ```text
-Commit 1131157 is synchronized with
-origin/agent/release-ruff-gate-2026-07-24. The working tree contained only this
-intentional documentation/continuity refresh when the checkpoint was written.
-No reset, clean, history rewrite, or submodule mutation was performed.
+The branch is synchronized with
+origin/agent/release-ruff-gate-2026-07-24 and contains implementation commit
+1131157 followed by the committed documentation/Serena handoff. The working
+tree was clean before this final wording update. No reset, clean, history
+rewrite, or submodule mutation was performed.
 ```
 
 This is the first status document to read in a new coding session. Re-run
@@ -80,9 +81,10 @@ This is the authoritative continuation point for the next session:
   editable `.[dev]` install, Ruff, **532/532** pytest, and `git diff --check`.
 - PR
   [#8](https://github.com/cahangeorge/betting-platform/pull/8) is open against
-  `main`, mergeable, and contained only the dependency declaration at the
-  moment of this checkpoint. Backend, Frontend, and Security were green;
-  Hybrid E2E run `30084630886` was still in progress when status was saved.
+  `main` and contains the dependency declaration plus this durable handoff.
+  Before the handoff push, Backend, Frontend, and Security were green and
+  Hybrid E2E run `30084630886` was in progress. The handoff push restarts the
+  applicable PR checks; inspect the current PR head and checks next session.
 - Independent required deployment review is still unavailable because the
   repository currently has only collaborator `cahangeorge`. The environment
   therefore has tag restriction but no second-person reviewer gate.

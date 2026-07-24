@@ -24,8 +24,8 @@
 - PR #7 merged the verified platform candidate into `main` as signed commit `881a436`; post-merge Backend, Frontend, and Security runs passed.
 - GitHub environment `registry-release` and `v*` tag-only policy exist. Active `Protect release tags` ruleset prevents update/deletion and requires verified commits. A second independent reviewer is not configured because only collaborator `cahangeorge` exists.
 - Evidence-only release run `30084295728` found `ruff: command not found`; no build/package/publish occurred.
-- Fix branch `agent/release-ruff-gate-2026-07-24`, commit `1131157`, declares Ruff in `backend[dev]`. Local editable install, Ruff, and **532/532** backend tests passed.
-- PR #8 is open/mergeable; Backend, Frontend, and Security were green and Hybrid run `30084630886` was in progress at checkpoint time.
+- Fix branch `agent/release-ruff-gate-2026-07-24` contains implementation commit `1131157` plus the committed durable handoff. Ruff is declared in `backend[dev]`; local editable install, Ruff, and **532/532** backend tests passed.
+- PR #8 is open. Before the handoff push, Backend, Frontend, and Security were green and Hybrid run `30084630886` was in progress; the push restarts applicable checks, so inspect fresh PR state.
 - No RC tag and no GHCR release artifact exist. Exact tag/destination approval is still required before publishing `v0.1.0-rc.20260724.1` to GHCR.
 - Stable evidence: frontend check 0 diagnostics, unit 121/121, Chromium hybrid 56/56, PWA 3/3, Firefox 1/1, WebKit 1/1 official container; root release/security contracts 21/21; Alembic 025/no drift; nested projects unchanged.
 - Latest compressed whole-workspace Repomix pack: `7fb2a326972893e0`, 1,154 files / 2,470,226 tokens / 138,612 lines.
