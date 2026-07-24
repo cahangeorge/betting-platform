@@ -1,14 +1,15 @@
 # Current Platform Status
 
-Updated: 2026-07-24T12:33:56+03:00
-Repository/branch: `/home/gion/Projects/bet` / `agent/demo-tickets-2026-07-17`
+Updated: 2026-07-24T13:03:01+03:00
+Repository/branch: `/home/gion/Projects/bet` / `agent/release-ruff-gate-2026-07-24`
 Dirty state at this handoff refresh:
 
 ```text
-Published branch candidate d20c583 is synchronized with
-origin/agent/demo-tickets-2026-07-17. The working tree was clean immediately
-before this documentation refresh. No reset, clean, checkout, history rewrite,
-or submodule mutation was performed.
+The branch is synchronized with
+origin/agent/release-ruff-gate-2026-07-24 and contains implementation commit
+1131157 followed by the committed documentation/Serena handoff. The working
+tree was clean before this final wording update. No reset, clean, history
+rewrite, or submodule mutation was performed.
 ```
 
 This is the first status document to read in a new coding session. Re-run
@@ -46,6 +47,65 @@ Current program state:
   [`2026-07-23-exclude-paper-execution-from-mvp.md`](../adr/2026-07-23-exclude-paper-execution-from-mvp.md).
 - Verdict: **clean local release-candidate validation GO; public release/MVP
   launch HOLD pending external evidence**.
+
+## 2026-07-24 main integration and release-gate checkpoint
+
+This is the authoritative continuation point for the next session:
+
+- PR
+  [#7](https://github.com/cahangeorge/betting-platform/pull/7) was retargeted
+  to `main`, marked ready, and merged at `2026-07-24T09:50:40Z`.
+  `origin/main` is merge commit `881a436971d28ef1736bf8c74894a0f9124ade83`;
+  the commit has a valid GitHub signature.
+- Post-merge `main` runs on exact SHA `881a436` passed:
+  Backend `30084042800`, Frontend `30084042748`, and Security `30084042782`.
+- GitHub environment `registry-release` now exists. Its custom deployment
+  policy allows only tag pattern `v*`. Active repository ruleset
+  `Protect release tags` (`19677671`) prevents update/deletion of matching
+  release tags and requires verified commit signatures.
+- No release tag exists and no GHCR release image was published. The attempted
+  local tag command was rejected before execution by the external-egress safety
+  gate because publishing the exact RC payload needs a new explicit
+  confirmation.
+- Evidence-only release run
+  [30084295728](https://github.com/cahangeorge/betting-platform/actions/runs/30084295728)
+  started correctly on `881a436`, passed checkout, toolchain, dependency-lock,
+  Chromium, and Alembic steps, then failed at `Backend static and test gates`
+  with exit `127`: `ruff: command not found`. Build/package/publish jobs were
+  skipped; nothing was published.
+- Root cause: `.github/workflows/release.yml` correctly installs
+  `backend[dev]` and then calls Ruff, but `backend/pyproject.toml` did not
+  declare Ruff in the `dev` extra.
+- Fix commit `1131157` adds `ruff>=0.15.17,<0.16` to the backend `dev` extra on
+  branch `agent/release-ruff-gate-2026-07-24`. Local verification passed:
+  editable `.[dev]` install, Ruff, **532/532** pytest, and `git diff --check`.
+- PR
+  [#8](https://github.com/cahangeorge/betting-platform/pull/8) is open against
+  `main` and contains the dependency declaration plus this durable handoff.
+  Before the handoff push, Backend, Frontend, and Security were green and
+  Hybrid E2E run `30084630886` was in progress. The handoff push restarts the
+  applicable PR checks; inspect the current PR head and checks next session.
+- Independent required deployment review is still unavailable because the
+  repository currently has only collaborator `cahangeorge`. The environment
+  therefore has tag restriction but no second-person reviewer gate.
+
+Exact continuation order:
+
+1. Re-run `git status --short --branch`, then inspect PR #8 and Hybrid E2E run
+   `30084630886`.
+2. If every PR #8 check is green, merge PR #8 into `main`.
+3. Run `Release Build and Evidence` with `workflow_dispatch` on the new `main`
+   and require complete `verify-source` plus `build-scan-and-package` success.
+   `publish-signed-images` must remain skipped in this evidence-only run.
+4. Ask for explicit approval naming the exact tag and destination:
+   `v0.1.0-rc.20260724.1` → GitHub Container Registry for
+   `cahangeorge/betting-platform`. Do not push the tag without that approval.
+5. After approval, tag the newly verified `main` SHA, watch the protected
+   release workflow, verify all three GHCR digests, Cosign signatures, GitHub
+   attestations, and non-overwrite evidence.
+6. Keep public MVP launch **HOLD** until protected staging, secrets/TLS/DNS,
+   off-host restore, observability/on-call, soak/canary, rollback, and any
+   applicable compliance gates are evidenced.
 
 ## 2026-07-24 published CI-remediation candidate
 
@@ -568,14 +628,18 @@ verification is recorded in the remediation update above.
 
 ## Exact next step
 
-Configure and verify protected `registry-release` environment/tag/package
-controls for `d20c583`, then run one explicitly authorized disposable signed
-GHCR tag. Deploy only verified digest-pinned images to protected staging. Keep
-public release/MVP launch **HOLD** until
-external credential rotation, secret-manager, DNS/TLS/firewall, off-host
-backup storage and restore, staging two-user scrape-to-settlement evidence,
-observability/on-call/soak/canary, and protected CI build/publish/pull evidence
-are recorded.
+Inspect PR #8 and Hybrid E2E run `30084630886`; merge only after every check is
+green. Rerun evidence-only `Release Build and Evidence` on the resulting
+`main`, requiring successful source verification and build/scan/package.
+Only after that run passes and the user explicitly approves exact tag
+`v0.1.0-rc.20260724.1` publishing to GHCR for
+`cahangeorge/betting-platform`, push the tag and verify registry digests,
+Cosign signatures, GitHub attestations, and overwrite protection. Deploy only
+verified digest-pinned images to protected staging. Keep public release/MVP
+launch **HOLD** until external credential rotation, secret-manager,
+DNS/TLS/firewall, off-host backup storage and restore, staging two-user
+scrape-to-settlement evidence, observability/on-call/soak/canary, and protected
+CI build/publish/pull evidence are recorded.
 
 ## Historical platform snapshot
 

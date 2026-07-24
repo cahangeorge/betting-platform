@@ -3,29 +3,33 @@
 ## Source of truth
 
 - Repository: `/home/gion/Projects/bet`.
-- Read `AGENTS.md`, then `docs/status/current-platform-status.md`, `docs/status/mvp-readiness-program.md`, and `docs/status/release-candidate-reconciliation.md` at every new release-readiness session.
-- Treat checkout files, Git state, and fresh verification as authoritative over memories.
-- Current platform is `frontend/` (SvelteKit/Svelte 5) plus `backend/` (FastAPI/PostgreSQL). `betfront/` and `frontbet/` are legacy; `OddsHarvester/`, `penaltyblog/`, and `soccerdata/` are nested projects and must not be mutated implicitly.
+- Every new session starts with `git status --short --branch`, `git submodule status`, `AGENTS.md`, then `docs/status/current-platform-status.md`.
+- Phase/task detail: `docs/status/mvp-readiness-program.md`.
+- Integration history: `docs/status/release-candidate-reconciliation.md`.
+- Detailed current checkpoint: `mem:mvp_readiness`.
+- Treat checkout files, Git state, and fresh CI/runtime verification as authoritative over memory snapshots.
+- Current platform is `frontend/` SvelteKit/Svelte 5 plus `backend/` FastAPI/PostgreSQL. Do not modify archived `betfront/`/`frontbet/` or tracked nested `OddsHarvester/`, `penaltyblog/`, `soccerdata/` unless explicitly scoped.
 
 ## Runtime contract
 
 - Frontend dev: `http://127.0.0.1:5175`.
 - Backend dev: `http://127.0.0.1:8001`; health `/health`; readiness `/ready` and `/api/v1/ready`.
-- Local Bet infrastructure uses PostgreSQL `127.0.0.1:5433` and Redis `127.0.0.1:6380`; do not let API/worker/scheduler fall back to another project's Redis on `6379`.
-- Current database schema head: Alembic `025`.
-- Durable task runtime uses Taskiq/Redis and explicit canonical task names.
+- Bet local infrastructure: PostgreSQL `127.0.0.1:5433`, Redis `127.0.0.1:6380`; avoid fallback to another project's Redis on 6379.
+- Current database schema: Alembic `025`.
 
-## Current release posture — 2026-07-24
+## Current release posture — 2026-07-24 13:03 EEST
 
-- Local development validation: GO.
-- Public Internet MVP: HOLD until the external deployment gates in the canonical status documents are closed.
-- Current dirty state at the latest refresh: 105 tracked-change status entries and 59 untracked status entries representing 72 untracked files. Preserve it; do not reset, clean, bulk checkout, stage, commit, push, or mutate submodules without explicit owner scope.
-- Fresh evidence: backend Ruff + 530 pytest; frontend Svelte check 0 diagnostics, 32 unit files/121 cases, E2E typecheck/build; final current-files Chromium complete 56/56 with one worker and retries=0; final adjusted specs 2/2; PWA 3/3; Firefox 1/1; WebKit 1/1 in the official Playwright container; root release/scanner contracts 20/20; final application, release-hardening, and signed-registry reviews Critical 0 / High 0 / Medium 0 — APPROVE.
-- Dev stack is live on 8001/5175 with DB/schema/task_queue/task_runtime ready. Taskiq worker/scheduler smoke, provider canary, and a non-destructive Alembic-025 PostgreSQL restore drill passed.
-- Local production images now have direct runtime proof. Frontend `localhost/bet-frontend:mvp-validation-20260724` built and returned HTTP 200 as UID 1001. Backend `localhost/bet-backend:mvp-validation-20260724` built the 204-package strict lock, ran as UID 1001, imported FastAPI, and launched bundled Chromium. Nginx build/config proof is green. Explicit host mappings worked around rootless Podman container DNS without changing Dockerfiles. These dirty-checkout local images are not release identities.
-- Codebase Memory `bet-core` moderate index: 5,237 nodes / 19,762 edges, actual=expected, status indexed.
-- Repomix latest snapshots: compressed whole workspace `59a58de9391eb430` (1,153 files / 2,467,034 tokens); active platform/release `233d99f089e79988` (556 files / 788,286 tokens).
+- Local development/release-candidate validation: GO.
+- Public MVP launch: HOLD until protected release plus staging/production operational gates are evidenced.
+- PR #7 merged the verified platform candidate into `main` as signed commit `881a436`; post-merge Backend, Frontend, and Security runs passed.
+- GitHub environment `registry-release` and `v*` tag-only policy exist. Active `Protect release tags` ruleset prevents update/deletion and requires verified commits. A second independent reviewer is not configured because only collaborator `cahangeorge` exists.
+- Evidence-only release run `30084295728` found `ruff: command not found`; no build/package/publish occurred.
+- Fix branch `agent/release-ruff-gate-2026-07-24` contains implementation commit `1131157` plus the committed durable handoff. Ruff is declared in `backend[dev]`; local editable install, Ruff, and **532/532** backend tests passed.
+- PR #8 is open. Before the handoff push, Backend, Frontend, and Security were green and Hybrid run `30084630886` was in progress; the push restarts applicable checks, so inspect fresh PR state.
+- No RC tag and no GHCR release artifact exist. Exact tag/destination approval is still required before publishing `v0.1.0-rc.20260724.1` to GHCR.
+- Stable evidence: frontend check 0 diagnostics, unit 121/121, Chromium hybrid 56/56, PWA 3/3, Firefox 1/1, WebKit 1/1 official container; root release/security contracts 21/21; Alembic 025/no drift; nested projects unchanged.
+- Latest compressed whole-workspace Repomix pack: `7fb2a326972893e0`, 1,154 files / 2,470,226 tokens / 138,612 lines.
 
 ## Exact next step
 
-Follow `docs/status/release-candidate-reconciliation.md` under explicit owner approval to produce a clean reviewed integration revision. Then configure protected GitHub/GHCR controls, run one disposable signed tag proving exact scanned-image digest continuity, deploy those digest-pinned images to protected staging, and collect two-user lifecycle, off-host restore, observability, 48–72 hour soak, canary and rollback evidence before public launch.
+Inspect PR #8 and Hybrid run `30084630886`; merge only when every check is green. Rerun evidence-only `Release Build and Evidence` on the new `main`. After it passes, obtain explicit approval naming exact tag `v0.1.0-rc.20260724.1` and GHCR destination `cahangeorge/betting-platform`; only then publish and verify digests, Cosign signatures, GitHub attestations, and overwrite refusal. Protected staging/restore/observability/soak/canary/rollback remain required before public MVP GO.

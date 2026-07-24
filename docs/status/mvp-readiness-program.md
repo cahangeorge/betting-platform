@@ -65,7 +65,7 @@ The program can be marked **MVP GO** only when:
 | `flumine/` | EXCLUDED | post-MVP paper execution | accepted ADR excludes paper execution from public MVP |
 | PWA | LOCAL GATES GREEN | installable shell | production HTTPS offline/recovery/update suite passed; installed-device lifecycle remains |
 | Mobile/desktop design | LOCAL GATES GREEN | operator UI | 320–1920 plus landscape/safe-area/touch/forced-colors browser gates passed; hardware/manual zoom remains |
-| DevOps/release | LOCAL CONTRACT GREEN / RELEASE HOLD | deployment | signed GHCR workflow implemented; protected tag run, secrets, public TLS, off-host backup, monitoring and canary remain |
+| DevOps/release | MAIN INTEGRATED / RELEASE FIX IN PR | deployment | protected environment/tag controls exist; PR #8 fixes the release-only Ruff install gate; signed tag, secrets, public TLS, off-host backup, monitoring and canary remain |
 | QA | LOCAL GATES GREEN / STAGING HOLD | release evidence | real protected two-user staging lifecycle is absent |
 | `betfront/` | ARCHIVED/DIRTY | none | preserve; do not include in current MVP |
 
@@ -73,8 +73,10 @@ Tracked submodules were clean at program start and remain unchanged. The
 formerly dirty parent checkout was reconciled into clean candidate
 `40352aed38f98600a621954c67c82b600faab223`, then runner-only CI findings were
 remediated in local candidate `3543ebb`, without reset, clean, or history
-rewrite. Follow-up `d20c583` removed two CI timing races and is published with
-all five branch workflows green.
+rewrite. Follow-up `d20c583` removed two CI timing races and was published with
+all five branch workflows green. PR #7 was subsequently merged into `main` as
+`881a436`. The first evidence-only release run found that Ruff was absent from
+the declared backend `dev` extra; fix `1131157` is open in PR #8.
 
 ## Verified refresh — 2026-07-24
 
@@ -354,13 +356,15 @@ leak, duplicate financial mutation, stale queue state, or unexplained fixture.
 
 ### Phase 5 — release candidate and MVP decision
 
-Status: **IN PROGRESS — local review/synchronization complete; blocked on clean
-integrated revision and external gates**
+Status: **IN PROGRESS — main integration complete; release workflow dependency
+fix is open in PR #8; signed tag and external gates remain**
 
-- [ ] Clean/reconciled Git revision and pinned nested dependencies.
+- [x] Clean/reconciled Git revision and pinned nested dependencies — PR #7
+      merged as signed `main` commit `881a436`; tracked submodules unchanged.
 - [ ] Actual protected immutable build/publish run with
       security/dependency/container scans, signed digests, and attestations;
-      repository workflow/contracts are implemented.
+      repository workflow/contracts are implemented, environment/tag controls
+      exist, and PR #8 must first close the discovered Ruff install gate.
 - [x] Independent local code review and architecture invariant review; final
       verdict Critical 0 / High 0 / Medium 0 — APPROVE.
 - [ ] Staging soak for at least 48–72 hours.
@@ -463,12 +467,15 @@ placement must remain disabled.
 
 ## Immediate execution order
 
-1. Configure/verify the protected `registry-release` environment/tag rules/package
-   access and run one disposable signed GHCR release tag from that revision.
-2. Execute protected staging lifecycle/two-user, off-host backup/restore,
+1. Finish PR #8, merge it to `main`, and rerun the evidence-only release
+   workflow until `verify-source` and `build-scan-and-package` both pass.
+2. Obtain explicit approval for exact tag
+   `v0.1.0-rc.20260724.1` and GHCR destination, then execute and verify the
+   protected signed release. The environment and `v*` policies already exist.
+3. Execute protected staging lifecycle/two-user, off-host backup/restore,
    observability/soak/canary, secret-manager, and digest-pinned deployment
    evidence.
-3. Re-evaluate the release/MVP launch HOLD verdict.
+4. Re-evaluate the release/MVP launch HOLD verdict.
 
 ## Current blockers and unknowns
 
@@ -479,16 +486,22 @@ placement must remain disabled.
   outside the repository and remains an external launch gate if applicable.
 - Paper execution is excluded from MVP by accepted ADR
   `2026-07-23-exclude-paper-execution-from-mvp.md`.
-- Published branch candidate `d20c583` has all five branch workflows green;
-  protected tag build/publish/pull evidence remains open.
+- PR #7 merged the verified candidate into `main` as `881a436`; Backend,
+  Frontend, and Security post-merge runs are green.
+- Evidence-only release run `30084295728` failed because Ruff was not declared
+  by `backend[dev]`. Fix `1131157` is open in PR #8; local editable install,
+  Ruff, and 532/532 backend tests passed.
+- No `v0.1.0-rc.20260724.*` tag and no GHCR release artifact exist yet.
 - GitHub currently lists only collaborator `cahangeorge`; a genuinely
   independent required reviewer for `registry-release` cannot be configured
   until another trusted reviewer is added.
 
 ## Exact next step
 
-Configure/verify the protected GitHub release controls, run one disposable
-signed GHCR tag from `d20c583`, then run the protected
-staging lifecycle against its digest-pinned images. Keep public release/MVP
-launch HOLD until the external release gates in the verification refresh are
+Inspect PR #8 / Hybrid run `30084630886`; merge only when all checks are green.
+Then rerun `Release Build and Evidence` with `workflow_dispatch` on the new
+`main`. Only after that evidence-only run is green and the user explicitly
+approves exact tag `v0.1.0-rc.20260724.1` publishing to GHCR, push the protected
+tag and verify signatures/attestations/digests. Keep public release/MVP launch
+HOLD until the external release gates in the verification refresh are
 evidenced.

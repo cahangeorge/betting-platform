@@ -1,8 +1,8 @@
 # Release Candidate Reconciliation Plan
 
-Updated: 2026-07-24T10:52:26+03:00
-Branch: `agent/demo-tickets-2026-07-17`
-Status: **LOCAL INTEGRATION COMPLETE; PUSH/PROTECTED RELEASE EVIDENCE IN PROGRESS**
+Updated: 2026-07-24T13:03:01+03:00
+Branch: `agent/release-ruff-gate-2026-07-24`
+Status: **MAIN INTEGRATION COMPLETE; RELEASE-ONLY RUFF FIX OPEN IN PR #8**
 
 This plan converted the intentionally dirty, locally verified MVP checkout into
 a reviewable release-candidate revision without losing existing work. The owner
@@ -18,6 +18,32 @@ branch. The three tracked nested projects remain clean and unchanged:
 - `OddsHarvester`: `6046613805667b8d7287f7a925f937b9f0dbfde5`
 - `penaltyblog`: `dd81473a40f29ddcf62a85c006cd28e6d83acd80`
 - `soccerdata`: `6d0ccabcdfca3b670e130f5639721335df82a7a3`
+
+## Actual integration and release history
+
+The recommended sequence below was executed, then hardened through CI:
+
+1. `4b123b4` — backend MVP/runtime/tenancy slice.
+2. `34a952a` — frontend workflow, responsive UX, and PWA slice.
+3. `ddf0dfd` — production/release supply-chain slice.
+4. `6c4394e` — durable documentation and handoff slice.
+5. `40352ae` — isolated backend Ruff formatting.
+6. `3543ebb` — first CI/first-deploy remediation.
+7. `d20c583` — hybrid timing-race remediation.
+8. `31eb4bb` — final green branch checkpoint.
+9. PR #7 merged the complete candidate into `main` as signed merge commit
+   `881a436`; post-merge Backend, Frontend, and Security runs passed.
+10. `registry-release` and its tag-only `v*` deployment policy were created.
+    Active ruleset `Protect release tags` now prevents release-tag mutation or
+    deletion and requires verified commit signatures.
+11. Evidence-only release run `30084295728` exposed one undeclared tool:
+    `ruff: command not found` after successful checkout/toolchain/lock/Chromium/
+    Alembic setup. No build/package/publish job ran.
+12. Fix `1131157` declares Ruff in `backend[dev]`; local install, Ruff and all
+    **532** backend tests passed. PR #8 is open and its Hybrid E2E gate was
+    still running when this checkpoint was recorded.
+
+No release tag or GHCR release artifact exists at this checkpoint.
 
 ## Integration invariants
 
@@ -157,10 +183,11 @@ Completed local evidence:
 
 Remaining external sequence:
 
-1. push the review branch and inspect all GitHub checks;
-2. configure/verify the protected `registry-release` environment and execute
-   one disposable `v*` tag;
-3. deploy only the verified registry digests to protected staging.
+1. finish and merge PR #8 after every check passes;
+2. rerun evidence-only `Release Build and Evidence` on the new `main`;
+3. obtain explicit approval for tag `v0.1.0-rc.20260724.1` publishing to GHCR;
+4. run and verify the protected tag workflow, then deploy only its verified
+   registry digests to protected staging.
 
 ## External follow-on
 
