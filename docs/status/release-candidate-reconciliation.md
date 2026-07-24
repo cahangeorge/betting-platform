@@ -1,8 +1,8 @@
 # Release Candidate Reconciliation Plan
 
-Updated: 2026-07-24T13:03:01+03:00
-Branch: `agent/release-ruff-gate-2026-07-24`
-Status: **MAIN INTEGRATION COMPLETE; RELEASE-ONLY RUFF FIX OPEN IN PR #8**
+Updated: 2026-07-24T22:33:40+03:00
+Branch: `agent/trivy-risk-policy`
+Status: **PR #8-#10 MERGED; CONTAINER POLICY ACCEPTED; GATE PATCH CANDIDATE**
 
 This plan converted the intentionally dirty, locally verified MVP checkout into
 a reviewable release-candidate revision without losing existing work. The owner
@@ -40,8 +40,19 @@ The recommended sequence below was executed, then hardened through CI:
     `ruff: command not found` after successful checkout/toolchain/lock/Chromium/
     Alembic setup. No build/package/publish job ran.
 12. Fix `1131157` declares Ruff in `backend[dev]`; local install, Ruff and all
-    **532** backend tests passed. PR #8 is open and its Hybrid E2E gate was
-    still running when this checkpoint was recorded.
+    **532** backend tests passed. PR #8 merged as `c502200`.
+13. PR #9 merged portable OddsHarvester release setup, exact scrape-dataset
+    lineage, deduplication preservation, and browser timing fixes as `167aafb`.
+14. Evidence run `30114826097` then found the unfixed `ecdsa` vulnerability
+    inherited through `python-jose`; PR #10 replaced that HS256-only dependency
+    with PyJWT and merged as current `main` `3930d0e`.
+15. Evidence run `30116510025` passed the complete source gate, image builds,
+    and runtime smoke, then found 115 High/Critical OS findings without an
+    available fixed version. The current local patch preserves full JSON
+    reports, blocks every fixable High/Critical finding, fails closed on missing
+    evidence, and leaves unfixed risk behind explicit owner review under an
+    Accepted ADR; acceptance does not authorize a tag, registry publication,
+    deployment, or public launch.
 
 No release tag or GHCR release artifact exists at this checkpoint.
 
