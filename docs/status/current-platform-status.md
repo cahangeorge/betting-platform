@@ -1,21 +1,15 @@
 # Current Platform Status
 
-Updated: 2026-07-24T23:52:29+03:00
-Repository/branch: `/home/gion/Projects/bet` / `agent/trivy-gate-pr`
+Updated: 2026-07-25T00:19:14+03:00
+Repository/branch: `/home/gion/Projects/bet` / `agent/post-merge-trivy-status-2026-07-24`
 Dirty state at this handoff refresh:
 
 ```text
-The branch was created cleanly from current `origin/main` (`3930d0e`). Its
-candidate contains exactly 14 intended release-audit, runtime-remediation, and
-handoff paths: the workflow, gate script, three test files, accepted ADR, three
-canonical status documents, frontend runtime/dependency files, and both nginx
-Dockerfiles. The previous pre-sync tracked modifications remain
-preserved reversibly in the stash named
-`pre-main-sync-mvp-audit-2026-07-24`; they were superseded by the more complete
-PR #9 implementation already on `main`. Playwright result metadata is not part
-of the intended diff. The three tracked submodules are clean and unchanged. No
-tag, GHCR publication, deployment, reset, clean, or submodule mutation
-occurred.
+PR #11 is merged in current `origin/main` at `e2ea635`. This branch was created
+cleanly from that revision and changes only the three canonical status
+documents. The pre-existing reconciliation stashes remain preserved. The three
+tracked submodules are clean and unchanged. No tag, GHCR publication,
+deployment, reset, clean, or submodule mutation occurred.
 ```
 
 This is the first status document to read in a new coding session. Re-run
@@ -49,19 +43,21 @@ Current program state:
   and strict fail-closed gate verified in CI; external release gates pending**.
 - Phase 3 product/UX: **local implemented scope and browser/PWA gates green**.
 - Phase 4 adversarial QA/staging: **local and branch E2E gates green; protected staging and external operations evidence pending**.
-- Phase 5 release candidate: **PR #8 through #10 merged; PR #11 is review-clear
-  and fully green; merge/main evidence, exact backend residual-risk review,
-  protected release, and external staging gates pending**.
+- Phase 5 release candidate: **PR #8 through #11 merged; exact main evidence is
+  green; backend residual-risk review, protected release, and external staging
+  gates pending**.
 - Paper execution: **excluded from public MVP** by accepted ADR
   [`2026-07-23-exclude-paper-execution-from-mvp.md`](../adr/2026-07-23-exclude-paper-execution-from-mvp.md).
-- Verdict: **local application/runtime validation GO; container-risk evidence
-  policy accepted; public MVP launch HOLD pending CI and external evidence**.
+- Verdict: **local application/runtime and merged-main release evidence GO;
+  container-risk evidence policy accepted; public MVP launch HOLD pending
+  pre-tag risk review and external evidence**.
 
 ## 2026-07-24 final evidence and container-risk checkpoint
 
 This section supersedes the older PR #8 continuation instructions below.
 
-- Current remote `main` is `3930d0ebdf73cb58a0f7b30aaed0ec64e6e7fb3b`.
+- The pre-PR #11 `main` baseline was
+  `3930d0ebdf73cb58a0f7b30aaed0ec64e6e7fb3b`.
   PR #8 (Ruff declaration), PR #9 (portable OddsHarvester release runtime,
   scrape-dataset lineage and browser timing fixes), and PR #10 (replace
   vulnerable `python-jose`/`ecdsa` with PyJWT) are merged.
@@ -99,10 +95,9 @@ This section supersedes the older PR #8 continuation instructions below.
   fixed versions. The local Trivy binary checksum passed, but its database
   resolver could not reach the registry from this host; the authoritative
   clean-revision proof therefore came from CI run `30123023608` below.
-- PR [#11](https://github.com/cahangeorge/betting-platform/pull/11) is open
-  from `agent/trivy-gate-pr` at audited image-remediation SHA `cc0645c`. Its
-  Backend, Frontend, Security, and Hybrid E2E checks all passed; Hybrid passed
-  in **6m23s**.
+- PR [#11](https://github.com/cahangeorge/betting-platform/pull/11) merged on
+  2026-07-24 at final docs head `5dafac8` as main merge commit `e2ea635`. Its
+  Backend, Frontend, Security, and Hybrid E2E checks all passed.
 - Evidence-only run
   [30123023608](https://github.com/cahangeorge/betting-platform/actions/runs/30123023608)
   passed `verify-source` and `build-scan-and-package`. It built, runtime-smoked,
@@ -129,6 +124,15 @@ This section supersedes the older PR #8 continuation instructions below.
   High / 19 Critical**) with no fixed version, frontend **0**, nginx **0**, and
   **0 fixable** findings. Three CycloneDX SBOMs and both evidence artifacts
   were uploaded; `publish-signed-images` was skipped.
+- Post-merge Backend, Frontend, and Security runs passed on exact main
+  `e2ea6355a0dad284cdb0dccdcaf8430cebbc1a6c`. Main evidence-only run
+  [30126304645](https://github.com/cahangeorge/betting-platform/actions/runs/30126304645)
+  passed `verify-source` (**7m50s**) and `build-scan-and-package` (**5m22s**).
+  Its exact downloaded reports contain backend **115** unresolved findings
+  (**96 High / 19 Critical**), frontend **0**, nginx **0**, and **0 fixable**
+  findings. The hardened local gate accepted those exact reports, three
+  CycloneDX SBOMs and both evidence artifacts were uploaded, and
+  `publish-signed-images` was skipped.
 - Fresh local verification on the synced tree:
   - backend Ruff and **545/545** pytest;
   - root release/security contracts **29/29**, Ruff, tracked/untracked secret
@@ -154,15 +158,12 @@ Exact continuation order:
 1. The product owner accepted the auditable container vulnerability policy on
    2026-07-24. This does not authorize a tag, GHCR publication, deployment, or
    public launch.
-2. Let the docs-only handoff commit complete the normal PR checks, then merge
-   PR #11 without creating a tag.
-3. After merge, rerun evidence-only `Release Build and Evidence` on the
-   resulting `main`. Require `verify-source`, `build-scan-and-package`, three
-   complete JSON vulnerability reports, three SBOMs, and
-   `publish-signed-images` skipped.
-4. Do not approve or push a release tag until the exact backend residual-risk
+2. Merge this docs-only post-merge checkpoint after its normal PR checks. It
+   does not change runtime or image build inputs, so it does not require
+   another image-evidence run.
+3. Do not approve or push a release tag until the exact backend residual-risk
    report is reviewed for runtime applicability and package-removal options.
-5. Only after successful evidence and explicit approval naming both the exact
+4. Only after explicit approval naming both the exact
    tag and destination may an RC tag be pushed to GHCR. Protected staging,
    secrets/TLS/DNS/firewall, off-host restore, observability/on-call,
    soak/canary, rollback, and applicable compliance evidence still gate public
@@ -748,18 +749,14 @@ verification is recorded in the remediation update above.
 
 ## Exact next step
 
-Inspect PR #8 and Hybrid E2E run `30084630886`; merge only after every check is
-green. Rerun evidence-only `Release Build and Evidence` on the resulting
-`main`, requiring successful source verification and build/scan/package.
-Only after that run passes and the user explicitly approves exact tag
-`v0.1.0-rc.20260724.1` publishing to GHCR for
-`cahangeorge/betting-platform`, push the tag and verify registry digests,
-Cosign signatures, GitHub attestations, and overwrite protection. Deploy only
-verified digest-pinned images to protected staging. Keep public release/MVP
-launch **HOLD** until external credential rotation, secret-manager,
-DNS/TLS/firewall, off-host backup storage and restore, staging two-user
-scrape-to-settlement evidence, observability/on-call/soak/canary, and protected
-CI build/publish/pull evidence are recorded.
+Merge the docs-only post-merge checkpoint after its normal checks. Then review
+the exact backend residual-risk report from main run `30126304645` for runtime
+applicability and package-removal options. Do not create a release tag or
+publish to GHCR without new explicit approval naming both exact tag and
+destination. Keep public release/MVP launch **HOLD** until secret-manager,
+DNS/TLS/firewall, off-host backup/restore, protected two-user staging,
+observability/on-call/soak/canary/rollback, and applicable compliance evidence
+are recorded.
 
 ## Historical platform snapshot
 

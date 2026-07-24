@@ -1,9 +1,9 @@
 # MVP Readiness Program
 
-Updated: 2026-07-24T23:52:29+03:00
+Updated: 2026-07-25T00:19:14+03:00
 Repository: `/home/gion/Projects/bet`
-Branch: `agent/trivy-gate-pr`
-Program status: **ACTIVE — PR #11 release gate GO; merge/main evidence and public MVP launch HOLD**
+Branch: `agent/post-merge-trivy-status-2026-07-24`
+Program status: **ACTIVE — PR #11 merged and main evidence GO; public MVP launch HOLD**
 
 This is the durable execution register for reaching a verified MVP. It records
 project status, expert findings, phases, task dependencies, verification gates,
@@ -65,7 +65,7 @@ The program can be marked **MVP GO** only when:
 | `flumine/` | EXCLUDED | post-MVP paper execution | accepted ADR excludes paper execution from public MVP |
 | PWA | LOCAL GATES GREEN | installable shell | production HTTPS offline/recovery/update suite passed; installed-device lifecycle remains |
 | Mobile/desktop design | LOCAL GATES GREEN | operator UI | 320–1920 plus landscape/safe-area/touch/forced-colors browser gates passed; hardware/manual zoom remains |
-| DevOps/release | PR #11 REVIEW-CLEAR AND FULLY GREEN | deployment | exact hardening SHA `f897e6f`: PR gates and evidence run `30124777407` green, fixable=0, frontend/nginx=0, backend=115 unresolved, publication skipped; merge/main evidence, backend applicability review, signed tag, secrets, public TLS, off-host backup, monitoring and canary remain |
+| DevOps/release | PR #11 MERGED / MAIN EVIDENCE GREEN | deployment | main `e2ea635`: Backend, Frontend, Security and evidence run `30126304645` green, fixable=0, frontend/nginx=0, backend=115 unresolved, publication skipped; backend applicability review, signed tag, secrets, public TLS, off-host backup, monitoring and canary remain |
 | QA | LOCAL GATES GREEN / STAGING HOLD | release evidence | real protected two-user staging lifecycle is absent |
 | `betfront/` | ARCHIVED/DIRTY | none | preserve; do not include in current MVP |
 
@@ -77,7 +77,7 @@ rewrite. Follow-up `d20c583` removed two CI timing races and was published with
 all five branch workflows green. PR #7 was subsequently merged into `main` as
 `881a436`. PR #8 through #10 subsequently closed the Ruff install,
 OddsHarvester/lineage, and vulnerable `ecdsa` dependency gates. Current remote
-`main` is `3930d0e`; evidence-only run `30116510025` passed source verification,
+`main` at that checkpoint was `3930d0e`; evidence-only run `30116510025` passed source verification,
 image builds, and runtime smoke, then stopped on 115 High/Critical
 operating-system findings without an available fixed version. Candidate run
 `30120739636` then passed source/image/runtime gates and correctly blocked 72
@@ -97,6 +97,11 @@ fields, with adversarial regressions. Code review is `APPROVE`, architecture is
 `30124777407` passed with the same exact finding counts and publication
 skipped.
 
+PR #11 merged as main `e2ea635`. Post-merge Backend, Frontend, and Security
+passed, and main evidence-only run `30126304645` passed source verification,
+all image build/runtime/scan/SBOM/package gates, and artifact upload with the
+same exact finding counts and publication skipped.
+
 ## Verified refresh — 2026-07-24
 
 | Check | Result |
@@ -110,11 +115,11 @@ skipped.
 | Recovery/provider | runtime smoke, queued-message recovery, lost-stream outbox recovery, provider canary passed |
 | Frontend | pinned `pnpm 10.34.5`; `pnpm check` 0 diagnostics; **32 files / 121 unit cases**; `check:e2e` and build passed |
 | Chromium hybrid | fresh local **56/56** (3.7m, one worker), `retries=0`; PR #11 hardening head also passed the complete suite in **7m32s** |
-| Published branch CI | SHA `f897e6f`: Backend, Frontend, Security, and Hybrid E2E all PASS; evidence-only run `30124777407` also PASS |
+| Published branch/main CI | PR hardening SHA `f897e6f` and docs head `5dafac8`: all PR gates PASS; merged main `e2ea635`: Backend, Frontend, Security and evidence-only run `30126304645` PASS |
 | Firefox / WebKit | official smoke **1/1** on each engine; host WebKit lacked runtime libraries, so the verified WebKit run used the official Playwright `v1.60.0-noble` container |
 | PWA | production HTTPS service-worker suite **3/3**, including offline/recovery announcements and draft-safe update |
 | Recovery hygiene | final strict cleanup removed interrupted E2E fixtures and ended at `Namespaces: 0`; fresh temporary-DB dump/restore passed at Alembic `025` with matching schema/version/key row counts |
-| Release workflow supply chain | full-SHA actions; known-safe Trivy Action `v0.35.0` + binary `v0.69.3`; real Taskiq source gate; exact scanned-image GHCR handoff; non-root image runtime smoke; final run `30124777407` passed with fixable=0, frontend/nginx=0, backend=115 unresolved, three CycloneDX SBOMs, and publication skipped |
+| Release workflow supply chain | full-SHA actions; known-safe Trivy Action `v0.35.0` + binary `v0.69.3`; real Taskiq source gate; exact scanned-image GHCR handoff; non-root image runtime smoke; merged-main run `30126304645` passed with fixable=0, frontend/nginx=0, backend=115 unresolved, three CycloneDX SBOMs, and publication skipped |
 | Production dependency lock | combined backend/OddsHarvester/penaltyblog/soccerdata Python 3.12 lock, **204 exact packages**; regeneration and strict dry-run passed |
 | Local production containers | remediated frontend build + UID 1001 + HTTP 200 PASS, with unused npm/Corepack tooling absent; backend 204-package build + UID 1001 + FastAPI import + bundled Chromium PASS; pinned nginx `1.30.4` build/runtime PASS and formerly fixable Alpine packages meet or exceed reported fixed versions. Explicit host-resolved mappings worked around rootless Podman container DNS |
 
@@ -268,7 +273,7 @@ confirmed.
 | QA-002 | Tenant | add cross-user isolation gates for jobs, predictions, WS, trading, bankroll, and settlement | COMPLETE-local — REST/settlement isolation plus user-scoped prediction WebSocket tests |
 | QA-003 | Browser | run all hybrid tests with retries disabled and eliminate flaky waits/cleanup ambiguity | COMPLETE-local — repeated retry-free Chromium gates |
 | OPS-002 | CI/CD | build, scan, publish, deploy, smoke, and retain immutable rollback artifacts | PARTIAL — exact scanned-image handoff, GHCR digest publication, keyless Cosign, GitHub attestations, non-overwrite, version promotion, and auto-rollback are implemented and contract-tested; protected tag/deploy execution remains external |
-| OPS-006 | CI supply chain | pin and validate actions/scanners, gate release tags on application tests, scan current source and images | COMPLETE-PR / PRE-TAG HOLD — final hardening SHA `f897e6f` passed all PR gates plus run `30124777407`; complete JSON, fixable=0, frontend/nginx=0, backend=115 unresolved, three SBOMs, publication skipped; exact backend applicability review and main/tag evidence remain |
+| OPS-006 | CI supply chain | pin and validate actions/scanners, gate release tags on application tests, scan current source and images | COMPLETE-MAIN / PRE-TAG HOLD — main `e2ea635` passed Backend, Frontend, Security plus run `30126304645`; complete JSON, fixable=0, frontend/nginx=0, backend=115 unresolved, three SBOMs, publication skipped; exact backend applicability review and protected tag evidence remain |
 | BE-004 | Container scraper runtime | make the production Chromium install available to the non-root backend runtime user | COMPLETE-local contract — shared `/ms-playwright` path and ownership; CI now launches Chromium in the built non-root image; execution awaits CI because local container DNS is unavailable |
 | BE-005 | Production dependencies | resolve backend plus all bridge projects from one exact Python 3.12 dependency graph | COMPLETE-local — 204-package uv lock, regeneration diff and strict dry-run green |
 | FE-007 | Container dependencies | pin pnpm and avoid a second mutable production dependency resolution | COMPLETE-local — `pnpm 10.34.5`, one frozen install, builder prune and copied production node_modules; SvelteKit `2.70.1`/Vite `8.1.5`; unused npm/Corepack removed from runtime; check, 121 unit tests, E2E typecheck, build, and High/Critical production dependency audit green |
@@ -375,15 +380,15 @@ leak, duplicate financial mutation, stale queue state, or unexplained fixture.
 
 ### Phase 5 — release candidate and MVP decision
 
-Status: **IN PROGRESS — main integration complete; release workflow dependency
-fix is open in PR #8; signed tag and external gates remain**
+Status: **IN PROGRESS — PR #11 and merged-main evidence complete; backend
+residual-risk review, signed tag, and external gates remain**
 
 - [x] Clean/reconciled Git revision and pinned nested dependencies — PR #7
       merged as signed `main` commit `881a436`; tracked submodules unchanged.
-- [ ] Actual protected immutable build/publish run with
+- [ ] Actual protected immutable publish run with
       security/dependency/container scans, signed digests, and attestations;
-      repository workflow/contracts are implemented, environment/tag controls
-      exist, and PR #8 must first close the discovered Ruff install gate.
+      repository workflow/contracts and pre-publication merged-main evidence
+      are green, but exact tag/destination approval has not been granted.
 - [x] Independent local code review and architecture invariant review; final
       verdict Critical 0 / High 0 / Medium 0 — APPROVE.
 - [ ] Staging soak for at least 48–72 hours.
@@ -486,15 +491,15 @@ placement must remain disabled.
 
 ## Immediate execution order
 
-1. Finish PR #8, merge it to `main`, and rerun the evidence-only release
-   workflow until `verify-source` and `build-scan-and-package` both pass.
-2. Obtain explicit approval for exact tag
-   `v0.1.0-rc.20260724.1` and GHCR destination, then execute and verify the
-   protected signed release. The environment and `v*` policies already exist.
-3. Execute protected staging lifecycle/two-user, off-host backup/restore,
+1. Merge the docs-only post-merge checkpoint after normal PR checks.
+2. Review the exact backend residual-risk report from main run `30126304645`
+   for runtime applicability and package-removal options.
+3. Only after new explicit approval naming an exact tag and GHCR destination,
+   execute and verify the protected signed release.
+4. Execute protected staging lifecycle/two-user, off-host backup/restore,
    observability/soak/canary, secret-manager, and digest-pinned deployment
    evidence.
-4. Re-evaluate the release/MVP launch HOLD verdict.
+5. Re-evaluate the release/MVP launch HOLD verdict.
 
 ## Current blockers and unknowns
 
@@ -505,11 +510,12 @@ placement must remain disabled.
   outside the repository and remains an external launch gate if applicable.
 - Paper execution is excluded from MVP by accepted ADR
   `2026-07-23-exclude-paper-execution-from-mvp.md`.
-- PR #7 merged the verified candidate into `main` as `881a436`; Backend,
-  Frontend, and Security post-merge runs are green.
-- Evidence-only release run `30084295728` failed because Ruff was not declared
-  by `backend[dev]`. Fix `1131157` is open in PR #8; local editable install,
-  Ruff, and 532/532 backend tests passed.
+- PR #11 merged into `main` as `e2ea635`; Backend, Frontend, Security, and
+  evidence-only run `30126304645` are green.
+- The exact backend report retains 115 unresolved findings without fixed
+  versions. Runtime applicability and package-removal options remain a pre-tag
+  owner review gate; frontend and nginx retain zero and fixable findings are
+  zero.
 - No `v0.1.0-rc.20260724.*` tag and no GHCR release artifact exist yet.
 - GitHub currently lists only collaborator `cahangeorge`; a genuinely
   independent required reviewer for `registry-release` cannot be configured
@@ -517,10 +523,8 @@ placement must remain disabled.
 
 ## Exact next step
 
-Inspect PR #8 / Hybrid run `30084630886`; merge only when all checks are green.
-Then rerun `Release Build and Evidence` with `workflow_dispatch` on the new
-`main`. Only after that evidence-only run is green and the user explicitly
-approves exact tag `v0.1.0-rc.20260724.1` publishing to GHCR, push the protected
-tag and verify signatures/attestations/digests. Keep public release/MVP launch
-HOLD until the external release gates in the verification refresh are
-evidenced.
+Merge the docs-only checkpoint after normal checks, then perform the exact
+backend residual-risk applicability/package-removal review from main run
+`30126304645`. Do not tag, publish, or deploy without new explicit approval.
+Keep public release/MVP launch HOLD until the external release gates in the
+verification refresh are evidenced.

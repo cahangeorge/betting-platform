@@ -1,8 +1,8 @@
 # Release Candidate Reconciliation Plan
 
-Updated: 2026-07-24T23:52:29+03:00
-Branch: `agent/trivy-gate-pr`
-Status: **PR #11 REVIEW-CLEAR AND FULLY GREEN; MERGE/MAIN EVIDENCE PENDING**
+Updated: 2026-07-25T00:19:14+03:00
+Branch: `agent/post-merge-trivy-status-2026-07-24`
+Status: **PR #11 MERGED; MAIN SOURCE/IMAGE/SCAN EVIDENCE GREEN; PRE-TAG HOLD**
 
 This plan converted the intentionally dirty, locally verified MVP checkout into
 a reviewable release-candidate revision without losing existing work. The owner
@@ -80,6 +80,13 @@ The recommended sequence below was executed, then hardened through CI:
     strict gate, SBOMs, secret scan, packaging, and artifact upload. Backend
     retained 115 unresolved findings, frontend/nginx retained zero, fixable
     findings were zero, and publication was skipped.
+21. PR #11 merged as main `e2ea635`. Post-merge Backend, Frontend, and Security
+    passed. Main evidence-only run `30126304645` passed source verification,
+    full Hybrid E2E, all three image build/runtime smoke checks, all three
+    scans, the strict gate, three SBOMs, secret scan, packaging, and artifact
+    upload. The exact downloaded reports contain backend 115 unresolved
+    findings (96 High / 19 Critical), frontend/nginx zero, and fixable zero;
+    the hardened local gate accepted them. Publication remained skipped.
 
 No release tag or GHCR release artifact exists at this checkpoint.
 
@@ -222,9 +229,10 @@ Completed local evidence:
 
 Remaining external sequence:
 
-1. finish and merge PR #8 after every check passes;
-2. rerun evidence-only `Release Build and Evidence` on the new `main`;
-3. obtain explicit approval for tag `v0.1.0-rc.20260724.1` publishing to GHCR;
+1. merge the docs-only post-merge checkpoint after normal checks;
+2. review the exact backend residual-risk report from main run `30126304645`
+   for runtime applicability and package-removal options;
+3. obtain new explicit approval naming the exact tag and GHCR destination;
 4. run and verify the protected tag workflow, then deploy only its verified
    registry digests to protected staging.
 
