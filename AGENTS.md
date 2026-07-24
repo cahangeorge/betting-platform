@@ -54,7 +54,9 @@ Run all backend commands from `backend/`.
 Backend details:
 
 - Environment variables use the `BET_` prefix. Defaults are loaded from `backend/.env` by Pydantic settings.
-- Default local DB URL is `postgresql+asyncpg://postgres:postgres@localhost:5432/bet`; Docker/Podman compose files use their own Postgres service credentials.
+- The default local database target is PostgreSQL at `localhost:5432`, database
+  `bet`. Credentials belong in the ignored `backend/.env` or the reviewed
+  development example/config; do not copy them into instructions or memory.
 - API entrypoint is `backend/app/main.py`; API routes are under `backend/app/api/v1/`; services are under `backend/app/services/`; SQLAlchemy models are under `backend/app/models/`.
 - Backend bridge paths can point into `penaltyblog`, `soccerdata`, `OddsHarvester`, and legacy bridge scripts. Do not move sibling projects without updating bridge settings.
 
@@ -108,6 +110,10 @@ betfront/frontbet - legacy/archive projects, not default targets
 Bet uses a lightweight repo-local setup that documents workspace behavior while keeping shared runtime tooling global.
 
 - Canonical workspace guide: `AGENTS.md`
+- Canonical current-session handoff: `docs/status/current-platform-status.md`
+- Continuity, memory, reindex, retention, and source-of-truth policy: `docs/codex/continuity.md`
+- Reusable handoff template: `docs/status/handoff-template.md`
+- ADR lifecycle and template: `docs/adr/README.md`
 - Codex config: `.codex/config.toml`
 - Codex model instructions: `.codex/model-instructions.md`
 - Project agent roles: `.codex/agents/*.toml`
@@ -116,6 +122,22 @@ Bet uses a lightweight repo-local setup that documents workspace behavior while 
 - Svelte MCP registration for the active frontend: `.mcp.json`
 
 Global MCP servers, shared skills, hooks, and the oh-my-codex plugin stay in `$CODEX_HOME` / `~/.codex`. Respect nested project/submodule instructions before changing `OddsHarvester/`, `penaltyblog/`, or `soccerdata/`.
+
+### Session continuity workflow
+
+At the start of every Bet session, run `pwd`, `git status --short --branch`, and
+`git submodule status`, then read this file and
+`docs/status/current-platform-status.md`. Read only the ADRs relevant to the
+task. Treat the working tree, Git, and fresh verification as authoritative over
+status documents, Serena, Codebase Memory, Codex Memories, or old transcripts.
+
+Before ending a session, run the smallest relevant checks, update
+`docs/status/current-platform-status.md` with exact commands/results and the
+current dirty state, record any important architectural decision as an ADR, and
+leave one exact next step. Run `serena memories check` when Serena memories were
+changed. Follow `docs/codex/continuity.md` to decide whether the `bet-core`
+Codebase Memory index needs explicit change detection or reindexing. Never put
+credentials in status, ADRs, memories, transcripts, or Git.
 
 ## Model / Agent Routing
 

@@ -1,6 +1,7 @@
 # ADR: Taskiq + Redis workers with Postgres run history
 
 Date: 2026-07-08
+Status: Accepted
 
 ## Decision
 
