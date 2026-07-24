@@ -1,18 +1,17 @@
 # Current Platform Status
 
-Updated: 2026-07-25T01:56:44+03:00
+Updated: 2026-07-25T02:01:58+03:00
 Repository/branch: `/home/gion/Projects/bet` / `agent/post-merge-trivy-status-2026-07-24`
-Dirty state at this handoff refresh:
+Git state at this handoff refresh:
 
 ```text
-PR #11 is merged in current `origin/main` at `e2ea635`. This branch is one
-docs-only checkpoint commit ahead of that revision and now has an intentional
-uncommitted backend-image hardening patch in `backend/Dockerfile.production`,
-its expanded CI runtime smoke in `.github/workflows/release.yml`, the contract
-regression in `tests/test_production_contract.py`, and this status refresh. The
-pre-existing reconciliation stashes remain preserved. The three tracked
-submodules are clean and unchanged. No tag, GHCR publication, deployment,
-reset, clean, or submodule mutation occurred during this work.
+PR #11 is merged in current `origin/main` at `e2ea635`. Runtime hardening commit
+`6c33259518438ded24f16bd68148aad30c271a74` is pushed on this branch and updates
+open PR #12. Security passed on the new head; Backend, Frontend, and Hybrid E2E
+started and were still in progress at this refresh. The pre-existing
+reconciliation stashes remain preserved. The three tracked submodules are clean
+and unchanged. No release tag, GHCR publication, deployment, reset, clean, or
+submodule mutation occurred during this work.
 ```
 
 This is the first status document to read in a new coding session. Re-run
@@ -47,9 +46,9 @@ Current program state:
 - Phase 3 product/UX: **local implemented scope and browser/PWA gates green**.
 - Phase 4 adversarial QA/staging: **local and branch E2E gates green; protected staging and external operations evidence pending**.
 - Phase 5 release candidate: **PR #8 through #11 merged; exact main evidence is
-  green; backend residual-risk applicability review and local package-removal
-  remediation are complete; protected release and external staging gates
-  remain pending**.
+  green; backend residual-risk remediation is published in PR #12 and its new
+  checks are running; clean merged-main image evidence, protected release, and
+  external staging gates remain pending**.
 - Paper execution: **excluded from public MVP** by accepted ADR
   [`2026-07-23-exclude-paper-execution-from-mvp.md`](../adr/2026-07-23-exclude-paper-execution-from-mvp.md).
 - Verdict: **local application/runtime and merged-main release evidence GO;
@@ -115,11 +114,11 @@ the 2026-07-24 checkpoint below.
 
 Exact continuation order:
 
-1. Review and intentionally commit/publish the three-file release/runtime patch plus
-   canonical status updates through the normal PR path.
-2. Require Backend, Frontend, Security, Hybrid E2E, and an evidence-only
-   `Release Build and Evidence` run on the exact clean revision. Confirm the
-   new backend Trivy report and all three SBOMs; publication must remain
+1. Inspect PR #12 Backend, Frontend, Security, and Hybrid E2E checks on the
+   latest branch head; remediate any failure before merge consideration.
+2. After the PR is green and separately approved for merge, merge it and run an
+   evidence-only `Release Build and Evidence` workflow on exact `main`. Confirm
+   the new backend Trivy report and all three SBOMs; publication must remain
    skipped.
 3. Only after that evidence is green may the owner separately approve an exact
    RC tag and GHCR destination. No tag, image publication, or deployment is
@@ -826,14 +825,13 @@ verification is recorded in the remediation update above.
 
 ## Exact next step
 
-Merge the docs-only post-merge checkpoint after its normal checks. Then review
-the exact backend residual-risk report from main run `30126304645` for runtime
-applicability and package-removal options. Do not create a release tag or
+Inspect PR #12 checks on its latest pushed head and remediate any failure. Do
+not merge without separate authorization, and do not create a release tag or
 publish to GHCR without new explicit approval naming both exact tag and
-destination. Keep public release/MVP launch **HOLD** until secret-manager,
-DNS/TLS/firewall, off-host backup/restore, protected two-user staging,
-observability/on-call/soak/canary/rollback, and applicable compliance evidence
-are recorded.
+destination. Keep public release/MVP launch **HOLD** until clean merged-main
+image evidence, secret-manager, DNS/TLS/firewall, off-host backup/restore,
+protected two-user staging, observability/on-call/soak/canary/rollback, and
+applicable compliance evidence are recorded.
 
 ## Historical platform snapshot
 
