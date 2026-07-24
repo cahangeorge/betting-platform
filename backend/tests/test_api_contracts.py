@@ -17,6 +17,7 @@ from app.api.v1 import tickets as tickets_api
 from app.api.v1.catalog import CATALOG
 from app.schemas.auth import LoginRequest, SignupRequest
 from app.schemas.data import ScrapeJobCreateRequest, WorldCupPipelineRequest
+from app.schemas.job import ScheduledJobCreateRequest
 from app.schemas.match import MatchResponse
 from app.schemas.ticket import SettlementResponse, TicketCreateRequest, TicketGenerateRequest
 from app.services.auth import hash_password, verify_password
@@ -819,17 +820,55 @@ async def test_list_scheduled_jobs_shows_all_for_admin():
 
 
 @pytest.mark.asyncio
+async def test_create_scheduled_job_commits_before_returning():
+    class _DB:
+        commits = 0
+        job = None
+
+        def add(self, job):
+            job.id = 10
+            self.job = job
+
+        async def flush(self):
+            return None
+
+        async def commit(self):
+            self.commits += 1
+
+    db = _DB()
+    job = await jobs_api.create_scheduled_job(
+        body=ScheduledJobCreateRequest(
+            name="Visible immediately",
+            task_type="verify_results",
+            cron_expression="0 */2 * * *",
+            config={"area": "verification"},
+        ),
+        response=Response(),
+        idempotency_key=None,
+        db=db,
+        user=SimpleNamespace(id=99, is_admin=False),
+    )
+
+    assert job is db.job
+    assert db.commits == 1
+
+
+@pytest.mark.asyncio
 async def test_scheduled_job_detail_and_toggle_require_owner():
     job = SimpleNamespace(id=10, config={"_created_by_user_id": 99}, enabled=True)
 
     class _DB:
         flushes = 0
+        commits = 0
 
         async def get(self, _model, row_id):
             return job if row_id == job.id else None
 
         async def flush(self):
             self.flushes += 1
+
+        async def commit(self):
+            self.commits += 1
 
     db = _DB()
 
@@ -842,11 +881,13 @@ async def test_scheduled_job_detail_and_toggle_require_owner():
     assert exc_info.value.status_code == 403
     assert job.enabled is True
     assert db.flushes == 0
+    assert db.commits == 0
 
     result = await jobs_api.toggle_scheduled_job(job_id=job.id, db=db, _user=SimpleNamespace(id=99, is_admin=False))
     assert result is job
     assert job.enabled is False
     assert db.flushes == 1
+    assert db.commits == 1
 
 
 @pytest.mark.asyncio

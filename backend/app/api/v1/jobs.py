@@ -67,7 +67,9 @@ async def create_scheduled_job(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     if key is None:
-        return await create()
+        job = await create()
+        await db.commit()
+        return job
     try:
         job, created = await create_idempotent_job(
             db,
@@ -80,6 +82,7 @@ async def create_scheduled_job(
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    await db.commit()
     if not created:
         response.status_code = status.HTTP_200_OK
     return job
@@ -157,4 +160,5 @@ async def toggle_scheduled_job(
     require_can_read_scheduled_job(job, _user)
     job.enabled = not job.enabled
     await db.flush()
+    await db.commit()
     return job
