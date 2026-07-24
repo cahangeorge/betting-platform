@@ -215,6 +215,46 @@ jobs:
           docker rm --force "$frontend_id" >/dev/null
           trap - EXIT
 
+          test "$(docker run --rm --entrypoint id bet-nginx:${{ github.sha }} -u)" != "0"
+          tls_dir="$(mktemp --directory)"
+          openssl req -x509 -newkey rsa:2048 -nodes \
+            -keyout "$tls_dir/tls.key" \
+            -out "$tls_dir/tls.crt" \
+            -days 1 \
+            -subj "/CN=localhost"
+          chmod 0750 "$tls_dir"
+          chmod 0640 "$tls_dir/tls.key"
+          chmod 0644 "$tls_dir/tls.crt"
+          sudo chown -R 101:101 "$tls_dir"
+          nginx_id="$(
+            docker run --detach \
+              --add-host api:127.0.0.1 \
+              --add-host frontend:127.0.0.1 \
+              --publish 127.0.0.1:38080:8080 \
+              --publish 127.0.0.1:38443:8443 \
+              --volume "$tls_dir:/etc/nginx/tls:ro" \
+              bet-nginx:${{ github.sha }}
+          )"
+          trap 'docker rm --force "$nginx_id" >/dev/null 2>&1 || true; sudo rm -rf "$tls_dir"' EXIT
+          for attempt in $(seq 1 30); do
+            if [ "$(curl --silent --output /dev/null --write-out '%{http_code}' \
+              http://127.0.0.1:38080/)" = "308" ]; then
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              docker logs "$nginx_id"
+              exit 1
+            fi
+            sleep 1
+          done
+          test "$(
+            curl --insecure --silent --show-error --output /dev/null \
+              --write-out '%{http_code}' https://127.0.0.1:38443/
+          )" = "502"
+          docker rm --force "$nginx_id" >/dev/null
+          sudo rm -rf "$tls_dir"
+          trap - EXIT
+
       - name: Prepare release evidence directory
         run: mkdir -p release-evidence
 
@@ -342,6 +382,9 @@ jobs:
       id-token: write
       attestations: write
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: scanned-release-images-${{ github.sha }}

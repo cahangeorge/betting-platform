@@ -30,11 +30,13 @@ class FluminePaperAdapter:
 
     def _limit_order_class(self):
         root = Path(self._settings.resolved_flumine_root).resolve()
-        if not (root / "flumine" / "order" / "ordertype.py").is_file():
+        local_order_type = root / "flumine" / "order" / "ordertype.py"
+        if self._settings.flumine_root and not local_order_type.is_file():
             raise RuntimeError(f"Local Flumine checkout is unavailable at {root}")
-        root_text = str(root)
-        if root_text not in sys.path:
-            sys.path.insert(0, root_text)
+        if local_order_type.is_file():
+            root_text = str(root)
+            if root_text not in sys.path:
+                sys.path.insert(0, root_text)
 
         try:
             from flumine.order.ordertype import LimitOrder

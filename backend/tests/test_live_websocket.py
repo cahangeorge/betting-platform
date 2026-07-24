@@ -5,10 +5,11 @@ import time
 
 import pytest
 from fastapi import WebSocketDisconnect
+from starlette.routing import Match
 
 from app.api.v1 import live as live_api
-from app.api.v1.router import v1_router
 from app.config import get_settings
+from app.main import app
 from app.services.auth import create_access_token
 
 
@@ -55,10 +56,22 @@ def _reset_manager():
     live_api.manager._user_ids.clear()
 
 
-def test_v1_router_exposes_live_websocket_route():
-    route_paths = {getattr(route, "path", None) for route in v1_router.routes}
+def test_app_exposes_live_websocket_route_at_public_path():
+    scope = {
+        "type": "websocket",
+        "path": "/api/v1/live/ws",
+        "root_path": "",
+        "scheme": "ws",
+        "query_string": b"",
+        "headers": [],
+        "client": None,
+        "server": None,
+        "subprotocols": [],
+    }
+    assert any(route.matches(scope)[0] is Match.FULL for route in app.routes)
 
-    assert "/api/v1/live/ws" in route_paths
+    websocket_route = next(route for route in live_api.router.routes if getattr(route, "path", None) == "/ws")
+    assert websocket_route.endpoint is live_api.live_websocket
 
 
 @pytest.mark.asyncio

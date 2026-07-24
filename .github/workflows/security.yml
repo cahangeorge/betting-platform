@@ -24,8 +24,8 @@ jobs:
       - name: Scan tracked files
         run: python3 scripts/scan_tracked_secrets.py
 
-      - name: Verify scanner regression tests
-        run: python3 -m unittest tests/test_secret_scanner.py
+      - name: Verify release and scanner regression contracts
+        run: python3 -m unittest tests/test_production_contract.py tests/test_secret_scanner.py
 
       - name: Validate GitHub Actions workflows with verified actionlint
         env:

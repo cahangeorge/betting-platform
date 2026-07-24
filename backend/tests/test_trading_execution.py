@@ -381,3 +381,10 @@ def test_local_flumine_limit_order_contract_is_used_without_execution_client():
     assert instruction.price == 2.25
     assert instruction.size == 10
     assert not hasattr(FluminePaperAdapter, "place_order")
+
+
+def test_explicit_missing_flumine_checkout_is_rejected(tmp_path):
+    missing_root = tmp_path / "missing-flumine"
+
+    with pytest.raises(RuntimeError, match="Local Flumine checkout is unavailable"):
+        FluminePaperAdapter(Settings(flumine_root=str(missing_root))).build_back_limit(price=2.25, size=10)

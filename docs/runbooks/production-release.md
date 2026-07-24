@@ -11,7 +11,10 @@ The external platform must provide: a private registry, a secret manager, DNS, T
 Create a secret-manager-rendered environment file outside Git from `deploy/production/.env.example`.
 
 - Every image variable must be `image@sha256:<64 hex>`; mutable tags and `latest` are rejected.
-- TLS paths must point to certificate/key files already deployed on the host or mounted by the platform.
+- TLS paths must point to certificate/key files already deployed on the host or
+  mounted by the platform. The nginx image runs as UID/GID `101`; both files
+  must be readable by that identity without making the private key
+  world-readable.
 - PostgreSQL and application secret values have no development defaults.
 - Redis requires one raw password plus authenticated DB 0/DB 1 URLs. Percent-encode
   reserved password characters in `BET_REDIS_URL` and
@@ -29,6 +32,27 @@ Validate the template without rendering or printing resolved secret values:
 ```bash
 scripts/release/render.sh /secure/bet/release.env
 ```
+
+## First deployment bootstrap
+
+`deploy.sh` is deliberately an upgrade-only path: it requires an existing
+known-good manifest and a running PostgreSQL service so it can take a mandatory
+pre-deploy backup. A new host has neither. Bootstrap it exactly once with the
+separate fail-closed command:
+
+```bash
+BET_BOOTSTRAP_CONFIRM=BOOTSTRAP scripts/release/bootstrap.sh \
+  /secure/bet/release.env \
+  https://bet.example.com \
+  /secure/bet/known-good-release.env
+```
+
+Bootstrap refuses an existing known-good path, validates immutable images and
+required values, pulls the images, starts the complete topology, runs the same
+mandatory smoke, and only then records the first known-good manifest. If smoke
+fails, it stops candidate containers without deleting PostgreSQL or Redis
+volumes. Inspect and explicitly clean a failed first-deployment state before
+retrying; never use bootstrap for an upgrade.
 
 ## Release procedure
 
@@ -52,9 +76,9 @@ scripts/release/render.sh /secure/bet/release.env
    MVP migrations must be expand-only and backward compatible; destructive
    contract/drop work is split into a later release after every old application
    version is retired.
-4. Ensure the protected backup directory exists and has enough free space. The
-   deploy command creates a mandatory pre-deploy archive there before changing
-   services.
+4. For every upgrade after bootstrap, ensure the protected backup directory
+   exists and has enough free space. The deploy command creates a mandatory
+   pre-deploy archive there before changing services.
 5. Submit the immutable production topology and require its HTTPS, Taskiq, and
    provider smoke to pass:
    ```bash
@@ -164,7 +188,10 @@ can be released.
 
 ## Database restore (destructive)
 
-Restore is intentionally gated by `BET_RESTORE_CONFIRM=RESTORE`, verifies SHA-256 plus PostgreSQL archive format, stops traffic-serving services, restores, then restarts them:
+Restore is intentionally gated by `BET_RESTORE_CONFIRM=RESTORE`, verifies
+SHA-256 plus PostgreSQL archive format, stops traffic-serving services,
+restores, runs the selected image's one-shot Alembic migration to head, then
+restarts them:
 
 ```bash
 BET_RESTORE_CONFIRM=RESTORE scripts/db/restore-postgres.sh \

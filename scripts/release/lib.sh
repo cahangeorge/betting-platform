@@ -31,8 +31,10 @@ snapshot_immutable_manifest() {
 record_known_good_manifest() {
   local candidate=$1 known_good=$2 directory temporary
   require_env_file "$candidate" >/dev/null
-  require_env_file "$known_good" >/dev/null
   directory=$(dirname "$known_good")
+  [[ -d "$directory" && -w "$directory" ]] || \
+    fail "known-good manifest directory must exist and be writable"
+  [[ ! -d "$known_good" ]] || fail "known-good manifest path must not be a directory"
   temporary=$(mktemp "$directory/.bet-known-good-manifest.XXXXXX")
   chmod 600 "$temporary"
   cp -- "$candidate" "$temporary"

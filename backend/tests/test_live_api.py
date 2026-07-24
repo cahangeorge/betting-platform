@@ -2,9 +2,11 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
-from fastapi.routing import APIRoute, serialize_response
+from httpx import ASGITransport, AsyncClient
 
+from app.api.deps import get_current_user
 from app.api.v1 import live as live_api
+from app.database import get_db
 from app.main import app
 from app.services import scraper
 
@@ -49,21 +51,6 @@ class _CapturingDB:
     async def execute(self, statement):
         self.statement = statement
         return self.result
-
-
-async def _serialize_live_overview_response(overview):
-    route = next(route for route in app.routes if isinstance(route, APIRoute) and route.path == "/api/v1/live/overview")
-    return await serialize_response(
-        field=route.response_field,
-        response_content=overview,
-        include=None,
-        exclude=None,
-        by_alias=True,
-        exclude_unset=False,
-        exclude_defaults=False,
-        exclude_none=False,
-        is_coroutine=True,
-    )
 
 
 def _make_match(
@@ -252,18 +239,34 @@ async def test_live_overview_http_serialization_keeps_live_contract_fields(monke
 
     monkeypatch.setattr(live_api, "_load_live_prediction_map", _prediction_map)
 
-    overview = await live_api.live_overview(
-        status="live",
-        league=None,
-        max_matches=10,
-        min_live_value_edge=0,
-        include_live_value=True,
-        db=db,
-        user=SimpleNamespace(id=7),
-    )
+    async def override_db():
+        yield db
 
-    payload = await _serialize_live_overview_response(overview)
+    async def override_user():
+        return SimpleNamespace(id=7)
 
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = override_user
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as client:
+            response = await client.get(
+                "/api/v1/live/overview",
+                params={
+                    "status": "live",
+                    "max_matches": 10,
+                    "min_live_value_edge": 0,
+                    "include_live_value": "true",
+                },
+            )
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        app.dependency_overrides.pop(get_current_user, None)
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
     [live_match] = payload["matches"]
     assert live_match["source_ok"] is True
     assert live_match["odds_freshness_seconds"] == 12

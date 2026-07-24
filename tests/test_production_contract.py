@@ -46,7 +46,7 @@ class ProductionContractTests(unittest.TestCase):
             docker_log = root / "docker.log"
             (bin_dir / "docker").write_text(
                 "#!/bin/sh\n"
-                "printf '%s\\n' \"$*\" >> \"$DOCKER_LOG\"\n"
+                'printf \'%s\\n\' "$*" >> "$DOCKER_LOG"\n'
                 "case \"$*\" in *'exec -T postgres pg_dump'*) printf 'fake-backup' ;; esac\n"
             )
             (bin_dir / "curl").write_text("#!/bin/sh\nexit 1\n")
@@ -81,14 +81,64 @@ class ProductionContractTests(unittest.TestCase):
             )
 
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("restoring the recorded known-good immutable manifest", result.stderr)
+            self.assertIn(
+                "restoring the recorded known-good immutable manifest", result.stderr
+            )
             self.assertEqual(known_good.read_text(), original_known_good)
             commands = docker_log.read_text()
-            self.assertIn("up --detach --remove-orphans --wait --wait-timeout 180", commands)
+            self.assertIn(
+                "up --detach --remove-orphans --wait --wait-timeout 180", commands
+            )
             self.assertIn(
                 "up --detach --no-deps --wait --wait-timeout 180 api worker scheduler frontend nginx",
                 commands,
             )
+
+    def test_first_deployment_bootstrap_records_initial_known_good_without_backup(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            docker_log = root / "docker.log"
+            (bin_dir / "docker").write_text(
+                '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$DOCKER_LOG"\nexit 0\n'
+            )
+            (bin_dir / "curl").write_text("#!/bin/sh\nexit 0\n")
+            for command in (bin_dir / "docker", bin_dir / "curl"):
+                command.chmod(0o755)
+
+            candidate = root / "candidate.env"
+            candidate.write_text(self._manifest("b" * 64))
+            known_good = root / "known-good.env"
+
+            result = subprocess.run(
+                [
+                    str(ROOT / "scripts/release/bootstrap.sh"),
+                    str(candidate),
+                    "https://bet.example.com",
+                    str(known_good),
+                ],
+                cwd=ROOT,
+                env={
+                    **os.environ,
+                    "PATH": f"{bin_dir}:{os.environ['PATH']}",
+                    "DOCKER_LOG": str(docker_log),
+                    "BET_BOOTSTRAP_CONFIRM": "BOOTSTRAP",
+                },
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(known_good.read_text(), candidate.read_text())
+            commands = docker_log.read_text()
+            self.assertIn(
+                "up --detach --remove-orphans --wait --wait-timeout 180", commands
+            )
+            self.assertNotIn("pg_dump", commands)
 
     def test_compose_forces_secure_runtime_and_disables_execution(self) -> None:
         compose = (ROOT / "deploy/production/compose.yml").read_text()
@@ -111,7 +161,9 @@ class ProductionContractTests(unittest.TestCase):
         self.assertIn("test: [CMD, python, -m, app.tasks.runtime, worker]", compose)
         self.assertIn("test: [CMD, python, -m, app.tasks.runtime, scheduler]", compose)
         self.assertIn("REDIS_PASSWORD: ${REDIS_PASSWORD:", compose)
-        self.assertIn('redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"', compose)
+        self.assertIn(
+            'redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"', compose
+        )
         self.assertIn("REDISCLI_AUTH=$$REDIS_PASSWORD redis-cli ping", compose)
         self.assertIn("driver: local", compose)
         self.assertIn('mem_limit: "${BET_CONTAINER_MEMORY_LIMIT:-2g}"', compose)
@@ -136,7 +188,9 @@ class ProductionContractTests(unittest.TestCase):
             ROOT / "nginx/Dockerfile.production",
         ):
             from_lines = [
-                line for line in dockerfile.read_text().splitlines() if line.startswith("FROM ")
+                line
+                for line in dockerfile.read_text().splitlines()
+                if line.startswith("FROM ")
             ]
             self.assertTrue(from_lines)
             self.assertTrue(all("@sha256:" in line for line in from_lines), dockerfile)
@@ -154,7 +208,9 @@ class ProductionContractTests(unittest.TestCase):
         self.assertIn("Full Chromium hybrid gate", release_workflow)
         self.assertIn("Verify real Redis Taskiq worker and scheduler", release_workflow)
         self.assertIn("BET_TASK_QUEUE_BACKEND: taskiq", release_workflow)
-        self.assertIn("taskiq worker app.tasks.broker:broker app.tasks.jobs", release_workflow)
+        self.assertIn(
+            "taskiq worker app.tasks.broker:broker app.tasks.jobs", release_workflow
+        )
         self.assertIn("python -m app.tasks.runtime worker", release_workflow)
         self.assertIn("python -m app.tasks.runtime scheduler", release_workflow)
         self.assertIn("python -m app.tasks.smoke", release_workflow)
@@ -169,8 +225,7 @@ class ProductionContractTests(unittest.TestCase):
         )
 
         safe_trivy_action = (
-            "aquasecurity/trivy-action@"
-            "57a97c7e7821a5776cebc9bb87c984fa69cba8f1"
+            "aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1"
         )
         self.assertEqual(release_workflow.count(safe_trivy_action), 6)
         self.assertEqual(release_workflow.count("version: v0.69.3"), 6)
@@ -183,10 +238,7 @@ class ProductionContractTests(unittest.TestCase):
         workflow_text = "\n".join(
             path.read_text() for path in (ROOT / ".github/workflows").glob("*.yml")
         )
-        safe_pnpm_action = (
-            "pnpm/action-setup@"
-            "0ebf47130e4866e96fce0953f49152a61190b271"
-        )
+        safe_pnpm_action = "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271"
         self.assertEqual(workflow_text.count(safe_pnpm_action), 3)
         self.assertNotIn(
             "f40ffcd9367d9f12939873eb1018b921a783ffaa",
@@ -205,11 +257,20 @@ class ProductionContractTests(unittest.TestCase):
         self.assertEqual(security_workflow.count(safe_trivy_action), 1)
         self.assertIn("scanners: vuln,secret,misconfig", security_workflow)
         self.assertIn("version: v0.69.3", security_workflow)
+        self.assertIn(
+            "tests/test_production_contract.py tests/test_secret_scanner.py",
+            security_workflow,
+        )
 
         for workflow_name in ("backend.yml", "hybrid-e2e.yml"):
             workflow = (ROOT / ".github/workflows" / workflow_name).read_text()
             self.assertRegex(workflow, r"image: postgres:[^\n]+@sha256:[0-9a-f]{64}")
             self.assertRegex(workflow, r"image: redis:[^\n]+@sha256:[0-9a-f]{64}")
+
+        hybrid_workflow = (ROOT / ".github/workflows/hybrid-e2e.yml").read_text()
+        self.assertIn("-e ../OddsHarvester", hybrid_workflow)
+        self.assertIn("python -c 'import oddsharvester'", hybrid_workflow)
+        self.assertIn("BET_ODDSHARVESTER_PYTHON=$(command -v python)", hybrid_workflow)
 
     def test_release_publishes_only_protected_tag_digests_after_all_gates(self) -> None:
         release = (ROOT / ".github/workflows/release.yml").read_text()
@@ -225,11 +286,7 @@ class ProductionContractTests(unittest.TestCase):
         self.assertIn("attestations: write", publish_job)
         permission_block = publish_job.split("permissions:", 1)[1].split("steps:", 1)[0]
         self.assertEqual(
-            {
-                line.strip()
-                for line in permission_block.splitlines()
-                if line.strip()
-            },
+            {line.strip() for line in permission_block.splitlines() if line.strip()},
             {
                 "contents: read",
                 "packages: write",
@@ -244,41 +301,50 @@ class ProductionContractTests(unittest.TestCase):
         self.assertNotIn("COSIGN_PASSWORD", release)
 
         self.assertEqual(
-            release.count('org.opencontainers.image.source=$source_label'),
+            release.count("org.opencontainers.image.source=$source_label"),
             3,
         )
         self.assertIn("docker save --output release-images/candidates.tar", release)
         self.assertIn("sha256sum candidates.tar > candidates.tar.sha256", release)
         self.assertIn("sha256sum --check candidates.tar.sha256", publish_job)
         self.assertIn("retention-days: 30", release)
-        self.assertIn("Refuse to overwrite existing immutable release references", publish_job)
+        self.assertIn(
+            "Refuse to overwrite existing immutable release references", publish_job
+        )
         self.assertIn(
             'scripts/release/assert-registry-ref-absent.sh "$name:$tag"',
             publish_job,
         )
+        self.assertIn(
+            "uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+            publish_job,
+        )
+        self.assertLess(
+            publish_job.index("uses: actions/checkout@"),
+            publish_job.index("scripts/release/assert-registry-ref-absent.sh"),
+        )
         self.assertIn("ghcr.io/${repository}-api", publish_job)
         self.assertIn("ghcr.io/${repository}-frontend", publish_job)
         self.assertIn("ghcr.io/${repository}-nginx", publish_job)
-        self.assertIn("docker push \"$sha_ref\"", publish_job)
+        self.assertIn('docker push "$sha_ref"', publish_job)
         self.assertIn(
-            "docker buildx imagetools inspect \"$sha_ref\"",
+            'docker buildx imagetools inspect "$sha_ref"',
             publish_job,
         )
-        self.assertIn("cosign sign --yes \"$ref\"", publish_job)
+        self.assertIn('cosign sign --yes "$ref"', publish_job)
         self.assertIn(
             "${{ steps.publish.outputs.api_name }}@"
             "${{ steps.publish.outputs.api_digest }}",
             publish_job,
         )
-        self.assertIn("--certificate-identity \"$identity\"", publish_job)
+        self.assertIn('--certificate-identity "$identity"', publish_job)
         self.assertIn(
-            "--certificate-oidc-issuer \"$issuer\"",
+            '--certificate-oidc-issuer "$issuer"',
             publish_job,
         )
         self.assertEqual(
             publish_job.count(
-                "uses: actions/attest@"
-                "f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6"
+                "uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6"
             ),
             3,
         )
@@ -303,7 +369,7 @@ class ProductionContractTests(unittest.TestCase):
             docker = bin_dir / "docker"
             docker.write_text(
                 "#!/bin/sh\n"
-                "case \"$DOCKER_SCENARIO\" in\n"
+                'case "$DOCKER_SCENARIO" in\n'
                 "  existing) printf '%s\\n' 'manifest present'; exit 0 ;;\n"
                 "  missing) printf '%s\\n' 'MANIFEST_UNKNOWN: manifest unknown' >&2; exit 1 ;;\n"
                 "  network) printf '%s\\n' 'dial tcp: network is unreachable' >&2; exit 1 ;;\n"
@@ -349,7 +415,9 @@ class ProductionContractTests(unittest.TestCase):
             backend,
         )
         self.assertNotIn("pip install --no-cache-dir \\\n    ./backend", backend)
-        self.assertIn('chown -R appuser:appuser /app "$PLAYWRIGHT_BROWSERS_PATH"', backend)
+        self.assertIn(
+            'chown -R appuser:appuser /app "$PLAYWRIGHT_BROWSERS_PATH"', backend
+        )
         self.assertLess(
             backend.index("ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright"),
             backend.index("python -m playwright install --with-deps chromium"),
@@ -371,8 +439,13 @@ class ProductionContractTests(unittest.TestCase):
         self.assertIn("playwright.chromium.launch()", release)
         self.assertIn('PLAYWRIGHT_BROWSERS_PATH"] == "/ms-playwright"', release)
         self.assertIn("--entrypoint id bet-frontend:", release)
+        self.assertIn("--entrypoint id bet-nginx:", release)
         self.assertIn("curl --fail --silent --show-error --location", release)
-        self.assertIn("docker logs \"$frontend_id\"", release)
+        self.assertIn('docker logs "$frontend_id"', release)
+        self.assertIn("openssl req -x509 -newkey rsa:2048", release)
+        self.assertIn("--publish 127.0.0.1:38080:8080", release)
+        self.assertIn("--publish 127.0.0.1:38443:8443", release)
+        self.assertIn("https://127.0.0.1:38443/", release)
 
         production_input = (ROOT / "backend/requirements-production.in").read_text()
         production_lock = (ROOT / "backend/requirements-production.lock").read_text()
@@ -387,8 +460,15 @@ class ProductionContractTests(unittest.TestCase):
 
     def test_tls_edge_rate_limits_auth_and_proxies_websockets(self) -> None:
         nginx = (ROOT / "deploy/production/nginx/nginx.conf").read_text()
+        nginx_dockerfile = (ROOT / "nginx/Dockerfile.production").read_text()
+        compose = (ROOT / "deploy/production/compose.yml").read_text()
 
-        self.assertIn("listen 443 ssl", nginx)
+        self.assertIn("listen 8080", nginx)
+        self.assertIn("listen 8443 ssl", nginx)
+        self.assertIn("USER nginx", nginx_dockerfile)
+        self.assertIn("EXPOSE 8080 8443", nginx_dockerfile)
+        self.assertIn(":8080", compose)
+        self.assertIn(":8443", compose)
         self.assertIn("Strict-Transport-Security", nginx)
         self.assertIn("auth_login_per_ip", nginx)
         self.assertIn("auth_signup_per_ip", nginx)
@@ -413,6 +493,10 @@ class ProductionContractTests(unittest.TestCase):
         self.assertIn("dropdb --if-exists --force", restore)
         self.assertIn("BET_DATABASE_URL and POSTGRES_DB", restore)
         self.assertIn("rm -f /tmp/restore.dump", restore)
+        self.assertIn("run --rm migrate", restore)
+        self.assertLess(
+            restore.index("run --rm migrate"), restore.index("up --detach api")
+        )
         self.assertIn("app.tasks.smoke", smoke)
         self.assertIn("app.diagnostics.provider_canary", smoke)
         self.assertIn("app.tasks.runtime worker", smoke)
@@ -426,8 +510,17 @@ class ProductionContractTests(unittest.TestCase):
         self.assertIn("trap restore_after_failure ERR", deploy)
         self.assertIn("restore_immutable_release", deploy)
         self.assertIn("record_known_good_manifest", deploy)
-        self.assertIn("--no-deps --wait --wait-timeout 180", (ROOT / "scripts/release/lib.sh").read_text())
-        self.assertLess(rollback.index("restore_immutable_release"), rollback.index("smoke.sh"))
+        bootstrap = (ROOT / "scripts/release/bootstrap.sh").read_text()
+        self.assertIn("BET_BOOTSTRAP_CONFIRM", bootstrap)
+        self.assertIn("record_known_good_manifest", bootstrap)
+        self.assertNotIn("backup-postgres.sh", bootstrap)
+        self.assertIn(
+            "--no-deps --wait --wait-timeout 180",
+            (ROOT / "scripts/release/lib.sh").read_text(),
+        )
+        self.assertLess(
+            rollback.index("restore_immutable_release"), rollback.index("smoke.sh")
+        )
         self.assertIn("previous application images still start", runbook)
         self.assertIn("expand-only and backward compatible", runbook)
         self.assertIn("reverse Alembic migrations automatically", runbook)

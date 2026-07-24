@@ -26,5 +26,6 @@ compose "$env_file" exec -T postgres createdb -U "$postgres_user" -O "$postgres_
 compose "$env_file" exec -T postgres pg_restore --no-owner -U "$postgres_user" -d "$postgres_db" /tmp/restore.dump
 compose "$env_file" exec -T postgres rm -f /tmp/restore.dump
 trap - EXIT
+compose "$env_file" run --rm migrate
 compose "$env_file" up --detach api worker scheduler frontend nginx
-printf '%s\n' 'Restore completed. Run release smoke and application-level integrity checks before reopening traffic.'
+printf '%s\n' 'Restore and Alembic upgrade completed. Run release smoke and application-level integrity checks before reopening traffic.'

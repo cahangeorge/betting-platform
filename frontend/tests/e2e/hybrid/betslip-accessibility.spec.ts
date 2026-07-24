@@ -84,7 +84,7 @@ test('mobile landscape keeps floating ticket actions above the bottom navigation
 		await page.setViewportSize({ width: 844, height: 390 });
 		await openTicketsWithSelection(page, fixtures.scheduledMatchLabel);
 
-		const fab = page.getByRole('button', { name: 'Revizuiește biletul' });
+		const fab = page.locator('button[aria-label="Revizuiește biletul"]');
 		const stickyAction = page.getByTestId('tickets-generate-sticky-cta');
 		await expect(fab).toBeVisible();
 		await expect(stickyAction).toBeVisible();
@@ -111,7 +111,7 @@ test('mobile shell reserves a simulated bottom safe-area inset', async ({ page, 
 		await page.evaluate(() => {
 			document.documentElement.style.setProperty('--safe-area-bottom', '34px');
 		});
-		await expect(page.getByRole('button', { name: 'Revizuiește biletul' })).toBeVisible();
+		await expect(page.locator('button[aria-label="Revizuiește biletul"]')).toBeVisible();
 		await expect(page.getByTestId('tickets-generate-sticky-cta')).toBeVisible();
 
 		const geometry = await readMobileActionGeometry(page);
@@ -136,7 +136,7 @@ test('mobile betslip FAB clears the sticky ticket-generation action and icon sid
 		await page.setViewportSize({ width: 390, height: 844 });
 		await openTicketsWithSelection(page, fixtures.scheduledMatchLabel);
 
-		const fab = page.getByRole('button', { name: 'Revizuiește biletul' });
+		const fab = page.locator('button[aria-label="Revizuiește biletul"]');
 		const stickyAction = page.getByTestId('tickets-generate-sticky-cta');
 		await expect(fab).toBeVisible();
 		await expect(stickyAction).toBeVisible();

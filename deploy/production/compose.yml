@@ -167,8 +167,8 @@ services:
     <<: *service-defaults
     image: ${NGINX_IMAGE:?must be an immutable image digest}
     ports:
-      - ${BET_HTTP_PORT:?set the public HTTP port}:80
-      - ${BET_HTTPS_PORT:?set the public HTTPS port}:443
+      - ${BET_HTTP_PORT:?set the public HTTP port}:8080
+      - ${BET_HTTPS_PORT:?set the public HTTPS port}:8443
     volumes:
       - ${TLS_CERT_PATH:?absolute path to the deployed certificate}:/etc/nginx/tls/tls.crt:ro
       - ${TLS_KEY_PATH:?absolute path to the deployed private key}:/etc/nginx/tls/tls.key:ro
