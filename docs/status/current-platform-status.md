@@ -1,18 +1,19 @@
 # Current Platform Status
 
-Updated: 2026-07-25T02:10:30+03:00
-Repository/branch: `/home/gion/Projects/bet` / `agent/post-merge-trivy-status-2026-07-24`
+Updated: 2026-07-25T03:30:35+03:00
+Repository/branch: `/home/gion/Projects/bet` / `agent/post-merge-backend-evidence-2026-07-25`
 Git state at this handoff refresh:
 
 ```text
-PR #11 is merged in current `origin/main` at `e2ea635`. Runtime hardening commit
-`6c33259518438ded24f16bd68148aad30c271a74` is pushed on this branch and updates
-open PR #12. On published head `0d9c9b94833789af746a802545bdcdd5aa83f7f2`,
-Backend, Frontend, Security, and Hybrid E2E all passed; Hybrid completed in
-**7m05s**. GitHub reports the PR mergeable with merge state `CLEAN`. The
-pre-existing reconciliation stashes remain preserved. The three tracked
-submodules are clean and unchanged. No release tag, GHCR publication,
-deployment, reset, clean, or submodule mutation occurred during this work.
+PR #12 is merged into current `origin/main` as
+`3550b9cf58d75bb4a1f2f02fee56493d03bd76af`. Evidence-only run `30135830444`
+passed source verification, image build/runtime smoke, Trivy gates, and SBOM
+packaging on that exact SHA; `publish-signed-images` was skipped. This
+post-merge branch was created cleanly from `origin/main` only to record the
+durable checkpoint. The pre-existing reconciliation stashes remain preserved.
+The three tracked submodules are clean and unchanged. No release tag, GHCR
+publication, deployment, reset, clean, or submodule mutation occurred during
+this work.
 ```
 
 This is the first status document to read in a new coding session. Re-run
@@ -46,16 +47,66 @@ Current program state:
   and strict fail-closed gate verified in CI; external release gates pending**.
 - Phase 3 product/UX: **local implemented scope and browser/PWA gates green**.
 - Phase 4 adversarial QA/staging: **local and branch E2E gates green; protected staging and external operations evidence pending**.
-- Phase 5 release candidate: **PR #8 through #11 merged; exact main evidence is
-  green; backend residual-risk remediation is published in green, mergeable
-  PR #12; separate merge authorization, clean merged-main image evidence,
-  protected release, and external staging gates remain pending**.
+- Phase 5 release candidate: **PR #8 through #12 merged; exact main source,
+  image runtime, Trivy, and SBOM evidence is green; explicit exact-tag/GHCR
+  approval, protected publication proof, and external staging gates remain**.
 - Paper execution: **excluded from public MVP** by accepted ADR
   [`2026-07-23-exclude-paper-execution-from-mvp.md`](../adr/2026-07-23-exclude-paper-execution-from-mvp.md).
-- Verdict: **local application/runtime and merged-main release evidence GO;
-  container-risk evidence policy accepted and backend applicability remediation
-  verified locally; public MVP launch HOLD pending a clean CI image report,
-  protected tag execution, and external evidence**.
+- Verdict: **local application/runtime and merged-main evidence-only release
+  candidate GO; container-risk remediation is confirmed by authoritative CI;
+  public MVP launch HOLD pending protected tag execution and external
+  operational evidence**.
+
+## 2026-07-25 merged-main backend evidence checkpoint
+
+This section supersedes the PR #12 and clean-image-evidence continuation items
+below.
+
+- PR [#12](https://github.com/cahangeorge/betting-platform/pull/12) merged at
+  `2026-07-25T00:14:24Z` as exact main commit
+  `3550b9cf58d75bb4a1f2f02fee56493d03bd76af`.
+- Evidence-only run
+  [30135830444](https://github.com/cahangeorge/betting-platform/actions/runs/30135830444)
+  completed successfully on that exact SHA:
+  - `verify-source` passed in **8m49s**, including Alembic, backend, Taskiq,
+    frontend, and the full Chromium hybrid gate;
+  - `build-scan-and-package` passed in **5m19s**, including all three image
+    builds, the expanded non-root backend runtime smoke, Trivy, three CycloneDX
+    SBOMs, secret scan, and evidence packaging;
+  - `publish-signed-images` was **skipped** and the protected image-preservation
+    steps were skipped because the event was `workflow_dispatch`, not a tag.
+- The downloaded exact reports contain:
+  - backend **38** unresolved findings: **32 High / 6 Critical**, **0 fixable**;
+  - frontend **0** and nginx **0**;
+  - the backend package set exactly matches the prior local applicability
+    projection after removal of **77/115** former entries.
+- The hardened fail-closed report gate accepted the exact three reports:
+  `PASS: no fixable High/Critical findings`. Unfixed backend findings remain
+  explicit risk evidence rather than being filtered out.
+- Evidence artifacts:
+  - `release-evidence-3550b9cf58d75bb4a1f2f02fee56493d03bd76af`;
+  - `vulnerability-evidence-3550b9cf58d75bb4a1f2f02fee56493d03bd76af`;
+  - `backend.cdx.json`, `frontend.cdx.json`, and `nginx.cdx.json` are present.
+- GitHub emitted non-blocking Node.js 20 action-runtime deprecation warnings;
+  the runner forced those pinned actions to Node.js 24 and both jobs passed.
+  This is a future workflow-maintenance item, not an MVP release blocker.
+- A fresh remote tag query still returned no `v*` release tag. No GHCR
+  publication or deployment was performed.
+
+Exact continuation order:
+
+1. Obtain explicit approval naming the exact RC tag and GHCR destinations
+   before any tag is created. Proposed next candidate:
+   `v0.1.0-rc.20260725.1` targeting
+   `ghcr.io/cahangeorge/betting-platform-{api,frontend,nginx}`.
+2. After that separate approval, create the tag on exact main `3550b9c`, watch
+   the protected workflow, and verify digest continuity, Cosign signatures,
+   GitHub attestations, and overwrite refusal. This still does not authorize a
+   public deployment.
+3. Public MVP launch remains **HOLD** until credential rotation, protected
+   two-user staging, secret-manager/TLS/DNS/firewall, off-host restore,
+   monitoring/on-call, 48–72 hour soak, canary, rollback, and applicable
+   compliance evidence are complete.
 
 ## 2026-07-25 backend residual-risk remediation checkpoint
 
@@ -824,13 +875,13 @@ verification is recorded in the remediation update above.
 
 ## Exact next step
 
-Obtain separate authorization to merge green, mergeable PR #12. Do not create a
-release tag or publish to GHCR without later explicit approval naming both
-exact tag and destination. Keep public release/MVP launch **HOLD** until clean
-merged-main image evidence, secret-manager, DNS/TLS/firewall, off-host
-backup/restore, protected two-user staging,
-observability/on-call/soak/canary/rollback, and applicable compliance evidence
-are recorded.
+Obtain explicit approval naming exact tag
+`v0.1.0-rc.20260725.1` and GHCR destinations
+`ghcr.io/cahangeorge/betting-platform-{api,frontend,nginx}` before creating a
+release tag. Keep public release/MVP launch **HOLD** until protected publication
+evidence, secret-manager, DNS/TLS/firewall, off-host backup/restore, protected
+two-user staging, observability/on-call/soak/canary/rollback, and applicable
+compliance evidence are recorded.
 
 ## Historical platform snapshot
 
