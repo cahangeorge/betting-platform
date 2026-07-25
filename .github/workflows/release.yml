@@ -188,6 +188,8 @@ jobs:
 
           test "$(docker run --rm --entrypoint id bet-api:${{ github.sha }} -u)" != "0"
           docker run --rm --entrypoint dpkg bet-api:${{ github.sha }} --audit
+          docker run --rm --entrypoint sh bet-api:${{ github.sha }} -lc \
+            '! command -v uv && ! command -v uvx && ! python -m pip show uv >/dev/null 2>&1'
           docker run --rm --entrypoint python bet-api:${{ github.sha }} -c '
           import os
           from pathlib import Path

@@ -455,6 +455,7 @@ class ProductionContractTests(unittest.TestCase):
 
         self.assertIn("ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright", backend)
         self.assertIn("pip install --no-cache-dir uv==0.11.25", backend)
+        self.assertIn("python -m pip uninstall --yes uv", backend)
         self.assertIn(
             "--requirement backend/requirements-production.lock",
             backend,
@@ -479,6 +480,10 @@ class ProductionContractTests(unittest.TestCase):
         runtime_prune = backend.index("apt-get autoremove --purge -y")
         self.assertLess(
             backend.index("python -m playwright install --with-deps chromium"),
+            runtime_prune,
+        )
+        self.assertLess(
+            backend.index("python -m pip uninstall --yes uv"),
             runtime_prune,
         )
         self.assertLess(runtime_prune, backend.index("addgroup --system --gid 1001"))
@@ -510,6 +515,8 @@ class ProductionContractTests(unittest.TestCase):
         self.assertIn("--entrypoint id bet-api:", release)
         self.assertIn("--entrypoint dpkg bet-api:", release)
         self.assertIn("--audit", release)
+        self.assertIn("! command -v uv && ! command -v uvx", release)
+        self.assertIn("! python -m pip show uv", release)
         self.assertIn("from app.main import app", release)
         for bridge_import in (
             "import asyncpg",
