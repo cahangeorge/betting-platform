@@ -1,19 +1,21 @@
 # Current Platform Status
 
-Updated: 2026-07-25T03:30:35+03:00
-Repository/branch: `/home/gion/Projects/bet` / `agent/post-merge-backend-evidence-2026-07-25`
+Updated: 2026-07-25T11:02:34+03:00
+Repository/branch: `/home/gion/Projects/bet` / `agent/release-uv-runtime-remediation-2026-07-25`
 Git state at this handoff refresh:
 
 ```text
 PR #12 is merged into current `origin/main` as
-`3550b9cf58d75bb4a1f2f02fee56493d03bd76af`. Evidence-only run `30135830444`
-passed source verification, image build/runtime smoke, Trivy gates, and SBOM
-packaging on that exact SHA; `publish-signed-images` was skipped. This
-post-merge branch was created cleanly from `origin/main` only to record the
-durable checkpoint. The pre-existing reconciliation stashes remain preserved.
-The three tracked submodules are clean and unchanged. No release tag, GHCR
-publication, deployment, reset, clean, or submodule mutation occurred during
-this work.
+`3550b9cf58d75bb4a1f2f02fee56493d03bd76af`. Protected tag
+`v0.1.0-rc.20260725.1` points to that exact SHA. Tag run `30149673025` passed
+source verification plus all image builds/runtime smoke, then failed closed on
+two newly fixable High findings carried only by the build-time `uv`/`uvx`
+binaries in the backend runtime image. `publish-signed-images` was skipped, so
+no GHCR image or partial publication occurred. Remediation commit `eac1ad0`
+removes `uv` after dependency/browser installation and adds fail-closed runtime
+contracts. The failed tag remains immutable and quarantined; a new reviewed
+revision and new RC tag are required. The three tracked submodules are clean
+and unchanged.
 ```
 
 This is the first status document to read in a new coding session. Re-run
@@ -43,19 +45,80 @@ Current program state:
 - Phase 0 durable checkpoint and baseline: **complete**.
 - Phase 1 reproducible development runtime: **complete locally**.
 - Phase 2 security/release foundation: **application/source gates green;
-  container residual-risk policy accepted; fixable runtime findings remediated
-  and strict fail-closed gate verified in CI; external release gates pending**.
+  container residual-risk policy accepted; strict fail-closed gate blocked the
+  first protected RC on newly fixable build-tool findings; local remediation is
+  green and clean CI evidence is pending**.
 - Phase 3 product/UX: **local implemented scope and browser/PWA gates green**.
 - Phase 4 adversarial QA/staging: **local and branch E2E gates green; protected staging and external operations evidence pending**.
-- Phase 5 release candidate: **PR #8 through #12 merged; exact main source,
-  image runtime, Trivy, and SBOM evidence is green; explicit exact-tag/GHCR
-  approval, protected publication proof, and external staging gates remain**.
+- Phase 5 release candidate: **PR #8 through #12 merged; exact main
+  evidence-only run was green; RC `v0.1.0-rc.20260725.1` is quarantined after a
+  fail-closed Trivy block before publication; remediation review/CI, a new RC,
+  signed GHCR proof, and external staging gates remain**.
 - Paper execution: **excluded from public MVP** by accepted ADR
   [`2026-07-23-exclude-paper-execution-from-mvp.md`](../adr/2026-07-23-exclude-paper-execution-from-mvp.md).
-- Verdict: **local application/runtime and merged-main evidence-only release
-  candidate GO; container-risk remediation is confirmed by authoritative CI;
-  public MVP launch HOLD pending protected tag execution and external
-  operational evidence**.
+- Verdict: **local application/runtime GO; release-candidate and public MVP
+  launch HOLD until the remediation is merged and clean CI proves zero fixable
+  High/Critical findings, followed by a new protected signed release and the
+  external operational evidence**.
+
+## 2026-07-25 failed RC and build-tool remediation checkpoint
+
+This section supersedes the exact-tag continuation in the merged-main evidence
+checkpoint below.
+
+- Authorized protected tag `v0.1.0-rc.20260725.1` was created and pushed on
+  exact main SHA `3550b9cf58d75bb4a1f2f02fee56493d03bd76af`.
+- Protected release run
+  [30149673025](https://github.com/cahangeorge/betting-platform/actions/runs/30149673025)
+  recorded:
+  - `verify-source`: **success**;
+  - all three image builds and runtime smoke: **success**;
+  - backend/frontend/nginx Trivy scans: completed;
+  - `build-scan-and-package`: **failure** at the fixable-finding gate;
+  - `publish-signed-images`: **skipped**.
+- The retained vulnerability artifact reports backend **40** High/Critical
+  entries: **38 unresolved** (**32 High / 6 Critical**) plus exactly **2
+  fixable High** entries. Frontend and nginx remain at **0**.
+- Both blocking entries are `GHSA-4w2j-m93h-cj5j` for embedded
+  `quinn-proto 0.11.14 -> 0.11.15`, targeted only at
+  `/usr/local/bin/uv` and `/usr/local/bin/uvx`. Source, Serena, and the current
+  Codebase Memory graph confirm that the application does not invoke these
+  tools at runtime.
+- No release image was preserved or published because the gate failed before
+  the scanned-image handoff and publish job. The failed tag is retained as an
+  immutable quarantined release attempt; it must not be rerun, moved, deleted,
+  or overwritten.
+- Remediation commit `eac1ad0` uninstalls the build-only `uv` package after the
+  exact production dependency graph and Playwright Chromium are installed. The
+  release runtime smoke now fails if `uv`, `uvx`, or the Python `uv` package is
+  present.
+- Fresh local proof:
+  - root release/security contracts **29/29**;
+  - actionlint `1.7.12`, workflow YAML, release shell syntax, tracked-secret
+    scan, and `git diff --check`: pass;
+  - backend Ruff clean and pytest **545/545**;
+  - an offline-derived image from the exact prior validated backend image
+    successfully uninstalled `uv`; `uv`, `uvx`, and `pip show uv` were absent;
+    `dpkg --audit`, FastAPI, all three Python bridges, writable non-root HOME,
+    and real Chromium launch passed;
+  - a full local rebuild remains unable to resolve PyPI from the Podman build
+    namespace, so clean CI remains the authoritative rebuild/Trivy proof.
+
+Exact continuation order:
+
+1. Push the remediation branch and require all PR checks plus the protected
+   release evidence workflow on its clean revision.
+2. Merge only after the complete backend report returns to **0 fixable**
+   High/Critical findings and all three SBOMs are retained.
+3. After merged-main evidence is green, issue a new version tag; never reuse
+   `v0.1.0-rc.20260725.1`.
+4. Verify exact digest continuity, Cosign signatures, GitHub attestations,
+   protected version promotion, and overwrite refusal for all three GHCR
+   destinations.
+5. Public MVP launch remains **HOLD** until credential rotation, protected
+   two-user staging, secret-manager/TLS/DNS/firewall, off-host restore,
+   monitoring/on-call, 48–72 hour soak, canary, rollback, and applicable
+   compliance evidence are complete.
 
 ## 2026-07-25 merged-main backend evidence checkpoint
 
