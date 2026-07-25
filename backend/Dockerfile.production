@@ -20,6 +20,7 @@ RUN pip install --no-cache-dir uv==0.11.25 \
     && uv pip install --system --strict --no-cache \
     --requirement backend/requirements-production.lock \
     && python -m playwright install --with-deps chromium \
+    && python -m pip uninstall --yes uv \
     && apt-get autoremove --purge -y \
     gcc \
     g++ \

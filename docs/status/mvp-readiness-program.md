@@ -1,9 +1,9 @@
 # MVP Readiness Program
 
-Updated: 2026-07-25T02:10:30+03:00
+Updated: 2026-07-25T11:02:34+03:00
 Repository: `/home/gion/Projects/bet`
-Branch: `agent/post-merge-trivy-status-2026-07-24`
-Program status: **ACTIVE — PR #12 green/mergeable; public MVP launch HOLD**
+Branch: `agent/release-uv-runtime-remediation-2026-07-25`
+Program status: **ACTIVE — RC1 quarantined; remediation PR/CI and public MVP launch HOLD**
 
 This is the durable execution register for reaching a verified MVP. It records
 project status, expert findings, phases, task dependencies, verification gates,
@@ -65,7 +65,7 @@ The program can be marked **MVP GO** only when:
 | `flumine/` | EXCLUDED | post-MVP paper execution | accepted ADR excludes paper execution from public MVP |
 | PWA | LOCAL GATES GREEN | installable shell | production HTTPS offline/recovery/update suite passed; installed-device lifecycle remains |
 | Mobile/desktop design | LOCAL GATES GREEN | operator UI | 320–1920 plus landscape/safe-area/touch/forced-colors browser gates passed; hardware/manual zoom remains |
-| DevOps/release | PR #12 GREEN / MERGEABLE | deployment | published head `0d9c9b9` passed Backend, Frontend, Security, and Hybrid E2E (7m05s); applicability review removed packages responsible for 77 prior entries and expanded image smoke passed; separate merge authorization, clean merged-main image report, signed tag, secrets, public TLS, off-host backup, monitoring and canary remain |
+| DevOps/release | PR #12 MERGED / MAIN EVIDENCE GREEN | deployment | main `3550b9c`: run `30135830444` passed verify-source (8m49s) and build-scan-package (5m19s); backend=38 unresolved (32H/6C), frontend/nginx=0, fixable=0, three SBOMs, publication skipped; exact tag approval, signed publication, secrets, public TLS, off-host backup, monitoring and canary remain |
 | QA | LOCAL GATES GREEN / STAGING HOLD | release evidence | real protected two-user staging lifecycle is absent |
 | `betfront/` | ARCHIVED/DIRTY | none | preserve; do not include in current MVP |
 
@@ -272,9 +272,9 @@ confirmed.
 | UX-004 | Content | make the MVP workflow language consistent | COMPLETE — Prepare copy/statuses align with the MVP flow; odds controls have match-specific accessible names; ticket-review copy is Romanian |
 | QA-002 | Tenant | add cross-user isolation gates for jobs, predictions, WS, trading, bankroll, and settlement | COMPLETE-local — REST/settlement isolation plus user-scoped prediction WebSocket tests |
 | QA-003 | Browser | run all hybrid tests with retries disabled and eliminate flaky waits/cleanup ambiguity | COMPLETE-local — repeated retry-free Chromium gates |
-| OPS-002 | CI/CD | build, scan, publish, deploy, smoke, and retain immutable rollback artifacts | PARTIAL — exact scanned-image handoff, GHCR digest publication, keyless Cosign, GitHub attestations, non-overwrite, version promotion, and auto-rollback are implemented and contract-tested; protected tag/deploy execution remains external |
-| OPS-006 | CI supply chain | pin and validate actions/scanners, gate release tags on application tests, scan current source and images | COMPLETE-MAIN / PR #12 GREEN / PRE-TAG HOLD — main `e2ea635` passed Backend, Frontend, Security plus run `30126304645`; complete JSON, fixable=0, frontend/nginx=0, backend=115 unresolved, three SBOMs, publication skipped. Applicability review is complete and PR #12 removes packages responsible for 77 prior entries, expands the CI image smoke, and passes all PR checks. Clean merged-main image evidence and protected tag evidence remain |
-| BE-004 | Container scraper runtime | make the production Chromium install available to the non-root backend runtime user | COMPLETE-local contract — shared `/ms-playwright` path and ownership; CI now launches Chromium in the built non-root image; execution awaits CI because local container DNS is unavailable |
+| OPS-002 | CI/CD | build, scan, publish, deploy, smoke, and retain immutable rollback artifacts | PARTIAL / RC1 QUARANTINED — exact scanned-image handoff, GHCR digest publication, keyless Cosign, GitHub attestations, non-overwrite, version promotion, and auto-rollback are implemented and contract-tested. Tag run `30149673025` failed before image preservation/publication, so no GHCR image was published; new reviewed revision/tag and protected publication proof remain |
+| OPS-006 | CI supply chain | pin and validate actions/scanners, gate release tags on application tests, scan current source and images | REMEDIATION-CI PENDING — exact main `3550b9c` passed evidence-only run `30135830444`, but protected tag run `30149673025` later blocked on two newly fixable High findings in build-only `uv`/`uvx`. Local commit `eac1ad0` removes the build tool after installation and adds absence smoke/contracts; root 29/29, backend 545/545, Ruff/actionlint/YAML/shell/secret/diff checks and derived-image runtime smoke pass. Clean rebuilt-image Trivy/SBOM evidence remains mandatory before a new tag |
+| BE-004 | Container scraper runtime | make the production Chromium install available to the non-root backend runtime user | COMPLETE-CI — shared `/ms-playwright`, non-root UID, `dpkg --audit`, direct bridge imports, writable HOME, and Chromium launch passed in exact main image smoke |
 | BE-005 | Production dependencies | resolve backend plus all bridge projects from one exact Python 3.12 dependency graph | COMPLETE-local — 204-package uv lock, regeneration diff and strict dry-run green |
 | FE-007 | Container dependencies | pin pnpm and avoid a second mutable production dependency resolution | COMPLETE-local — `pnpm 10.34.5`, one frozen install, builder prune and copied production node_modules; SvelteKit `2.70.1`/Vite `8.1.5`; unused npm/Corepack removed from runtime; check, 121 unit tests, E2E typecheck, build, and High/Critical production dependency audit green |
 | OPS-003 | Observability | health/metrics/logs/alerts for API, DB, Redis, worker, scheduler, queues, scrapers | PARTIAL — truthful readiness/heartbeats; alerts/on-call external |
@@ -380,16 +380,18 @@ leak, duplicate financial mutation, stale queue state, or unexplained fixture.
 
 ### Phase 5 — release candidate and MVP decision
 
-Status: **IN PROGRESS — PR #11 and prior merged-main evidence complete; PR #12
-green/mergeable; separate merge authorization, clean merged-main image
-evidence, signed tag, and external gates remain**
+Status: **IN PROGRESS — PR #12 and exact merged-main evidence complete; first
+protected tag failed closed before publication; remediation PR/CI, a new signed
+publication, and external gates remain**
 
 - [x] Clean/reconciled Git revision and pinned nested dependencies — PR #7
       merged as signed `main` commit `881a436`; tracked submodules unchanged.
 - [ ] Actual protected immutable publish run with
       security/dependency/container scans, signed digests, and attestations;
       repository workflow/contracts and pre-publication merged-main evidence
-      are green, but exact tag/destination approval has not been granted.
+      are green. Authorized RC `v0.1.0-rc.20260725.1` failed closed before
+      publication on two newly fixable build-tool findings and is quarantined;
+      PR #14 plus a new immutable tag must complete the contract.
 - [x] Independent local code review and architecture invariant review; final
       verdict Critical 0 / High 0 / Medium 0 — APPROVE.
 - [ ] Staging soak for at least 48–72 hours.
@@ -492,11 +494,13 @@ placement must remain disabled.
 
 ## Immediate execution order
 
-1. Obtain separate authorization to merge green, mergeable PR #12.
-2. After the authorized merge, run an evidence-only release workflow on exact
-   `main`; inspect the new backend Trivy report and all three SBOMs.
-3. Only after new explicit approval naming an exact tag and GHCR destination,
-   execute and verify the protected signed release.
+1. Finish PR #14 checks and clean release evidence; merge only when Trivy
+   reports zero fixable High/Critical findings and all three SBOMs are retained.
+2. Rerun evidence-only verification on exact merged `main`, then create new tag
+   `v0.1.0-rc.20260725.2` for
+   `ghcr.io/cahangeorge/betting-platform-{api,frontend,nginx}`. Never reuse RC1.
+3. Verify the protected signed release, digest continuity, attestations,
+   version promotion, and overwrite refusal for all three images.
 4. Execute protected staging lifecycle/two-user, off-host backup/restore,
    observability/soak/canary, secret-manager, and digest-pinned deployment
    evidence.
@@ -513,25 +517,34 @@ placement must remain disabled.
   `2026-07-23-exclude-paper-execution-from-mvp.md`.
 - PR #11 merged into `main` as `e2ea635`; Backend, Frontend, Security, and
   evidence-only run `30126304645` are green.
-- Runtime hardening commit `6c33259` is included in open PR #12. Published head
-  `0d9c9b9` passed Backend, Frontend, Security, and Hybrid E2E (**7m05s**);
-  GitHub reports it mergeable with merge state `CLEAN`.
-- The exact prior backend report retains 115 unresolved findings without fixed
-  versions. Applicability review and local package-removal remediation are
-  complete: the rebuilt image removes packages responsible for 77 prior
-  entries and passes direct bridge/HOME/Chromium smoke. A clean CI report
-  remains the pre-tag evidence gate; frontend and nginx retain zero and prior
-  fixable findings are zero.
-- No `v0.1.0-rc.20260724.*` tag and no GHCR release artifact exist yet.
+- PR #12 merged into `main` as `3550b9c`.
+- Exact-main evidence run `30135830444` passed source and image gates. Backend
+  retains 38 unresolved findings (32 High / 6 Critical), all without fixed
+  versions; frontend/nginx and fixable findings are zero. Three SBOMs and both
+  evidence artifacts are present; publication was skipped.
+- Pinned GitHub actions still declare the deprecated Node.js 20 runtime; the
+  runner forced Node.js 24 and the workflow passed. Upgrade those actions in a
+  future maintenance lane.
+- Protected tag `v0.1.0-rc.20260725.1` exists on exact SHA `3550b9c`.
+  Run `30149673025` passed source and runtime smoke but failed the fixable
+  vulnerability gate on build-only `uv`/`uvx`. Scanned-image preservation and
+  `publish-signed-images` were skipped; no GHCR artifact was produced by that
+  run. The tag is immutable/quarantined and must not be reused.
+- PR #14 carries commit `eac1ad0`, which uninstalls `uv` before runtime and
+  fails the image smoke if `uv`, `uvx`, or package metadata remain. Local
+  contracts, backend tests, image runtime proof, and independent review are
+  green; complete clean CI/Trivy/SBOM evidence is still required.
 - GitHub currently lists only collaborator `cahangeorge`; a genuinely
   independent required reviewer for `registry-release` cannot be configured
   until another trusted reviewer is added.
 
 ## Exact next step
 
-Obtain separate authorization to merge green, mergeable PR #12. After the
-authorized merge, require an evidence-only release run on exact `main` and
-inspect its new backend Trivy report before any separately authorized tag. Do
-not tag, publish, or deploy without new explicit approval. Keep public
-release/MVP launch HOLD until the external release gates in the verification
-refresh are evidenced.
+Finish PR #14 checks, run clean release evidence on its reviewed revision,
+merge it, and repeat evidence-only verification on exact merged `main`. If the
+three image reports contain zero fixable High/Critical findings and all SBOMs
+are retained, create new tag `v0.1.0-rc.20260725.2` for the authorized GHCR
+destinations `ghcr.io/cahangeorge/betting-platform-{api,frontend,nginx}` and
+verify signed digest/attestation continuity. Never reuse RC1. Keep public
+MVP launch HOLD until protected publication proof and the external release
+gates in the verification refresh are evidenced.
