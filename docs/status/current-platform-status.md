@@ -938,13 +938,15 @@ verification is recorded in the remediation update above.
 
 ## Exact next step
 
-Obtain explicit approval naming exact tag
-`v0.1.0-rc.20260725.1` and GHCR destinations
-`ghcr.io/cahangeorge/betting-platform-{api,frontend,nginx}` before creating a
-release tag. Keep public release/MVP launch **HOLD** until protected publication
-evidence, secret-manager, DNS/TLS/firewall, off-host backup/restore, protected
-two-user staging, observability/on-call/soak/canary/rollback, and applicable
-compliance evidence are recorded.
+Finish PR #14 checks, produce clean release evidence on the reviewed revision,
+merge it, and rerun evidence-only verification on exact merged `main`. If all
+gates remain green and the three reports contain zero fixable High/Critical
+findings, create new immutable tag `v0.1.0-rc.20260725.2` for
+`ghcr.io/cahangeorge/betting-platform-{api,frontend,nginx}`. Never reuse RC1.
+Keep public release/MVP launch **HOLD** until protected publication evidence,
+secret-manager, DNS/TLS/firewall, off-host backup/restore, protected two-user
+staging, observability/on-call/soak/canary/rollback, and applicable compliance
+evidence are recorded.
 
 ## Historical platform snapshot
 

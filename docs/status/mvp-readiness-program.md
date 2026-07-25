@@ -1,9 +1,9 @@
 # MVP Readiness Program
 
-Updated: 2026-07-25T03:30:35+03:00
+Updated: 2026-07-25T11:02:34+03:00
 Repository: `/home/gion/Projects/bet`
-Branch: `agent/post-merge-backend-evidence-2026-07-25`
-Program status: **ACTIVE — merged-main evidence GO; protected tag and public MVP launch HOLD**
+Branch: `agent/release-uv-runtime-remediation-2026-07-25`
+Program status: **ACTIVE — RC1 quarantined; remediation PR/CI and public MVP launch HOLD**
 
 This is the durable execution register for reaching a verified MVP. It records
 project status, expert findings, phases, task dependencies, verification gates,
@@ -380,15 +380,18 @@ leak, duplicate financial mutation, stale queue state, or unexplained fixture.
 
 ### Phase 5 — release candidate and MVP decision
 
-Status: **IN PROGRESS — PR #12 and exact merged-main evidence complete; explicit
-tag/GHCR approval, signed publication proof, and external gates remain**
+Status: **IN PROGRESS — PR #12 and exact merged-main evidence complete; first
+protected tag failed closed before publication; remediation PR/CI, a new signed
+publication, and external gates remain**
 
 - [x] Clean/reconciled Git revision and pinned nested dependencies — PR #7
       merged as signed `main` commit `881a436`; tracked submodules unchanged.
 - [ ] Actual protected immutable publish run with
       security/dependency/container scans, signed digests, and attestations;
       repository workflow/contracts and pre-publication merged-main evidence
-      are green, but exact tag/destination approval has not been granted.
+      are green. Authorized RC `v0.1.0-rc.20260725.1` failed closed before
+      publication on two newly fixable build-tool findings and is quarantined;
+      PR #14 plus a new immutable tag must complete the contract.
 - [x] Independent local code review and architecture invariant review; final
       verdict Critical 0 / High 0 / Medium 0 — APPROVE.
 - [ ] Staging soak for at least 48–72 hours.
@@ -491,14 +494,17 @@ placement must remain disabled.
 
 ## Immediate execution order
 
-1. Obtain explicit approval for exact tag `v0.1.0-rc.20260725.1` and
-   `ghcr.io/cahangeorge/betting-platform-{api,frontend,nginx}`.
-2. After approval, tag exact main `3550b9c` and verify the protected signed
-   release, digest continuity, attestations, and overwrite refusal.
-3. Execute protected staging lifecycle/two-user, off-host backup/restore,
+1. Finish PR #14 checks and clean release evidence; merge only when Trivy
+   reports zero fixable High/Critical findings and all three SBOMs are retained.
+2. Rerun evidence-only verification on exact merged `main`, then create new tag
+   `v0.1.0-rc.20260725.2` for
+   `ghcr.io/cahangeorge/betting-platform-{api,frontend,nginx}`. Never reuse RC1.
+3. Verify the protected signed release, digest continuity, attestations,
+   version promotion, and overwrite refusal for all three images.
+4. Execute protected staging lifecycle/two-user, off-host backup/restore,
    observability/soak/canary, secret-manager, and digest-pinned deployment
    evidence.
-4. Re-evaluate the release/MVP launch HOLD verdict.
+5. Re-evaluate the release/MVP launch HOLD verdict.
 
 ## Current blockers and unknowns
 
@@ -519,17 +525,26 @@ placement must remain disabled.
 - Pinned GitHub actions still declare the deprecated Node.js 20 runtime; the
   runner forced Node.js 24 and the workflow passed. Upgrade those actions in a
   future maintenance lane.
-- A fresh remote query returns no `v*` release tag, and run `30135830444`
-  skipped `publish-signed-images`; no workflow-produced GHCR release artifact
-  exists yet.
+- Protected tag `v0.1.0-rc.20260725.1` exists on exact SHA `3550b9c`.
+  Run `30149673025` passed source and runtime smoke but failed the fixable
+  vulnerability gate on build-only `uv`/`uvx`. Scanned-image preservation and
+  `publish-signed-images` were skipped; no GHCR artifact was produced by that
+  run. The tag is immutable/quarantined and must not be reused.
+- PR #14 carries commit `eac1ad0`, which uninstalls `uv` before runtime and
+  fails the image smoke if `uv`, `uvx`, or package metadata remain. Local
+  contracts, backend tests, image runtime proof, and independent review are
+  green; complete clean CI/Trivy/SBOM evidence is still required.
 - GitHub currently lists only collaborator `cahangeorge`; a genuinely
   independent required reviewer for `registry-release` cannot be configured
   until another trusted reviewer is added.
 
 ## Exact next step
 
-Obtain explicit approval naming exact tag `v0.1.0-rc.20260725.1` and GHCR
-destinations `ghcr.io/cahangeorge/betting-platform-{api,frontend,nginx}`. Do
-not tag, publish, or deploy without that approval. Keep public release/MVP
-launch HOLD until protected publication proof and the external release gates
-in the verification refresh are evidenced.
+Finish PR #14 checks, run clean release evidence on its reviewed revision,
+merge it, and repeat evidence-only verification on exact merged `main`. If the
+three image reports contain zero fixable High/Critical findings and all SBOMs
+are retained, create new tag `v0.1.0-rc.20260725.2` for the authorized GHCR
+destinations `ghcr.io/cahangeorge/betting-platform-{api,frontend,nginx}` and
+verify signed digest/attestation continuity. Never reuse RC1. Keep public
+MVP launch HOLD until protected publication proof and the external release
+gates in the verification refresh are evidenced.
