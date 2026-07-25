@@ -461,12 +461,29 @@ class ProductionContractTests(unittest.TestCase):
         )
         self.assertNotIn("pip install --no-cache-dir \\\n    ./backend", backend)
         self.assertIn(
-            'chown -R appuser:appuser /app "$PLAYWRIGHT_BROWSERS_PATH"', backend
+            'ENV HOME=/home/appuser',
+            backend,
+        )
+        self.assertIn(
+            'adduser --system --uid 1001 --gid 1001 --home "$HOME" appuser',
+            backend,
+        )
+        self.assertIn(
+            'chown -R appuser:appuser /app "$PLAYWRIGHT_BROWSERS_PATH" "$HOME"',
+            backend,
         )
         self.assertLess(
             backend.index("ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright"),
             backend.index("python -m playwright install --with-deps chromium"),
         )
+        runtime_prune = backend.index("apt-get autoremove --purge -y")
+        self.assertLess(
+            backend.index("python -m playwright install --with-deps chromium"),
+            runtime_prune,
+        )
+        self.assertLess(runtime_prune, backend.index("addgroup --system --gid 1001"))
+        for build_only_package in ("gcc", "g++", "git", "libpq-dev", "xvfb"):
+            self.assertIn(f"    {build_only_package} \\", backend[runtime_prune:])
         self.assertIn("PLAYWRIGHT_BROWSERS_PATH: /ms-playwright", compose)
 
         self.assertIn('"packageManager": "pnpm@10.34.5"', package)
@@ -491,9 +508,22 @@ class ProductionContractTests(unittest.TestCase):
         evidence = release.index("name: Prepare release evidence directory")
         self.assertLess(smoke, evidence)
         self.assertIn("--entrypoint id bet-api:", release)
+        self.assertIn("--entrypoint dpkg bet-api:", release)
+        self.assertIn("--audit", release)
         self.assertIn("from app.main import app", release)
+        for bridge_import in (
+            "import asyncpg",
+            "import oddsharvester",
+            "import penaltyblog",
+            "import soccerdata",
+        ):
+            self.assertIn(bridge_import, release)
         self.assertIn("playwright.chromium.launch()", release)
         self.assertIn('PLAYWRIGHT_BROWSERS_PATH"] == "/ms-playwright"', release)
+        self.assertIn('os.environ["HOME"] == "/home/appuser"', release)
+        self.assertIn('home_probe = home / ".bet-runtime-smoke"', release)
+        self.assertIn('home_probe.write_text("ok")', release)
+        self.assertIn("home_probe.unlink()", release)
         self.assertIn("--entrypoint id bet-frontend:", release)
         self.assertIn("--entrypoint id bet-nginx:", release)
         self.assertIn("curl --fail --silent --show-error --location", release)
