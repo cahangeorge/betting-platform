@@ -76,11 +76,15 @@ async def test_ingest_match_odds_persists_snapshot_lineage():
                 }
             ],
         },
+        dataset_id=71,
+        scrape_job_id=19,
     )
 
     snapshot = next(value for value in db.added if isinstance(value, OddsSnapshot))
     entry = next(value for value in db.added if isinstance(value, OddsEntry))
     assert snapshot.match_id == match.id
     assert snapshot.quality == "complete"
+    assert snapshot.dataset_id == 71
+    assert snapshot.scrape_job_id == 19
     assert entry.odds_snapshot_id == snapshot.id == 41
     assert report["written"] == 1

@@ -175,10 +175,7 @@ function tomorrowLocalDate(): string {
 
 	// Future Mecies
 	let futureEnabled = $state(true);
-	let futureDays = $state('7');
-	let futureWeeks = $state('0');
-	let futureMonths = $state('0');
-	let futureYears = $state('0');
+	let futureDays = $state('1');
 
 	// Options
 	let autoScrape = $state(false);
@@ -329,11 +326,16 @@ function tomorrowLocalDate(): string {
 		intervalToDays(historicDays, historicWeeks, historicMonths, historicYears)
 	);
 
-	const futureIntervalDays = $derived(
-		intervalToDays(futureDays, futureWeeks, futureMonths, futureYears)
+	const futureIntervalDays = $derived(positiveInteger(futureDays));
+	const futureTargetReady = $derived(futureIntervalDays >= 1 && futureIntervalDays <= 31);
+	const futureTargetLabel = $derived(
+		futureIntervalDays === 1 ? 'mâine' : `peste ${futureIntervalDays} zile`
 	);
 	const scopeReady = $derived(selectedLeagues.length > 0 || (!pastEnabled && selectedCountries.length > 0));
-	const coverageReady = $derived((pastEnabled && Boolean(pastFrom && pastTo)) || (futureEnabled && futureIntervalDays > 0));
+	const coverageReady = $derived(
+		((pastEnabled && Boolean(pastFrom && pastTo)) || futureEnabled) &&
+		(!futureEnabled || futureTargetReady)
+	);
 	const canStartScrape = $derived(
 		!submitting &&
 		isLargeScopeAcknowledged &&
@@ -349,14 +351,14 @@ function tomorrowLocalDate(): string {
 				: 'Nicio competiție selectată';
 		const ranges: string[] = [];
 		if (pastEnabled) ranges.push(`${historyPresetYears || 'personalizat'} ani de istoric`);
-		if (futureEnabled && futureIntervalDays > 0) ranges.push(`${futureIntervalDays} zile viitoare`);
+		if (futureEnabled && futureTargetReady) ranges.push(futureTargetLabel);
 		return `${scope} · ${ranges.length > 0 ? ranges.join(' + ') : 'Nicio acoperire selectată'}`;
 	});
 
 	const unsupportedControlNotes = $derived.by(() => {
 		const notes: string[] = [];
 		if (dedupSkip) {
-			notes.push('Backendul evită recolectarea joburilor finalizate care au aceiași parametri de intrare.');
+			notes.push('Pentru meciurile viitoare, backendul reutilizează numai un dataset recent pentru aceeași zi țintă și aceiași parametri.');
 		}
 		if (autoScrape) {
 			notes.push('Colectarea automată poate fi salvată ca acțiune persistentă prin /api/v1/jobs.');
@@ -468,6 +470,10 @@ function tomorrowLocalDate(): string {
 		savingScheduledJob = true;
 		scheduledJobsError = '';
 		try {
+			if (!futureEnabled || !futureTargetReady) {
+				scheduledJobsError = 'Alege o zi țintă între 1 și 31 de zile pentru colectarea automată.';
+				return;
+			}
 			const scrapeLeagueSlugs = buildScrapeLeagueSlugs(allLeagues, selectedLeagues);
 			const strategyIds = autoPredictionStrategyIds
 				.split(',')
@@ -512,10 +518,7 @@ function tomorrowLocalDate(): string {
 						command: 'upcoming',
 						future_days: futureIntervalDays,
 						future_range: {
-							days: positiveInteger(futureDays),
-							weeks: positiveInteger(futureWeeks),
-							months: positiveInteger(futureMonths),
-							years: positiveInteger(futureYears)
+							days: positiveInteger(futureDays)
 						},
 						historic_range_days: historicIntervalDays,
 						past_from: pastFrom || undefined,
@@ -597,12 +600,14 @@ function tomorrowLocalDate(): string {
 	}
 
 	function buildBaseScrapeParams(scrapeLeagueSlugs: string[]): Record<string, unknown> {
+		const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 		const params: Record<string, unknown> = {
 			countries: selectedCountries,
 			leagues: scrapeLeagueSlugs,
 			sport: 'football',
 			headless: true,
-			scraper_engine: scraperEngine
+			scraper_engine: scraperEngine,
+			timezone: browserTimezone
 		};
 
 		if (dedupSkip) {
@@ -684,6 +689,10 @@ function tomorrowLocalDate(): string {
 			submitError = 'Confirmă aria mare de colectare istorică înainte de pornire.';
 			return;
 		}
+		if (futureEnabled && !futureTargetReady) {
+			submitError = 'Alege o zi țintă între 1 și 31 de zile.';
+			return;
+		}
 
 		submitting = true;
 
@@ -761,10 +770,7 @@ function tomorrowLocalDate(): string {
 					command: 'upcoming',
 					future_days: futureIntervalDays,
 					future_range: {
-						days: positiveInteger(futureDays),
-						weeks: positiveInteger(futureWeeks),
-						months: positiveInteger(futureMonths),
-						years: positiveInteger(futureYears)
+						days: positiveInteger(futureDays)
 					}
 				};
 				const idempotencyKey = newScrapeIdempotencyKey();
@@ -933,9 +939,6 @@ function tomorrowLocalDate(): string {
 	function setFuturePreset(zile: number) {
 		futureEnabled = true;
 		futureDays = String(zile);
-		futureWeeks = '0';
-		futureMonths = '0';
-		futureYears = '0';
 	}
 
 	function toggleLeague(id: string) {
@@ -1868,22 +1871,17 @@ function tomorrowLocalDate(): string {
 							<p class="mb-2 text-xs font-medium text-muted-foreground">Orizont rapid</p>
 							<div class="grid grid-cols-3 gap-2">
 								{#each [1, 7, 30] as zile (zile)}
-									<button type="button" class={cn('border px-3 py-2 text-xs font-semibold transition-colors', futureIntervalDays === zile ? 'border-football-green bg-football-green text-background' : 'border-border bg-background hover:bg-muted')} onclick={() => setFuturePreset(zile)}>{zile === 1 ? 'Mâine' : `${zile} zile`}</button>
+									<button type="button" class={cn('border px-3 py-2 text-xs font-semibold transition-colors', futureIntervalDays === zile ? 'border-football-green bg-football-green text-background' : 'border-border bg-background hover:bg-muted')} onclick={() => setFuturePreset(zile)}>{zile === 1 ? 'Mâine' : `Peste ${zile} zile`}</button>
 								{/each}
 							</div>
 						</div>
 						<div class="max-w-48">
-							<Input label="Viitor zile" name="scrape-future-zile" type="number" min="0" bind:value={futureDays} />
+							<Input label="Zi țintă peste (zile)" name="scrape-future-zile" type="number" min="1" max="31" bind:value={futureDays} />
 						</div>
-						<div class="border border-border bg-background/60 p-3 text-xs text-muted-foreground">Colectarea va acoperi următoarele <span class="font-mono font-semibold text-foreground">{futureIntervalDays}</span> zile.</div>
-						<details class="group border-t border-border pt-3">
-							<summary class="cursor-pointer list-none text-xs font-semibold text-football-blue focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-football-blue">Orizont personalizat mai lung <span class="group-open:hidden">+</span><span class="hidden group-open:inline">−</span></summary>
-							<div class="mt-3 grid grid-cols-3 gap-2">
-								<Input label="Săptămâni" name="scrape-future-weeks" type="number" min="0" bind:value={futureWeeks} />
-								<Input label="Luni" name="scrape-future-months" type="number" min="0" bind:value={futureMonths} />
-								<Input label="Ani" name="scrape-future-years" type="number" min="0" bind:value={futureYears} />
-							</div>
-						</details>
+						<div class="border border-border bg-background/60 p-3 text-xs text-muted-foreground">
+							Colectarea vizează meciurile din ziua selectată: <span class="font-semibold text-foreground">{futureTargetReady ? futureTargetLabel : 'alege între 1 și 31 de zile'}</span>.
+							Pentru mai multe zile, pornește câte o colectare separată pentru fiecare zi.
+						</div>
 					</div>
 				{/if}
 			</div>
@@ -1906,7 +1904,7 @@ function tomorrowLocalDate(): string {
 				</div>
 				<div class="border border-border bg-muted/20 p-3">
 					<p class="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Viitor</p>
-					<p class="mt-1 text-sm font-semibold text-foreground">{futureEnabled ? `${futureIntervalDays} zile` : 'Dezactivat'}</p>
+					<p class="mt-1 text-sm font-semibold text-foreground">{futureEnabled ? (futureTargetReady ? futureTargetLabel : 'Zi invalidă') : 'Dezactivat'}</p>
 					<p class="mt-1 text-xs text-muted-foreground">Motor: {scraperEngine === 'auto' ? 'Automat' : scraperEngine}</p>
 				</div>
 			</div>

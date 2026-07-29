@@ -1,9 +1,10 @@
 # MVP Readiness Program
 
-Updated: 2026-07-25T11:02:34+03:00
+Updated: 2026-07-29T19:53:11+03:00
 Repository: `/home/gion/Projects/bet`
-Branch: `agent/release-uv-runtime-remediation-2026-07-25`
-Program status: **ACTIVE — RC1 quarantined; remediation PR/CI and public MVP launch HOLD**
+Branch: `agent/mvp-scraper-hardening`, local implementation commit `91857a6`,
+based on `main` at `515fcd1`
+Program status: **ACTIVE — draft PR #15 open; clean CI/merge/new RC and public MVP launch HOLD**
 
 This is the durable execution register for reaching a verified MVP. It records
 project status, expert findings, phases, task dependencies, verification gates,
@@ -13,6 +14,34 @@ link here while this program is active.
 
 The commit-safe integration order for the existing dirty checkout is
 `docs/status/release-candidate-reconciliation.md`.
+
+## Verified refresh — 2026-07-29
+
+- `main == origin/main == 515fcd164706271ce1a2723dd3ac60e6d9b5edcf`
+  before the current edits; PR #14 and evidence-only run `30151025646` are
+  complete and green. RC1 remains quarantined and no RC2 tag exists.
+- Fresh Serena, Codebase Memory, Codex Memory and focused Repomix inspection
+  was reconciled with Git/source. The current source audit found and locally
+  remediated scraper input/SSRF/resource controls, false upcoming-range
+  semantics, stale/orphaned deduplication, unknown-job false success and
+  missing odds-snapshot dataset/job lineage.
+- The Prepare UI now asks for one target day from 1 to 31 days and defaults to
+  tomorrow. The frontend sends its browser timezone; the backend persists the
+  absolute target date and validates again at execution. Recursive payload
+  shape, final normalized size, provider origins, and nginx body size are
+  bounded.
+- Fresh local gates: Ruff pass; backend **556 passed**; Svelte check **0/0**;
+  frontend unit **32 passed**; E2E TypeScript and build pass; targeted Chromium
+  **3 passed**;
+  integrated health/readiness pass; full Chromium hybrid **57 passed** in
+  **3.8 minutes**; Alembic **025 (head)** with no drift; root
+  release/security contracts **29 passed** and tracked-secret scan passed.
+  Final independent review returned **APPROVE** with no blocking finding.
+- This is an isolated implementation candidate, not a merged clean release
+  revision. Draft PR #15 is open; Backend `30472151150`, Frontend `30472152681`,
+  Hybrid E2E `30472152527`, and Security `30472151425` all passed on
+  `63c4a6f`. The PR is mergeable and reports `CLEAN`. Protected RC/public status
+  remains HOLD.
 
 ## MVP scope
 
@@ -59,13 +88,13 @@ The program can be marked **MVP GO** only when:
 | `backend/` | LOCAL GATES GREEN | Current API | shared multi-replica edge/WS controls and production observability |
 | PostgreSQL/Alembic | LOCAL GATES GREEN | Durable state | `025 (head)`, no drift; off-host recovery remains external |
 | Redis/Taskiq | LOCAL GATES GREEN | Async jobs | production soak/monitoring remains external |
-| `OddsHarvester/` | PARTIAL | live scraping | only scrape is covered by the live browser suite |
+| `OddsHarvester/` | ACTIVE BRIDGE / EXTERNAL COVERAGE HOLD | live scraping | local bridge executed truthfully but returned `no_fixtures`; provider coverage and complete protected live lifecycle remain external |
 | `penaltyblog/` | PARTIAL | prediction bridge | real staging inference is not in the current live gate |
 | `soccerdata/` | LOCAL CANARY GREEN | data bridge | protected staging lifecycle remains required |
 | `flumine/` | EXCLUDED | post-MVP paper execution | accepted ADR excludes paper execution from public MVP |
 | PWA | LOCAL GATES GREEN | installable shell | production HTTPS offline/recovery/update suite passed; installed-device lifecycle remains |
 | Mobile/desktop design | LOCAL GATES GREEN | operator UI | 320–1920 plus landscape/safe-area/touch/forced-colors browser gates passed; hardware/manual zoom remains |
-| DevOps/release | PR #12 MERGED / MAIN EVIDENCE GREEN | deployment | main `3550b9c`: run `30135830444` passed verify-source (8m49s) and build-scan-package (5m19s); backend=38 unresolved (32H/6C), frontend/nginx=0, fixable=0, three SBOMs, publication skipped; exact tag approval, signed publication, secrets, public TLS, off-host backup, monitoring and canary remain |
+| DevOps/release | PR #14 MERGED / MAIN EVIDENCE GREEN / LOCAL DIFF | deployment | main `515fcd1`: run `30151025646` passed source and build/scan/package with publication skipped; current hardening still requires reviewed commit/PR and clean evidence before exact-tag approval |
 | QA | LOCAL GATES GREEN / STAGING HOLD | release evidence | real protected two-user staging lifecycle is absent |
 | `betfront/` | ARCHIVED/DIRTY | none | preserve; do not include in current MVP |
 

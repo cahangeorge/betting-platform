@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -12,9 +12,10 @@ from app.services.python_bridge import BridgeError
 
 
 class _FakeSession:
-    def __init__(self, job=None, duplicate_jobs=None):
+    def __init__(self, job=None, duplicate_jobs=None, dataset_ids=None):
         self.job = job
         self.duplicate_jobs = duplicate_jobs or []
+        self.dataset_ids = set(dataset_ids or [])
         self.added = []
         self.flush_calls = 0
         self.get_calls = 0
@@ -29,6 +30,8 @@ class _FakeSession:
         self.get_calls += 1
         if self.job is not None and pk == getattr(self.job, "id", None):
             return self.job
+        if model.__name__ == "ScrapedDataset" and pk in self.dataset_ids:
+            return SimpleNamespace(id=pk)
         return None
 
     async def commit(self):
@@ -209,7 +212,7 @@ async def test_execute_scrape_job_skips_duplicate_when_avoid_rescraping_requeste
         output=None,
         error=None,
     )
-    db = _FakeSession(job=job, duplicate_jobs=[duplicate])
+    db = _FakeSession(job=job, duplicate_jobs=[duplicate], dataset_ids={17})
 
     async def fail_bridge(args, label, *, timeout=None):
         assert timeout is None
@@ -341,3 +344,169 @@ async def test_execute_scrape_job_passes_per_job_timeout_to_oddsharvester(monkey
     assert result.status == "completed"
     bridge_logs = [obj for obj in db.added if getattr(obj, "action", None) == "bridge_invocation"]
     assert bridge_logs[0].metadata_json["timeout_seconds"] == 2400
+
+
+def test_normalize_scrape_params_rejects_unsupported_types_commands_and_external_urls():
+    with pytest.raises(ValueError, match="Unsupported scrape job type"):
+        scraper._normalize_scrape_params("unknown", {})
+    with pytest.raises(ValueError, match="Unsupported scrape command"):
+        scraper._normalize_scrape_params("scrape_odds", {"command": "shell"})
+    with pytest.raises(ValueError, match="allowlisted HTTPS"):
+        scraper._normalize_scrape_params("scrape_odds", {"base_url": "http://www.oddsportal.com"})
+    with pytest.raises(ValueError, match="match_links"):
+        scraper._normalize_scrape_params("scrape_odds", {"match_links": ["https://evil.example/match"]})
+    with pytest.raises(ValueError, match="scraper_engine"):
+        scraper._normalize_scrape_params("scrape_odds", {"scraper_engine": "shell"})
+    with pytest.raises(ValueError, match="valid calendar date"):
+        scraper._normalize_scrape_params("scrape_odds", {"date": "20269999"})
+
+
+def test_normalize_scrape_params_materializes_future_target_date_for_leagues():
+    params = scraper._normalize_scrape_params(
+        "scrape_odds",
+        {"command": "upcoming", "future_days": 3, "leagues": ["romania-liga-1"]},
+        now=datetime(2026, 7, 29, 12, tzinfo=timezone.utc),
+    )
+
+    assert params["future_days"] == 3
+    assert params["date"] == "20260801"
+    args = scraper._build_oddsharvester_args(SimpleNamespace(league=None, params=params))
+    assert args[args.index("--date") + 1] == "20260801"
+
+
+def test_normalize_scrape_params_materializes_target_in_explicit_timezone():
+    params = scraper._normalize_scrape_params(
+        "scrape_odds",
+        {
+            "command": "upcoming",
+            "future_days": 1,
+            "leagues": ["romania-liga-1"],
+            "timezone": "Europe/Bucharest",
+        },
+        now=datetime(2026, 7, 29, 22, 30, tzinfo=timezone.utc),
+    )
+
+    assert params["date"] == "20260731"
+
+
+def test_normalize_scrape_params_rejects_oversized_strings_and_serialized_payloads():
+    with pytest.raises(ValueError, match="strings must be at most"):
+        scraper._normalize_scrape_params("scrape_odds", {"sport": "x" * 100_000})
+
+    oversized = {f"key_{index}": "x" * 1_000 for index in range(70)}
+    with pytest.raises(ValueError, match="serialized bytes"):
+        scraper._normalize_scrape_params("scrape_odds", {"metadata": oversized})
+
+
+def test_normalize_scrape_params_rechecks_size_after_adding_defaults(monkeypatch):
+    payload = {"metadata": "x" * 32, "future_days": 1}
+    initial_size = len(json.dumps(payload, ensure_ascii=True, separators=(",", ":")).encode("utf-8"))
+    monkeypatch.setattr(scraper, "MAX_SCRAPE_PARAMS_BYTES", initial_size + 5)
+
+    with pytest.raises(ValueError, match="serialized bytes"):
+        scraper._normalize_scrape_params(
+            "scrape_odds",
+            payload,
+            now=datetime(2026, 7, 29, 12, tzinfo=timezone.utc),
+        )
+
+
+def test_normalize_scrape_params_rejects_non_finite_numbers():
+    with pytest.raises(ValueError, match="finite JSON-compatible"):
+        scraper._normalize_scrape_params("scrape_odds", {"request_delay": float("nan")})
+
+
+@pytest.mark.asyncio
+async def test_create_scrape_job_rejects_oversized_top_level_league():
+    with pytest.raises(ValueError, match="league must be"):
+        await scraper.create_scrape_job(_FakeSession(), "scrape_odds", league="x" * 256, params={})
+
+
+@pytest.mark.asyncio
+async def test_upcoming_dedup_requires_recent_candidate_with_dataset():
+    now = datetime.now(timezone.utc)
+    job = SimpleNamespace(
+        id=9,
+        job_type="scrape_odds",
+        league="romania",
+        params={"command": "upcoming", "date": "20260730", "sport": "football"},
+    )
+    stale = SimpleNamespace(
+        id=3,
+        job_type="scrape_odds",
+        status="completed",
+        league="romania",
+        params=dict(job.params),
+        output='{"dataset_id": 17}',
+        completed_at=now - timedelta(minutes=11),
+    )
+    missing_dataset = SimpleNamespace(
+        id=4,
+        job_type="scrape_odds",
+        status="completed",
+        league="romania",
+        params=dict(job.params),
+        output='{"matches_count": 1}',
+        completed_at=now,
+    )
+    orphaned_dataset = SimpleNamespace(
+        id=6,
+        job_type="scrape_odds",
+        status="completed",
+        league="romania",
+        params=dict(job.params),
+        output='{"dataset_id": 19}',
+        completed_at=now,
+    )
+    fresh = SimpleNamespace(
+        id=5,
+        job_type="scrape_odds",
+        status="completed",
+        league="romania",
+        params=dict(job.params),
+        output='{"dataset_id": 18}',
+        completed_at=now,
+    )
+
+    assert (
+        await scraper._find_completed_duplicate_scrape_job(
+            _FakeSession(job=job, duplicate_jobs=[stale], dataset_ids={17}), job
+        )
+        is None
+    )
+    assert (
+        await scraper._find_completed_duplicate_scrape_job(_FakeSession(job=job, duplicate_jobs=[missing_dataset]), job)
+        is None
+    )
+    assert (
+        await scraper._find_completed_duplicate_scrape_job(
+            _FakeSession(job=job, duplicate_jobs=[orphaned_dataset]), job
+        )
+        is None
+    )
+    assert (
+        await scraper._find_completed_duplicate_scrape_job(
+            _FakeSession(job=job, duplicate_jobs=[fresh], dataset_ids={18}), job
+        )
+        is fresh
+    )
+
+
+@pytest.mark.asyncio
+async def test_execute_unknown_job_type_fails_without_marking_completed():
+    job = SimpleNamespace(
+        id=77,
+        job_type="unsupported",
+        status="pending",
+        league=None,
+        params={},
+        started_at=None,
+        completed_at=None,
+        output=None,
+        error=None,
+    )
+
+    result = await scraper.execute_scrape_job(_FakeSession(job=job), job.id)
+
+    assert result.status == "failed"
+    assert result.error == "Unsupported scrape job type: unsupported"

@@ -1,8 +1,19 @@
 # Release Candidate Reconciliation Plan
 
-Updated: 2026-07-25T00:19:14+03:00
-Branch: `agent/post-merge-trivy-status-2026-07-24`
-Status: **PR #11 MERGED; MAIN SOURCE/IMAGE/SCAN EVIDENCE GREEN; PRE-TAG HOLD**
+Updated: 2026-07-29T19:53:11+03:00
+Branch: historical reconciliation plan; current checkout is
+`agent/mvp-scraper-hardening`
+Status: **HISTORICAL PLAN COMPLETE; SEE CURRENT PLATFORM STATUS FOR ACTIVE HOLD**
+
+Current note: PR #14 is merged at `515fcd164706271ce1a2723dd3ac60e6d9b5edcf`
+and evidence-only run `30151025646` is green. RC1 remains quarantined, no RC2
+exists, and the 2026-07-29 scraper-hardening work is isolated on its candidate
+branch with implementation commit `91857a6`; draft PR #15 is open and its
+Backend, Frontend, Hybrid E2E, and Security checks passed on `63c4a6f`. The PR
+is mergeable and reports `CLEAN`. The active next step and release gates are
+maintained in
+`docs/status/current-platform-status.md`; the sequence below is retained as
+historical reconciliation evidence.
 
 This plan converted the intentionally dirty, locally verified MVP checkout into
 a reviewable release-candidate revision without losing existing work. The owner

@@ -1,21 +1,22 @@
 # Current Platform Status
 
-Updated: 2026-07-25T11:02:34+03:00
-Repository/branch: `/home/gion/Projects/bet` / `agent/release-uv-runtime-remediation-2026-07-25`
+Updated: 2026-07-29T19:53:11+03:00
+Repository/branch: `/home/gion/Projects/bet` / `agent/mvp-scraper-hardening`
 Git state at this handoff refresh:
 
 ```text
-PR #12 is merged into current `origin/main` as
-`3550b9cf58d75bb4a1f2f02fee56493d03bd76af`. Protected tag
-`v0.1.0-rc.20260725.1` points to that exact SHA. Tag run `30149673025` passed
-source verification plus all image builds/runtime smoke, then failed closed on
-two newly fixable High findings carried only by the build-time `uv`/`uvx`
-binaries in the backend runtime image. `publish-signed-images` was skipped, so
-no GHCR image or partial publication occurred. Remediation commit `eac1ad0`
-removes `uv` after dependency/browser installation and adds fail-closed runtime
-contracts. The failed tag remains immutable and quarantined; a new reviewed
-revision and new RC tag are required. The three tracked submodules are clean
-and unchanged.
+`agent/mvp-scraper-hardening` was created from `main` and `origin/main`, aligned
+at `515fcd164706271ce1a2723dd3ac60e6d9b5edcf` (PR #14 merged). Evidence-only run
+`30151025646` passed source verification plus image build/scan/package and
+skipped publication. The only remote release tag remains the immutable,
+quarantined `v0.1.0-rc.20260725.1`; no RC2 exists. This branch contains the
+reviewed scraper-hardening candidate plus its frontend/tests and status refresh;
+the implementation is committed as `91857a6`, with the credential-blocker
+handoff at `32e029f`. The branch is published in draft PR #15. On code/status
+head `63c4a6f`, Backend run `30472151150`, Frontend run `30472152681`, Hybrid
+E2E run `30472152527`, and Security run `30472151425` all passed. The PR is
+mergeable and reports `CLEAN`, but is not merged or released. The three tracked
+submodules remain clean and unchanged.
 ```
 
 This is the first status document to read in a new coding session. Re-run
@@ -44,22 +45,84 @@ Current program state:
 
 - Phase 0 durable checkpoint and baseline: **complete**.
 - Phase 1 reproducible development runtime: **complete locally**.
-- Phase 2 security/release foundation: **application/source gates green;
-  container residual-risk policy accepted; strict fail-closed gate blocked the
-  first protected RC on newly fixable build-tool findings; local remediation is
-  green and clean CI evidence is pending**.
+- Phase 2 security/release foundation: **merged-main evidence is green; local
+  scraper input/SSRF/resource hardening, truthful upcoming-date semantics,
+  freshness-aware deduplication, and odds lineage remediation are green but
+  remain isolated on the candidate branch and unpublished**.
 - Phase 3 product/UX: **local implemented scope and browser/PWA gates green**.
 - Phase 4 adversarial QA/staging: **local and branch E2E gates green; protected staging and external operations evidence pending**.
-- Phase 5 release candidate: **PR #8 through #12 merged; exact main
-  evidence-only run was green; RC `v0.1.0-rc.20260725.1` is quarantined after a
-  fail-closed Trivy block before publication; remediation review/CI, a new RC,
-  signed GHCR proof, and external staging gates remain**.
+- Phase 5 release candidate: **PR #14 is merged and exact-main evidence run
+  `30151025646` is green; RC `v0.1.0-rc.20260725.1` remains quarantined; the
+  current hardening branch still needs publication as a PR, clean CI, merge and
+  evidence-only release proof before any new exact tag is considered**.
 - Paper execution: **excluded from public MVP** by accepted ADR
   [`2026-07-23-exclude-paper-execution-from-mvp.md`](../adr/2026-07-23-exclude-paper-execution-from-mvp.md).
-- Verdict: **local application/runtime GO; release-candidate and public MVP
-  launch HOLD until the remediation is merged and clean CI proves zero fixable
-  High/Critical findings, followed by a new protected signed release and the
-  external operational evidence**.
+- Verdict: **current working-tree implementation and local runtime GO after the
+  2026-07-29 gates below; release-candidate and public MVP launch HOLD until
+  this hardening branch is published/reviewed/merged, clean CI and a new
+  protected signed release pass, and all external operational evidence is
+  complete**.
+
+## 2026-07-29 implementation audit and scraper-hardening checkpoint
+
+This section supersedes older continuation instructions that still name a PR
+or remediation branch as pending.
+
+- Fresh source/Git verification found clean aligned `main` at `515fcd1` before
+  this implementation slice; remote inspection confirmed PR #14 merged, main
+  evidence run `30151025646` green, RC1 quarantined, and no RC2 tag.
+- Serena (`core`, `mvp_readiness`, `platform_hardening`), the refreshed
+  `bet-core` Codebase Memory graph, and a focused compressed Repomix pack
+  (`2d641a6d55ba6b2e`) were reconciled against current source. After the
+  implementation and final review correction, `bet-core` was reindexed to
+  **5,301 nodes / 20,226 edges** and the focused Repomix pack was refreshed as
+  `cef78098a045226e`. Older
+  memories were useful for continuity but were not treated as current release
+  proof.
+- The audit found two source-level launch blockers in the scraper path:
+  authenticated arbitrary network/resource parameters, plus an upcoming
+  `future_days` contract that promised an interval while the bridge targeted
+  one day and could reuse stale/no-longer-existing datasets.
+- The local remediation now:
+  - accepts only supported scrape job types and commands;
+  - restricts base URLs and match links to HTTPS allowlisted provider origins
+    and bounds links, leagues, markets, concurrency, delay, pages and timeouts;
+    recursive payload shape is bounded, final normalized parameters are capped
+    at 64 KiB, and both nginx entry points cap request bodies at 1 MiB;
+  - materializes upcoming offsets to an absolute `YYYYMMDD` target at creation,
+    using the browser's validated IANA timezone or UTC fallback;
+  - reuses historical season datasets durably, but reuses upcoming datasets
+    only when the dataset still exists and completion is at most 10 minutes old;
+  - records `dataset_id` and `scrape_job_id` on odds snapshots without
+    rewriting existing provenance;
+  - returns HTTP 422 for invalid scraper payloads instead of creating or
+    fabricating successful jobs;
+  - changes Prepare to one truthful target day (1–31 days), defaulting to
+    tomorrow, with browser regressions for the new contract.
+- Fresh verification on the local candidate:
+  - backend Ruff: pass; backend pytest: **556 passed**;
+  - Alembic current/heads: **025 (head)**; `alembic check`: **no new upgrade
+    operations detected**;
+  - root release/security contracts: **29 passed**; tracked plaintext-secret
+    scan and `git diff --check`: pass;
+  - frontend Svelte MCP autofixer: no issues; `pnpm check`: **0 errors / 0
+    warnings**; unit tests: **32 passed**; E2E TypeScript check and production
+    build: pass;
+  - targeted Playwright Prepare/security checks: **3 passed**;
+  - integrated `/health`: **200**; `/ready`: **200** with database, schema,
+    task queue and task runtime ready; frontend root: expected anonymous
+    **302** to `/about`;
+  - full Chromium hybrid: **57 passed** in **3.8 minutes**;
+  - final independent code review: **APPROVE**, with no remaining Critical,
+    High, or Medium findings in the reviewed scope.
+- A real local scheduled upstream scrape executed during runtime verification
+  and returned a truthful `no_fixtures`/zero-record dataset. This proves runtime
+  bridge execution and honest status handling, not provider coverage or a
+  complete real scrape -> prediction -> ticket lifecycle.
+
+Exact next step: retain the final status-only successor checks green, mark PR
+#15 ready, merge the exact reviewed head, and run evidence-only release proof.
+Do not create a new RC tag from this candidate branch.
 
 ## 2026-07-25 failed RC and build-tool remediation checkpoint
 

@@ -120,6 +120,20 @@ LIVE_RELEVANT_ODDS_MARKETS = {"1x2", "home_away", "homeaway", "match_winner", "m
 FINAL_MATCH_STATUSES = {"finished", "ft", "fulltime", "completed", "final"}
 LOCALE_PATTERN = re.compile(r"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$")
 ANTI_BOT_MARKERS = ("anti-bot", "antibot", "captcha", "cloudflare", "challenge", "rate limit", "blocked")
+SUPPORTED_SCRAPE_JOB_TYPES = {"oddsportal", "scrape_odds", "refresh_results", "world_cup_pipeline"}
+BRIDGE_SCRAPE_JOB_TYPES = {"oddsportal", "scrape_odds", "refresh_results"}
+SUPPORTED_SCRAPE_COMMANDS = {"upcoming", "historic"}
+UPCOMING_DEDUP_MAX_AGE = timedelta(minutes=10)
+MAX_MATCH_LINKS = 100
+MAX_LEAGUES = 50
+MAX_MARKETS = 100
+MAX_SCRAPE_PARAMS_BYTES = 64 * 1024
+MAX_SCRAPE_PARAM_STRING_LENGTH = 2048
+MAX_SCRAPE_PARAM_KEY_LENGTH = 100
+MAX_SCRAPE_PARAM_COLLECTION_ITEMS = 100
+MAX_SCRAPE_PARAM_DEPTH = 8
+SUPPORTED_SCRAPER_ENGINES = {"playwright", "auto", "scrapling-http", "scrapling-stealth"}
+
 SENSITIVE_ARG_FLAGS = {
     "--password",
     "--proxy-pass",
@@ -320,9 +334,28 @@ async def _find_completed_duplicate_scrape_job(db: AsyncSession, job: ScrapeJob)
         stmt = stmt.where(ScrapeJob.league == job.league)
 
     target_key = _scrape_dedup_key(job)
+    target_params = job.params or {}
+    command = target_params.get("command", "upcoming")
+    explicit_historic_season = command == "historic" and bool(target_params.get("season"))
+    now = datetime.now(timezone.utc)
     result = await db.execute(stmt)
     for candidate in result.scalars().all():
-        if _scrape_dedup_key(candidate) == target_key:
+        if _scrape_dedup_key(candidate) != target_key:
+            continue
+        # A duplicate is never useful without a concrete persisted dataset.
+        dataset_id = _scrape_output_dataset_id(candidate)
+        if dataset_id is None or await db.get(ScrapedDataset, dataset_id) is None:
+            continue
+        if explicit_historic_season:
+            return candidate
+        # Upcoming data becomes stale quickly. Only reuse a recently-completed
+        # candidate, and never let missing timestamps qualify it.
+        completed_at = getattr(candidate, "completed_at", None)
+        if not isinstance(completed_at, datetime):
+            continue
+        if completed_at.tzinfo is None:
+            completed_at = completed_at.replace(tzinfo=timezone.utc)
+        if now - completed_at.astimezone(timezone.utc) <= UPCOMING_DEDUP_MAX_AGE:
             return candidate
     return None
 
@@ -354,11 +387,18 @@ async def create_scrape_job(
     league: str | None = None,
     params: dict | None = None,
 ) -> ScrapeJob:
+    if league is not None and (
+        not isinstance(league, str)
+        or not league.strip()
+        or len(league.strip()) > 255
+    ):
+        raise ValueError("league must be a non-empty string of at most 255 characters")
+    normalized_params = _normalize_scrape_params(job_type, params)
     job = ScrapeJob(
         job_type=job_type,
         status="pending",
-        league=league,
-        params=params,
+        league=league.strip() if league is not None else None,
+        params=normalized_params,
     )
     db.add(job)
     await db.flush()
@@ -367,7 +407,7 @@ async def create_scrape_job(
         job.id,
         action="job_created",
         message=f"Created scrape job {job.id}",
-        metadata={"job_type": job_type, "league": league, "params": params or {}},
+        metadata={"job_type": job_type, "league": league, "params": normalized_params},
     )
     return job
 
@@ -608,17 +648,240 @@ def _validated_base_url(value: Any) -> str | None:
     if not isinstance(value, str):
         raise ValueError("base_url must be a string")
     normalized = value.strip().rstrip("/")
+    if len(normalized) > MAX_SCRAPE_PARAM_STRING_LENGTH:
+        raise ValueError(f"base_url must be at most {MAX_SCRAPE_PARAM_STRING_LENGTH} characters")
     parsed = urlsplit(normalized)
+    hostname = (parsed.hostname or "").lower()
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("base_url has an invalid port") from exc
+    allowed_host = (
+        hostname == "oddsportal.com" or hostname.endswith(".oddsportal.com") or hostname == "www.centroquote.it"
+    )
     if (
-        parsed.scheme not in {"http", "https"}
-        or not parsed.hostname
+        parsed.scheme != "https"
+        or not hostname
+        or not allowed_host
+        or port not in (None, 443)
         or parsed.username is not None
         or parsed.password is not None
         or parsed.path
         or parsed.query
         or parsed.fragment
     ):
-        raise ValueError("base_url must be a host-only http(s) URL without credentials, path, query, or fragment")
+        raise ValueError(
+            "base_url must be an allowlisted HTTPS host-only URL without credentials, path, query, or fragment"
+        )
+    return normalized
+
+
+def _validated_match_links(value: Any) -> list[str] | None:
+    if value in (None, []):
+        return None
+    if not isinstance(value, list) or len(value) > MAX_MATCH_LINKS:
+        raise ValueError(f"match_links must be a list of at most {MAX_MATCH_LINKS} URLs")
+    normalized: list[str] = []
+    for value_item in value:
+        if not isinstance(value_item, str):
+            raise ValueError("match_links must contain URLs")
+        link = value_item.strip()
+        if len(link) > MAX_SCRAPE_PARAM_STRING_LENGTH:
+            raise ValueError(f"match_links URLs must be at most {MAX_SCRAPE_PARAM_STRING_LENGTH} characters")
+        parsed = urlsplit(link)
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise ValueError("match_links contain an invalid port") from exc
+        if (
+            parsed.scheme != "https"
+            or (parsed.hostname or "").lower() != "www.oddsportal.com"
+            or port not in (None, 443)
+            or parsed.username is not None
+            or parsed.password is not None
+            or not parsed.path.strip("/")
+        ):
+            raise ValueError("match_links must use HTTPS www.oddsportal.com URLs")
+        normalized.append(link)
+    return normalized
+
+
+def _bounded_int(params: dict, key: str, *, minimum: int, maximum: int) -> int | None:
+    value = params.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError(f"{key} must be an integer")
+    parsed = _coerce_int(value)
+    if parsed is None or not minimum <= parsed <= maximum:
+        raise ValueError(f"{key} must be between {minimum} and {maximum}")
+    return parsed
+
+
+def _bounded_float(params: dict, key: str, *, minimum: float, maximum: float) -> float | None:
+    value = params.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError(f"{key} must be a number")
+    parsed = _coerce_float(value)
+    if parsed is None or not minimum <= parsed <= maximum:
+        raise ValueError(f"{key} must be between {minimum} and {maximum}")
+    return parsed
+
+
+def _validate_scrape_param_shape(value: Any, *, depth: int = 0) -> None:
+    if depth > MAX_SCRAPE_PARAM_DEPTH:
+        raise ValueError(f"scrape params nesting must not exceed {MAX_SCRAPE_PARAM_DEPTH} levels")
+    if value is None or isinstance(value, (bool, int, float)):
+        return
+    if isinstance(value, str):
+        if len(value) > MAX_SCRAPE_PARAM_STRING_LENGTH:
+            raise ValueError(
+                f"scrape param strings must be at most {MAX_SCRAPE_PARAM_STRING_LENGTH} characters"
+            )
+        return
+    if isinstance(value, list):
+        if len(value) > MAX_SCRAPE_PARAM_COLLECTION_ITEMS:
+            raise ValueError(
+                f"scrape param lists must contain at most {MAX_SCRAPE_PARAM_COLLECTION_ITEMS} items"
+            )
+        for item in value:
+            _validate_scrape_param_shape(item, depth=depth + 1)
+        return
+    if isinstance(value, dict):
+        if len(value) > MAX_SCRAPE_PARAM_COLLECTION_ITEMS:
+            raise ValueError(
+                f"scrape param objects must contain at most {MAX_SCRAPE_PARAM_COLLECTION_ITEMS} keys"
+            )
+        for key, item in value.items():
+            if not isinstance(key, str) or not key or len(key) > MAX_SCRAPE_PARAM_KEY_LENGTH:
+                raise ValueError(
+                    f"scrape param keys must be non-empty strings of at most {MAX_SCRAPE_PARAM_KEY_LENGTH} characters"
+                )
+            _validate_scrape_param_shape(item, depth=depth + 1)
+        return
+    raise ValueError("scrape params may contain only JSON-compatible values")
+
+
+def _enforce_scrape_params_size(params: dict) -> None:
+    try:
+        serialized_params = json.dumps(
+            params,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise ValueError("scrape params must be finite JSON-compatible values") from exc
+    if len(serialized_params) > MAX_SCRAPE_PARAMS_BYTES:
+        raise ValueError(f"scrape params must be at most {MAX_SCRAPE_PARAMS_BYTES} serialized bytes")
+
+
+def _normalize_scrape_params(job_type: str, params: dict | None, *, now: datetime | None = None) -> dict:
+    if job_type not in SUPPORTED_SCRAPE_JOB_TYPES:
+        raise ValueError(f"Unsupported scrape job type: {job_type}")
+    if params is not None and not isinstance(params, dict):
+        raise ValueError("scrape params must be an object")
+    _validate_scrape_param_shape(params or {})
+    _enforce_scrape_params_size(params or {})
+
+    normalized = dict(params or {})
+    if job_type == "world_cup_pipeline":
+        return normalized
+
+    command = normalized.get("command", "upcoming")
+    if not isinstance(command, str) or command not in SUPPORTED_SCRAPE_COMMANDS:
+        raise ValueError("Unsupported scrape command")
+    normalized["command"] = command
+    sport = normalized.get("sport", "football")
+    if (
+        not isinstance(sport, str)
+        or not re.fullmatch(r"[A-Za-z0-9_-]{1,50}", sport.strip())
+    ):
+        raise ValueError("sport must be a 1-50 character slug")
+    normalized["sport"] = sport.strip()
+
+    for key, minimum, maximum in (
+        ("concurrency", 1, 10),
+        ("max_pages", 1, 100),
+        ("timeout_seconds", 30, 3600),
+        ("oddsharvester_timeout_seconds", 30, 3600),
+        ("future_days", 1, 31),
+    ):
+        value = _bounded_int(normalized, key, minimum=minimum, maximum=maximum)
+        if value is not None:
+            normalized[key] = value
+    request_delay = _bounded_float(normalized, "request_delay", minimum=0.0, maximum=60.0)
+    if request_delay is not None:
+        normalized["request_delay"] = request_delay
+
+    for key, limit, item_limit in (
+        ("countries", MAX_LEAGUES, 100),
+        ("leagues", MAX_LEAGUES, 255),
+        ("markets", MAX_MARKETS, 100),
+    ):
+        value = normalized.get(key)
+        if value is not None:
+            if (
+                not isinstance(value, list)
+                or len(value) > limit
+                or any(
+                    not isinstance(item, str)
+                    or not item.strip()
+                    or len(item.strip()) > item_limit
+                    for item in value
+                )
+            ):
+                raise ValueError(
+                    f"{key} must be a list of at most {limit} non-empty strings up to {item_limit} characters"
+                )
+            normalized[key] = [item.strip() for item in value]
+
+    scraper_engine = normalized.get("scraper_engine")
+    if scraper_engine is not None:
+        if not isinstance(scraper_engine, str) or scraper_engine not in SUPPORTED_SCRAPER_ENGINES:
+            raise ValueError("scraper_engine is unsupported")
+
+    season = normalized.get("season")
+    if season is not None and (
+        isinstance(season, bool)
+        or not isinstance(season, (str, int))
+        or not str(season).strip()
+        or len(str(season).strip()) > 20
+    ):
+        raise ValueError("season must be a string or integer of at most 20 characters")
+
+    match_links = _validated_match_links(normalized.get("match_links"))
+    if match_links is not None:
+        normalized["match_links"] = match_links
+    base_url = _validated_base_url(normalized.get("base_url"))
+    if base_url is not None:
+        normalized["base_url"] = base_url
+    locale = _validated_locale(normalized.get("locale"))
+    if locale is not None:
+        normalized["locale"] = locale
+    browser_timezone = _validated_timezone(normalized.get("timezone"))
+    if browser_timezone is not None:
+        normalized["timezone"] = browser_timezone
+
+    date = normalized.get("date")
+    if date is not None:
+        if not isinstance(date, str) or not re.fullmatch(r"\d{8}", date):
+            raise ValueError("date must use YYYYMMDD format")
+        try:
+            normalized["date"] = datetime.strptime(date, "%Y%m%d").strftime("%Y%m%d")
+        except ValueError as exc:
+            raise ValueError("date must be a valid calendar date in YYYYMMDD format") from exc
+    if command == "upcoming" and date is None and not match_links:
+        future_days = normalized.get("future_days", 1)
+        reference = now or datetime.now(timezone.utc)
+        if reference.tzinfo is None:
+            reference = reference.replace(tzinfo=timezone.utc)
+        target_timezone = ZoneInfo(browser_timezone or "UTC")
+        target = reference.astimezone(target_timezone) + timedelta(days=future_days)
+        normalized["date"] = target.strftime("%Y%m%d")
+    _enforce_scrape_params_size(normalized)
     return normalized
 
 
@@ -1022,7 +1285,14 @@ async def _upsert_match_from_record(db: AsyncSession, record: dict, sport: str) 
     return match, previous_snapshot != current_snapshot, final_score_conflict
 
 
-async def _ingest_match_odds(db: AsyncSession, match: Match, record: dict) -> dict[str, int | dict[str, Any] | None]:
+async def _ingest_match_odds(
+    db: AsyncSession,
+    match: Match,
+    record: dict,
+    *,
+    dataset_id: int | None = None,
+    scrape_job_id: int | None = None,
+) -> dict[str, int | dict[str, Any] | None]:
     written = 0
     changed = 0
     broadcast_payload: dict[str, Any] | None = None
@@ -1058,12 +1328,20 @@ async def _ingest_match_odds(db: AsyncSession, match: Match, record: dict) -> di
                         match_id=match.id,
                         source=ODDS_SOURCE,
                         source_key=snapshot_source_key,
+                        dataset_id=dataset_id,
+                        scrape_job_id=scrape_job_id,
                         observed_at=scrape_timestamp,
                         quality="complete",
                         metadata_json={"match_link": record.get("match_link")},
                     )
                     db.add(snapshot)
                     await db.flush()
+                # A source key can be revisited by replayed ingestion. Backfill
+                # missing lineage without rewriting the original provenance.
+                if hasattr(snapshot, "dataset_id") and snapshot.dataset_id is None:
+                    snapshot.dataset_id = dataset_id
+                if hasattr(snapshot, "scrape_job_id") and snapshot.scrape_job_id is None:
+                    snapshot.scrape_job_id = scrape_job_id
 
             existing_stmt = select(OddsEntry).where(
                 OddsEntry.match_id == match.id,
@@ -1199,7 +1477,7 @@ async def _ingest_scraped_payload(
                     },
                 },
             )
-        odds_result = await _ingest_match_odds(db, match, record)
+        odds_result = await _ingest_match_odds(db, match, record, dataset_id=dataset.id, scrape_job_id=job.id)
         odds_written += int(odds_result["written"])
 
         if _is_live_relevant_match(match):
@@ -1252,6 +1530,12 @@ async def execute_scrape_job(db: AsyncSession, job_id: int) -> ScrapeJob:
     )
 
     try:
+        # Jobs can also be created by scheduled/internal callers or predate
+        # request-schema validation, so validate the persisted payload again.
+        job.params = _normalize_scrape_params(job.job_type, job.params)
+        if job.job_type not in BRIDGE_SCRAPE_JOB_TYPES:
+            raise ValueError(f"Unsupported executable scrape job type: {job.job_type}")
+
         if _avoid_rescraping_requested(job):
             duplicate = await _find_completed_duplicate_scrape_job(db, job)
             if duplicate is not None:
@@ -1279,7 +1563,7 @@ async def execute_scrape_job(db: AsyncSession, job_id: int) -> ScrapeJob:
                 await db.flush()
                 return job
 
-        if job.job_type in {"oddsportal", "scrape_odds", "refresh_results"}:
+        if job.job_type in BRIDGE_SCRAPE_JOB_TYPES:
             if job.job_type == "refresh_results" and not (job.params or {}).get("match_links"):
                 raise ValueError("Result refresh job is missing source match links")
             scraper_engine = (job.params or {}).get("scraper_engine") or "playwright"
@@ -1399,14 +1683,8 @@ async def execute_scrape_job(db: AsyncSession, job_id: int) -> ScrapeJob:
                 metadata=summary,
             )
         else:
-            job.status = "completed"
-            await append_scrape_job_log(
-                db,
-                job.id,
-                action="job_completed",
-                message=f"Completed scrape job {job.id} without scraper bridge",
-                metadata={"job_type": job.job_type},
-            )
+            # Guard retained for exhaustiveness if supported types change.
+            raise ValueError(f"Unsupported executable scrape job type: {job.job_type}")
 
         job.completed_at = datetime.now(timezone.utc)
     except BridgeError as e:

@@ -37,6 +37,7 @@ from app.services.scraper import create_result_refresh_job, create_scrape_job, e
 router = APIRouter()
 
 TERMINAL_TICKET_STATUSES = {"won", "lost", "void", "settled"}
+GENERIC_SCRAPE_JOB_TYPES = {"oddsportal", "scrape_odds"}
 
 
 def _require_scrape_job_access(job: ScrapeJob, user: User) -> None:
@@ -67,6 +68,12 @@ async def start_scrape_job(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    if body.job_type not in GENERIC_SCRAPE_JOB_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Unsupported generic scrape job type: {body.job_type}",
+        )
+
     async def create() -> ScrapeJob:
         return await create_scrape_job(db, body.job_type, body.league, stamp_owner(body.params, user.id))
 
@@ -75,7 +82,10 @@ async def start_scrape_job(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     if key is None:
-        return await create()
+        try:
+            return await create()
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     try:
         job, created = await create_idempotent_job(
             db,
@@ -87,7 +97,12 @@ async def start_scrape_job(
             create=create,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        response_status = (
+            status.HTTP_409_CONFLICT
+            if str(exc).startswith("Idempotency-Key")
+            else status.HTTP_422_UNPROCESSABLE_CONTENT
+        )
+        raise HTTPException(status_code=response_status, detail=str(exc)) from exc
     if not created:
         response.status_code = status.HTTP_200_OK
     return job
@@ -121,7 +136,7 @@ async def refresh_match_results(
     try:
         job = await create_result_refresh_job(db, body.match_ids, user_id=user.id)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
 
     try:
         run = await enqueue_scrape_job_execution(db, scrape_job_id=job.id, triggered_by="api", user_id=user.id)

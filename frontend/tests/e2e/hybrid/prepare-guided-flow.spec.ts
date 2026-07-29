@@ -14,7 +14,7 @@ test('Prepare offers a compact preset-first data collection flow', async ({ page
 
 		await page.getByRole('button', { name: 'Top 5 Europa' }).click();
 
-		await expect(page.getByText(/5 ligi · 10 ani de istoric \+ 7 zile viitoare/)).toBeVisible();
+		await expect(page.getByText(/5 ligi · 10 ani de istoric \+ mâine/)).toBeVisible();
 		await expect(page.locator('#selection').getByText('Premier League', { exact: true }).first()).toBeVisible();
 		await expect(page.locator('#selection details').first()).not.toHaveAttribute('open', '');
 		await expect(page.getByRole('button', { name: 'Pornește colectarea' })).toBeEnabled();
