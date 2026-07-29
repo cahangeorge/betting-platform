@@ -1,6 +1,6 @@
 # Current Platform Status
 
-Updated: 2026-07-29T19:28:36+03:00
+Updated: 2026-07-29T19:30:21+03:00
 Repository/branch: `/home/gion/Projects/bet` / `agent/mvp-scraper-hardening`
 Git state at this handoff refresh:
 
@@ -11,8 +11,10 @@ at `515fcd164706271ce1a2723dd3ac60e6d9b5edcf` (PR #14 merged). Evidence-only run
 skipped publication. The only remote release tag remains the immutable,
 quarantined `v0.1.0-rc.20260725.1`; no RC2 exists. This branch contains the
 reviewed scraper-hardening candidate plus its frontend/tests and status refresh;
-it is not merged or released. The three tracked submodules remain clean and
-unchanged.
+the implementation is committed locally as `91857a6`. The remote branch and PR
+do not exist because the HTTPS push was blocked by expired local GitHub
+authentication. It is not merged or released. The three tracked submodules
+remain clean and unchanged.
 ```
 
 This is the first status document to read in a new coding session. Re-run
@@ -116,9 +118,10 @@ or remediation branch as pending.
   bridge execution and honest status handling, not provider coverage or a
   complete real scrape -> prediction -> ticket lifecycle.
 
-Exact next step: commit and publish `agent/mvp-scraper-hardening`, open its draft
-PR, then retain clean branch CI and evidence-only release proof. Do not create a
-new RC tag from this candidate branch.
+Exact next step: restore local GitHub CLI/HTTPS authentication, run
+`git push -u origin agent/mvp-scraper-hardening`, and open its draft PR. Then
+retain clean branch CI and evidence-only release proof. Do not create a new RC
+tag from this candidate branch.
 
 ## 2026-07-25 failed RC and build-tool remediation checkpoint
 

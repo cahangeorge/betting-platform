@@ -1,9 +1,10 @@
 # MVP Readiness Program
 
-Updated: 2026-07-29T19:28:36+03:00
+Updated: 2026-07-29T19:30:21+03:00
 Repository: `/home/gion/Projects/bet`
-Branch: `agent/mvp-scraper-hardening`, based on `main` at `515fcd1`
-Program status: **ACTIVE — candidate branch green; PR/clean CI/new RC and public MVP launch HOLD**
+Branch: `agent/mvp-scraper-hardening`, local implementation commit `91857a6`,
+based on `main` at `515fcd1`
+Program status: **ACTIVE — local commit green; push/PR/clean CI/new RC and public MVP launch HOLD**
 
 This is the durable execution register for reaching a verified MVP. It records
 project status, expert findings, phases, task dependencies, verification gates,
@@ -37,7 +38,9 @@ The commit-safe integration order for the existing dirty checkout is
   release/security contracts **29 passed** and tracked-secret scan passed.
   Final independent review returned **APPROVE** with no blocking finding.
 - This is an isolated implementation candidate, not a merged clean release
-  revision. Protected RC/public status remains HOLD.
+  revision. Its first HTTPS push was blocked by expired local GitHub
+  authentication; no remote branch or PR was created. Protected RC/public
+  status remains HOLD.
 
 ## MVP scope
 
