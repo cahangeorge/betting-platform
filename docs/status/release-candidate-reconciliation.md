@@ -1,17 +1,15 @@
 # Release Candidate Reconciliation Plan
 
-Updated: 2026-07-29T19:53:11+03:00
+Updated: 2026-07-29T20:28:26+03:00
 Branch: historical reconciliation plan; current checkout is
-`agent/mvp-scraper-hardening`
+`agent/mvp-post-merge-status`
 Status: **HISTORICAL PLAN COMPLETE; SEE CURRENT PLATFORM STATUS FOR ACTIVE HOLD**
 
-Current note: PR #14 is merged at `515fcd164706271ce1a2723dd3ac60e6d9b5edcf`
-and evidence-only run `30151025646` is green. RC1 remains quarantined, no RC2
-exists, and the 2026-07-29 scraper-hardening work is isolated on its candidate
-branch with implementation commit `91857a6`; draft PR #15 is open and its
-Backend, Frontend, Hybrid E2E, and Security checks passed on `63c4a6f`. The PR
-is mergeable and reports `CLEAN`. The active next step and release gates are
-maintained in
+Current note: PR #15 merged the 2026-07-29 scraper hardening into `main` as
+`6abb6378e79a872e31af2bd9740b00e14f3330c9`. Post-merge Backend, Frontend and
+Security passed, and exact-main evidence-only run `30474329662` passed with
+publication skipped. RC1 remains quarantined and no RC2 exists. The active next
+step and release gates are maintained in
 `docs/status/current-platform-status.md`; the sequence below is retained as
 historical reconciliation evidence.
 

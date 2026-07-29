@@ -1,10 +1,9 @@
 # MVP Readiness Program
 
-Updated: 2026-07-29T19:53:11+03:00
+Updated: 2026-07-29T20:28:26+03:00
 Repository: `/home/gion/Projects/bet`
-Branch: `agent/mvp-scraper-hardening`, local implementation commit `91857a6`,
-based on `main` at `515fcd1`
-Program status: **ACTIVE — draft PR #15 open; clean CI/merge/new RC and public MVP launch HOLD**
+Branch: post-merge status checkpoint based on `main` at `6abb637`
+Program status: **ACTIVE — merged source/evidence-only GO; protected RC and public MVP launch HOLD**
 
 This is the durable execution register for reaching a verified MVP. It records
 project status, expert findings, phases, task dependencies, verification gates,
@@ -17,9 +16,12 @@ The commit-safe integration order for the existing dirty checkout is
 
 ## Verified refresh — 2026-07-29
 
-- `main == origin/main == 515fcd164706271ce1a2723dd3ac60e6d9b5edcf`
-  before the current edits; PR #14 and evidence-only run `30151025646` are
-  complete and green. RC1 remains quarantined and no RC2 tag exists.
+- PR #15 merged the reviewed implementation into `main` as
+  `6abb6378e79a872e31af2bd9740b00e14f3330c9`. Post-merge Backend
+  `30474183185`, Frontend `30474184976`, and Security `30474183724` passed.
+  Evidence-only run `30474329662` passed source verification,
+  image build/runtime smoke, scans, SBOMs, secret scan, gating and packaging;
+  publication was skipped. RC1 remains quarantined and no RC2 tag exists.
 - Fresh Serena, Codebase Memory, Codex Memory and focused Repomix inspection
   was reconciled with Git/source. The current source audit found and locally
   remediated scraper input/SSRF/resource controls, false upcoming-range
@@ -37,11 +39,9 @@ The commit-safe integration order for the existing dirty checkout is
   **3.8 minutes**; Alembic **025 (head)** with no drift; root
   release/security contracts **29 passed** and tracked-secret scan passed.
   Final independent review returned **APPROVE** with no blocking finding.
-- This is an isolated implementation candidate, not a merged clean release
-  revision. Draft PR #15 is open; Backend `30472151150`, Frontend `30472152681`,
-  Hybrid E2E `30472152527`, and Security `30472151425` all passed on
-  `63c4a6f`. The PR is mergeable and reports `CLEAN`. Protected RC/public status
-  remains HOLD.
+- The implementation is merged and exact-main evidence-only proof is green.
+  This status-only successor must receive its own exact-merge evidence run
+  before any tag. Protected RC/public status remains HOLD.
 
 ## MVP scope
 

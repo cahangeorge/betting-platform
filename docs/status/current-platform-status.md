@@ -1,21 +1,19 @@
 # Current Platform Status
 
-Updated: 2026-07-29T19:53:11+03:00
-Repository/branch: `/home/gion/Projects/bet` / `agent/mvp-scraper-hardening`
+Updated: 2026-07-29T20:28:26+03:00
+Repository/branch: `/home/gion/Projects/bet` /
+`agent/mvp-post-merge-status`
 Git state at this handoff refresh:
 
 ```text
-`agent/mvp-scraper-hardening` was created from `main` and `origin/main`, aligned
-at `515fcd164706271ce1a2723dd3ac60e6d9b5edcf` (PR #14 merged). Evidence-only run
-`30151025646` passed source verification plus image build/scan/package and
-skipped publication. The only remote release tag remains the immutable,
-quarantined `v0.1.0-rc.20260725.1`; no RC2 exists. This branch contains the
-reviewed scraper-hardening candidate plus its frontend/tests and status refresh;
-the implementation is committed as `91857a6`, with the credential-blocker
-handoff at `32e029f`. The branch is published in draft PR #15. On code/status
-head `63c4a6f`, Backend run `30472151150`, Frontend run `30472152681`, Hybrid
-E2E run `30472152527`, and Security run `30472151425` all passed. The PR is
-mergeable and reports `CLEAN`, but is not merged or released. The three tracked
+PR #15 merged the reviewed scraper hardening into `main` as
+`6abb6378e79a872e31af2bd9740b00e14f3330c9`. Post-merge Backend run
+`30474183185`, Frontend run `30474184976`, and Security run `30474183724`
+passed. Exact-main evidence-only run `30474329662` then passed `verify-source`
+and `build-scan-and-package`; `publish-signed-images` was skipped because the
+event was `workflow_dispatch`, not a protected tag. The only remote release tag
+remains the immutable, quarantined `v0.1.0-rc.20260725.1`; no RC2 exists. This
+branch changes only the canonical post-merge status. The three tracked
 submodules remain clean and unchanged.
 ```
 
@@ -45,23 +43,22 @@ Current program state:
 
 - Phase 0 durable checkpoint and baseline: **complete**.
 - Phase 1 reproducible development runtime: **complete locally**.
-- Phase 2 security/release foundation: **merged-main evidence is green; local
-  scraper input/SSRF/resource hardening, truthful upcoming-date semantics,
-  freshness-aware deduplication, and odds lineage remediation are green but
-  remain isolated on the candidate branch and unpublished**.
+- Phase 2 security/release foundation: **complete on merged main; scraper
+  input/SSRF/resource hardening, truthful upcoming-date semantics,
+  freshness-aware deduplication, and odds lineage remediation are merged and
+  evidence-only release proof is green**.
 - Phase 3 product/UX: **local implemented scope and browser/PWA gates green**.
 - Phase 4 adversarial QA/staging: **local and branch E2E gates green; protected staging and external operations evidence pending**.
-- Phase 5 release candidate: **PR #14 is merged and exact-main evidence run
-  `30151025646` is green; RC `v0.1.0-rc.20260725.1` remains quarantined; the
-  current hardening branch still needs publication as a PR, clean CI, merge and
-  evidence-only release proof before any new exact tag is considered**.
+- Phase 5 release candidate: **PR #15 is merged as `6abb637`; post-merge CI and
+  exact-main evidence-only run `30474329662` are green; RC
+  `v0.1.0-rc.20260725.1` remains quarantined and no new exact tag is
+  authorized**.
 - Paper execution: **excluded from public MVP** by accepted ADR
   [`2026-07-23-exclude-paper-execution-from-mvp.md`](../adr/2026-07-23-exclude-paper-execution-from-mvp.md).
-- Verdict: **current working-tree implementation and local runtime GO after the
-  2026-07-29 gates below; release-candidate and public MVP launch HOLD until
-  this hardening branch is published/reviewed/merged, clean CI and a new
-  protected signed release pass, and all external operational evidence is
-  complete**.
+- Verdict: **merged source, post-merge CI, and evidence-only release GO;
+  protected release-candidate and public MVP launch HOLD until an exact tag is
+  explicitly authorized, the signed protected release passes, and all external
+  operational evidence is complete**.
 
 ## 2026-07-29 implementation audit and scraper-hardening checkpoint
 
@@ -120,9 +117,10 @@ or remediation branch as pending.
   bridge execution and honest status handling, not provider coverage or a
   complete real scrape -> prediction -> ticket lifecycle.
 
-Exact next step: retain the final status-only successor checks green, mark PR
-#15 ready, merge the exact reviewed head, and run evidence-only release proof.
-Do not create a new RC tag from this candidate branch.
+Exact next step: merge this documentation-only checkpoint and rerun
+evidence-only proof on its exact merge commit before considering a tag. Creating
+or pushing a new RC tag still requires explicit owner authorization; public
+rollout remains blocked by the external operational gates.
 
 ## 2026-07-25 failed RC and build-tool remediation checkpoint
 
