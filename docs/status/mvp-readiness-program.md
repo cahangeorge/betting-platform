@@ -1,6 +1,6 @@
 # MVP Readiness Program
 
-Updated: 2026-07-29T19:44:11+03:00
+Updated: 2026-07-29T19:53:11+03:00
 Repository: `/home/gion/Projects/bet`
 Branch: `agent/mvp-scraper-hardening`, local implementation commit `91857a6`,
 based on `main` at `515fcd1`
@@ -38,9 +38,10 @@ The commit-safe integration order for the existing dirty checkout is
   release/security contracts **29 passed** and tracked-secret scan passed.
   Final independent review returned **APPROVE** with no blocking finding.
 - This is an isolated implementation candidate, not a merged clean release
-  revision. Draft PR #15 is open and its initial Backend, Frontend, Hybrid E2E
-  and Security checks are queued/running. Protected RC/public status remains
-  HOLD.
+  revision. Draft PR #15 is open; Backend `30472151150`, Frontend `30472152681`,
+  Hybrid E2E `30472152527`, and Security `30472151425` all passed on
+  `63c4a6f`. The PR is mergeable and reports `CLEAN`. Protected RC/public status
+  remains HOLD.
 
 ## MVP scope
 
