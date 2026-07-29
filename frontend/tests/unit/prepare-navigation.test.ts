@@ -12,6 +12,14 @@ test('Prepare is the canonical data-preparation workspace', async () => {
 	assert.match(source, /Setări avansate de rulare/);
 	assert.match(source, /filteredCountries\.slice\(0, 12\)/);
 	assert.match(source, /selectedCountries\.length > 0 \|\| leagueQuery\.trim\(\)/);
+	assert.match(source, /let futureDays = \$state\('1'\)/);
+	assert.match(source, /futureIntervalDays >= 1 && futureIntervalDays <= 31/);
+	assert.match(source, /Intl\.DateTimeFormat\(\)\.resolvedOptions\(\)\.timeZone \|\| 'UTC'/);
+	assert.match(source, /timezone: browserTimezone/);
+	assert.match(source, /label="Zi țintă peste \(zile\)"/);
+	assert.match(source, /max="31"/);
+	assert.match(source, /Pentru mai multe zile, pornește câte o colectare separată/);
+	assert.doesNotMatch(source, /Orizont personalizat mai lung/);
 	assert.doesNotMatch(source, /href="\/scrape/);
 });
 

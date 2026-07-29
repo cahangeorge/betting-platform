@@ -556,6 +556,46 @@ async def test_scrape_start_returns_created_job(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_scrape_start_maps_invalid_scraper_payload_to_422(monkeypatch):
+    async def fake_create_scrape_job(db, job_type, league, params):
+        raise ValueError("scrape params exceed the supported limit")
+
+    monkeypatch.setattr(data_api, "create_scrape_job", fake_create_scrape_job)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await data_api.start_scrape_job(
+            body=ScrapeJobCreateRequest(job_type="scrape_odds", params={"command": "upcoming"}),
+            response=Response(),
+            idempotency_key=None,
+            db=object(),
+            user=SimpleNamespace(id=12),
+        )
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.detail == "scrape params exceed the supported limit"
+
+
+@pytest.mark.asyncio
+async def test_generic_scrape_start_rejects_world_cup_pipeline_type(monkeypatch):
+    async def should_not_create(*_args, **_kwargs):
+        raise AssertionError("dedicated pipeline endpoint must be used")
+
+    monkeypatch.setattr(data_api, "create_scrape_job", should_not_create)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await data_api.start_scrape_job(
+            body=ScrapeJobCreateRequest(job_type="world_cup_pipeline", params={}),
+            response=Response(),
+            idempotency_key=None,
+            db=object(),
+            user=SimpleNamespace(id=12),
+        )
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.detail == "Unsupported generic scrape job type: world_cup_pipeline"
+
+
+@pytest.mark.asyncio
 async def test_scrape_background_execute_enqueues_task(monkeypatch):
     fake_job = SimpleNamespace(
         id=45,
