@@ -13,6 +13,7 @@ from app.api.v1 import (
     matches,
     model_governance,
     predictions,
+    provider,
     strategies,
     tickets,
     trading,
@@ -23,6 +24,7 @@ v1_router = APIRouter(prefix="/api/v1")
 v1_router.include_router(auth.router, prefix="/auth", tags=["auth"])
 v1_router.include_router(matches.router, prefix="/matches", tags=["matches"])
 v1_router.include_router(predictions.router, prefix="/predictions", tags=["predictions"])
+v1_router.include_router(provider.router, prefix="/provider", tags=["provider"])
 v1_router.include_router(tickets.router, prefix="/tickets", tags=["tickets"])
 v1_router.include_router(data.router, prefix="/data", tags=["data"])
 v1_router.include_router(bankroll.router, prefix="/bankroll", tags=["bankroll"])

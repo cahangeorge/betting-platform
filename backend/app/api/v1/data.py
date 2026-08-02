@@ -256,6 +256,7 @@ async def start_world_cup_pipeline(
 
 @router.get("/scrape", response_model=list[ScrapeJobResponse])
 async def list_scrape_jobs(
+    response: Response,
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
@@ -266,6 +267,9 @@ async def list_scrape_jobs(
     jobs = list(result.scalars().all())
     if not getattr(user, "is_admin", False):
         jobs = [job for job in jobs if can_read_scrape_job(job, user)]
+    response.headers["X-Total-Count"] = str(len(jobs))
+    response.headers["X-Page"] = str(page)
+    response.headers["X-Per-Page"] = str(per_page)
     offset = (page - 1) * per_page
     return jobs[offset : offset + per_page]
 

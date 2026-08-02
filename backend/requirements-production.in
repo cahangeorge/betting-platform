@@ -1,6 +1,6 @@
 # Resolve from the repository root so local bridge projects remain part of the
 # single production dependency graph. Do not add development extras here.
 -e backend
--e OddsHarvester
+-e OddsHarvester[camoufox]
 -e penaltyblog
 -e soccerdata

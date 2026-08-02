@@ -47,7 +47,7 @@ def _report(*, status="success", successful=1, failed=0, partial=0, failures=Non
 async def test_bridge_reads_new_report_and_keeps_primary_list(monkeypatch, tmp_path):
     monkeypatch.setattr(python_bridge, "TEMP_DIR", tmp_path)
 
-    async def fake_run(args, *, timeout=None):
+    async def fake_run(args, *, timeout=None, extra_env=None):
         output = Path(args[args.index("--output") + 1])
         report = Path(args[args.index("--report-output") + 1])
         output.write_text(json.dumps([{"home_team": "A"}]))
@@ -69,7 +69,7 @@ async def test_bridge_retries_list_only_cli_without_report_option(monkeypatch, t
     monkeypatch.setattr(python_bridge, "TEMP_DIR", tmp_path)
     calls = []
 
-    async def fake_run(args, *, timeout=None):
+    async def fake_run(args, *, timeout=None, extra_env=None):
         calls.append(args)
         if "--report-output" in args:
             raise BridgeError("No such option: --report-output")
@@ -192,6 +192,9 @@ class _ReportSession:
     async def flush(self):
         return None
 
+    async def rollback(self):
+        return None
+
 
 @pytest.mark.asyncio
 async def test_execute_job_persists_degraded_report_in_run_artifacts_and_log(monkeypatch):
@@ -216,7 +219,7 @@ async def test_execute_job_persists_degraded_report_in_run_artifacts_and_log(mon
         failures=[{"error_type": "navigation", "error_message": "one URL timed out"}],
     )
 
-    async def fake_bridge(args, label, *, timeout=None, include_report=False):
+    async def fake_bridge(args, label, *, timeout=None, include_report=False, extra_env=None):
         assert include_report is True
         return OddsHarvesterJsonResult([{"home_team": "A", "away_team": "B"}], report)
 
@@ -258,7 +261,7 @@ async def test_execute_job_fails_on_zero_result_antibot_report(monkeypatch):
         failures=[{"error_type": "rate_limited", "error_message": "Captcha challenge"}],
     )
 
-    async def fake_bridge(args, label, *, timeout=None, include_report=False):
+    async def fake_bridge(args, label, *, timeout=None, include_report=False, extra_env=None):
         return OddsHarvesterJsonResult([], report, cli_error="exit 1")
 
     async def fail_ingest(*_args):
@@ -270,6 +273,7 @@ async def test_execute_job_fails_on_zero_result_antibot_report(monkeypatch):
     result = await scraper.execute_scrape_job(db, 42)
 
     assert result.status == "failed"
+    assert json.loads(result.output)["failure"] == {"kind": "anti_bot"}
     assert "classified the run as failed" in result.error
     assert run.artifacts["scrape_report"]["health"] == "failed"
 
@@ -291,7 +295,7 @@ async def test_execute_job_completes_zero_result_upcoming_date(monkeypatch):
     db = _ReportSession(job, run)
     report = _report(status="failed", successful=0, failed=0, partial=0)
 
-    async def fake_bridge(args, label, *, timeout=None, include_report=False):
+    async def fake_bridge(args, label, *, timeout=None, include_report=False, extra_env=None):
         return OddsHarvesterJsonResult([], report, cli_error="exit 1")
 
     async def fake_ingest(_db, _job, _records):
@@ -307,3 +311,34 @@ async def test_execute_job_completes_zero_result_upcoming_date(monkeypatch):
     assert json.loads(result.output)["scrape_report"]["health"] == "no_fixtures"
     no_fixture_logs = [item for item in db.added if getattr(item, "action", None) == "no_fixtures"]
     assert len(no_fixture_logs) == 1
+
+
+def test_v11_no_fixtures_requires_explicit_outcome_attestation():
+    report = _report(status="failed", successful=0, failed=0, partial=0)
+    report["schema_version"] = "1.1"
+    assert scraper._scrape_report_summary(report, [], cli_error="exit 1")["health"] == "failed"
+    report["outcome"] = "no_fixtures"
+    with pytest.raises(BridgeError, match="inconsistent no_fixtures"):
+        scraper._scrape_report_summary(report, [], cli_error="exit 1")
+
+    report["status"] = "success"
+    assert scraper._scrape_report_summary(report, [], cli_error=None)["health"] == "no_fixtures"
+
+
+@pytest.mark.parametrize(
+    ("mutation", "cli_error"),
+    [
+        ({"status": "failed"}, None),
+        ({"command": "historic"}, None),
+        ({"stats": {"total_urls": 1, "successful": 0, "failed": 0, "partial": 0}}, None),
+        ({"failures": [{"error_type": "parsing"}]}, None),
+        ({"warnings": ["Cloudflare challenge"]}, None),
+        ({}, "exit 1"),
+    ],
+)
+def test_v11_rejects_inconsistent_no_fixtures_invariants(mutation, cli_error):
+    report = _report(status="success", successful=0, failed=0, partial=0)
+    report.update({"schema_version": "1.1", "outcome": "no_fixtures", **mutation})
+
+    with pytest.raises(BridgeError, match="inconsistent no_fixtures"):
+        scraper._scrape_report_summary(report, [], cli_error=cli_error)

@@ -372,3 +372,99 @@ async def test_versioned_run_gate_rejects_immutable_fingerprint_mismatch(monkeyp
 
     assert result["allowed"] is False
     assert result["runs"][0]["reason"] == "run_model_version_fingerprint_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_run_rejects_missing_model_version():
+    run = SimpleNamespace(
+        id=101,
+        model_version_id=None,
+        pipeline_contract_version="penaltyblog-model-pipeline/v1",
+    )
+
+    result = await assess_prediction_runs_governance(object(), user_id=7, runs=[run], automated=False)
+
+    assert result["allowed"] is False
+    assert result["runs"][0]["reason"] == "pipeline_model_version_required"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_run_requires_exact_fingerprints_and_completed_artifact(monkeypatch):
+    now = datetime(2026, 7, 16, 10, 0, tzinfo=timezone.utc)
+    version = SimpleNamespace(
+        id=9,
+        status="active",
+        strategy_config_hash="strategy-hash",
+        training_data_fingerprint="training-hash",
+    )
+    certification = SimpleNamespace(id=12, status="certified", valid_until=now + timedelta(days=7))
+    evidence = (
+        version,
+        SimpleNamespace(id=21),
+        certification,
+        SimpleNamespace(severity="healthy"),
+        governance_gate(model_version=version, certification=certification, now=now),
+    )
+
+    async def fake_governance_evidence(*_args, **_kwargs):
+        return evidence
+
+    class FakeDb:
+        async def scalar(self, _statement):
+            return None
+
+    monkeypatch.setattr(model_governance, "governance_evidence", fake_governance_evidence)
+    run = SimpleNamespace(
+        id=101,
+        model_version_id=9,
+        pipeline_contract_version="penaltyblog-model-pipeline/v1",
+        strategy_config_hash="strategy-hash",
+        training_data_fingerprint="training-hash",
+        source_generation_id=7,
+        output_fingerprint="a" * 64,
+    )
+
+    result = await assess_prediction_runs_governance(FakeDb(), user_id=7, runs=[run], automated=False, now=now)
+
+    assert result["allowed"] is False
+    assert result["runs"][0]["reason"] == "pipeline_model_artifact_incomplete"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_artifact_binding_requires_the_exact_typed_lineage():
+    version = SimpleNamespace(
+        id=9,
+        feature_set_id=4,
+        feature_schema_hash="feature-hash",
+        strategy_config_hash="config-hash",
+        training_data_fingerprint="training-hash",
+        runtime_dependency_fingerprint="runtime-hash",
+    )
+    artifact = SimpleNamespace(
+        id=8,
+        state="completed",
+        artifact_kind="training_manifest",
+        model_version_id=9,
+        source_generation_id=7,
+        feature_set_id=4,
+        runtime_dependency_fingerprint="runtime-hash",
+        manifest_json={
+            "runtime_fingerprint": "runtime-hash",
+            "training_data_fingerprint": "training-hash",
+            "model_config_fingerprint": "config-hash",
+            "feature_set_fingerprint": "feature-hash",
+        },
+    )
+    run = SimpleNamespace(
+        model_artifact_id=8,
+        source_generation_id=7,
+        input_context={"runtime_fingerprint": "runtime-hash"},
+    )
+
+    class Db:
+        async def get(self, _model, artifact_id):
+            return artifact if artifact_id == 8 else None
+
+    assert await model_governance._pipeline_artifact_is_exact(Db(), run, version)
+    artifact.source_generation_id = 99
+    assert not await model_governance._pipeline_artifact_is_exact(Db(), run, version)

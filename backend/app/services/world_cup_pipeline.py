@@ -510,12 +510,18 @@ async def _build_top_ticket_candidates(
             selectinload(ModelPrediction.match).selectinload(Match.odds),
             selectinload(ModelPrediction.run),
         )
-        .where(ModelPrediction.run_id.in_(run_ids))
+        .join(ModelPrediction.run)
+        .where(
+            ModelPrediction.run_id.in_(run_ids),
+            PredictionRun.status == "completed",
+        )
     )
     predictions = result.scalars().unique().all()
     aggregated: dict[tuple[int, str, str], dict] = {}
 
     for prediction in predictions:
+        if getattr(getattr(prediction, "run", None), "status", None) != "completed":
+            continue
         is_ticket_eligible = _prediction_is_ticket_eligible(prediction)
         if not include_unreliable and not is_ticket_eligible:
             continue
@@ -773,7 +779,7 @@ async def run_world_cup_pipeline(
         prediction_runs=prediction_runs,
         skipped_historic_seasons=skipped_historic_seasons,
     )
-    completed_run_ids = [run.id for run in prediction_runs if run.status in {"completed", "partial"}]
+    completed_run_ids = [run.id for run in prediction_runs if run.status == "completed"]
     candidate_pool = await _build_top_ticket_candidates(
         db,
         run_ids=completed_run_ids,

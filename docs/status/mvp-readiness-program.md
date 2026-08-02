@@ -1,9 +1,9 @@
 # MVP Readiness Program
 
-Updated: 2026-07-29T20:28:26+03:00
+Updated: 2026-08-02T03:26:13+03:00
 Repository: `/home/gion/Projects/bet`
-Branch: post-merge status checkpoint based on `main` at `6abb637`
-Program status: **ACTIVE — merged source/evidence-only GO; protected RC and public MVP launch HOLD**
+Branch: working checkpoint on `main` at `0620287`, with intentional dirty work
+Program status: **ACTIVE — local foundation GO; protected RC and public MVP launch HOLD**
 
 This is the durable execution register for reaching a verified MVP. It records
 project status, expert findings, phases, task dependencies, verification gates,
@@ -13,6 +13,63 @@ link here while this program is active.
 
 The commit-safe integration order for the existing dirty checkout is
 `docs/status/release-candidate-reconciliation.md`.
+
+## Verified refresh — 2026-08-02
+
+- A follow-up `PDP-104` slice mapped and fail-closed the remaining active
+  prediction-engine `penaltyblog` operations before subprocess execution.
+  Independent review's policy-denial finding was fixed by moving the model-fit
+  gate outside the per-target exception boundary. Targeted tests passed
+  **62/62**, the normal backend suite passed **898** with
+  **46** explicit PostgreSQL skips, and full Ruff lint/format passed. The task
+  remains incremental/open for separately scoped browser and catalog/runtime
+  bridge decisions; no live provider call was used as evidence.
+
+- Fresh Git/source plus Serena, Codex Memory, current `bet-core` Codebase
+  Memory, and focused Repomix output `497ed5207b1324dc` agree that the local
+  provider-data architecture reaches G009/P8. Older July 24 Serena release
+  memories are historical and do not override the current Alembic-043 source.
+- Fresh current-candidate gates: backend **893 passed / 46 explicit PostgreSQL
+  skips** normally; isolated PostgreSQL `001 -> 043`, head/check and full suite
+  **938 passed / 1 skipped**; Ruff lint/format passed; frontend check 0/0,
+  **125 unit**, E2E typecheck and production build passed; Chromium hybrid
+  **60/60**; production PWA **3/3**; Firefox **1/1**; WebKit **1/1** in the
+  official Playwright `v1.60.0-noble` image; root release/security contracts
+  **35/35**; all three Compose renders and `git diff --check` passed.
+- No local source blocker was found. The remaining work is revision/protected-
+  environment/provider authorization evidence: the root candidate has 171
+  worktree entries and `OddsHarvester` has 51; exact benchmark/rights,
+  authorized provider canary, protected traces/dashboard retention,
+  production-duration restart soak, off-host restore, signed immutable release
+  and public rollout approval remain open.
+- Remote `main` is still verified `0620287`; its Backend, Frontend, Security
+  and evidence-only run `30475963019` are green, with no open PR. This is only
+  the base of the 171-entry local candidate, not protected evidence for it.
+  The quarantined `v0.1.0-rc.20260725.1` is still the only tag and there is no
+  published GitHub release.
+- Decision remains **local implementation GO; protected RC HOLD; public MVP
+  HOLD**. No provider call, commit, push, tag, deployment or rollout activation
+  occurred during this refresh.
+
+## Current reconciliation — 2026-08-01
+
+- Fresh Git/source supersedes the older dated counts below: source migration
+  head is Alembic `029`; the runtime database head was not re-verified during
+  this documentation-only architecture pass.
+- The root checkout had 42 entries before this documentation pass and
+  `OddsHarvester` had 51 nested entries; `penaltyblog` and `soccerdata` were
+  clean. No reset, commit, push, tag, deployment or live provider call occurred.
+- Provider Adapter v1 is locally verified and documented in
+  `docs/adr/2026-08-01-provider-adapter-v1.md`.
+- The accepted provider data architecture is in
+  `docs/adr/2026-08-01-provider-data-platform-architecture.md`; the canonical
+  execution DAG is
+  `docs/plans/2026-08-01-provider-data-platform-execution-plan.md`.
+- That plan adds upstream-scoped policy, Provider Envelope v2/quarantine,
+  provider identity, worker isolation and controlled performance gates without
+  replacing the release completion contract in this file.
+- Any older branch/SHA, migration/test count or project-state statement below
+  remains dated evidence, not the current checkout truth.
 
 ## Verified refresh — 2026-07-29
 
@@ -88,8 +145,8 @@ The program can be marked **MVP GO** only when:
 | `backend/` | LOCAL GATES GREEN | Current API | shared multi-replica edge/WS controls and production observability |
 | PostgreSQL/Alembic | LOCAL GATES GREEN | Durable state | `025 (head)`, no drift; off-host recovery remains external |
 | Redis/Taskiq | LOCAL GATES GREEN | Async jobs | production soak/monitoring remains external |
-| `OddsHarvester/` | ACTIVE BRIDGE / EXTERNAL COVERAGE HOLD | live scraping | local bridge executed truthfully but returned `no_fixtures`; provider coverage and complete protected live lifecycle remain external |
-| `penaltyblog/` | PARTIAL | prediction bridge | real staging inference is not in the current live gate |
+| `OddsHarvester/` | LOCAL CANARY GREEN / EXTERNAL COVERAGE HOLD | live scraping | live 1X2 extraction and canonical PostgreSQL materialization passed; broader protected coverage/lifecycle remains external |
+| `penaltyblog/` | LOCAL TRAINING CANARY GREEN | prediction bridge | aligned current-fixture plus odds live inference is not yet in the protected gate |
 | `soccerdata/` | LOCAL CANARY GREEN | data bridge | protected staging lifecycle remains required |
 | `flumine/` | EXCLUDED | post-MVP paper execution | accepted ADR excludes paper execution from public MVP |
 | PWA | LOCAL GATES GREEN | installable shell | production HTTPS offline/recovery/update suite passed; installed-device lifecycle remains |

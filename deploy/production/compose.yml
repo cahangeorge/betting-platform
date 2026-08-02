@@ -25,13 +25,33 @@ x-api-environment: &api-environment
   BET_TASKIQ_RESULT_BACKEND_URL: ${BET_TASKIQ_RESULT_BACKEND_URL:?set authenticated Redis DB 1 URL by the production secret manager}
   BET_TASKIQ_QUEUE_NAME: bet
   BET_TASKIQ_CONSUMER_GROUP: bet-workers
+  # Staged rollout starts with the legacy-compatible control lane. Dedicated
+  # pools are opt-in profiles; enabling them requires an operator-provided
+  # canonical subset shared by API publishers and every worker process.
+  BET_TASKIQ_ENABLED_LANES: ${BET_TASKIQ_ENABLED_LANES:-control}
+  # Admission is independent from consumer availability: keep it control-only
+  # while enabled provider workers drain existing durable messages.
+  BET_TASKIQ_ADMITTED_LANES: ${BET_TASKIQ_ADMITTED_LANES:-control}
+  BET_TASKIQ_PROVIDER_HTTP_QUEUE_NAME: bet-provider-http
+  BET_TASKIQ_PROVIDER_HTTP_CONSUMER_GROUP: bet-provider-http-workers
+  BET_TASKIQ_PROVIDER_BROWSER_QUEUE_NAME: bet-provider-browser
+  BET_TASKIQ_PROVIDER_BROWSER_CONSUMER_GROUP: bet-provider-browser-workers
+  BET_TASKIQ_MODEL_CPU_QUEUE_NAME: bet-model-cpu
+  BET_TASKIQ_MODEL_CPU_CONSUMER_GROUP: bet-model-cpu-workers
   BET_PENALTYBLOG_PYTHON: /usr/local/bin/python
   BET_PENALTYBLOG_BRIDGE: /app/backend/app/bridges/penaltyblog_bridge.py
   BET_PENALTYBLOG_ROOT: /app/penaltyblog
+  # Must resolve to a durable shared volume, never a tmpfs execution cache.
+  BET_MODEL_ARTIFACT_ROOT: /model-artifacts
+  OMP_NUM_THREADS: "1"
+  OPENBLAS_NUM_THREADS: "1"
+  MKL_NUM_THREADS: "1"
+  NUMEXPR_NUM_THREADS: "1"
   BET_SOCCERDATA_PYTHON: /usr/local/bin/python
   BET_SOCCERDATA_BRIDGE: /app/backend/app/bridges/soccerdata_bridge.py
   BET_SOCCERDATA_ROOT: /app/soccerdata
   BET_ODDSHARVESTER_PYTHON: /usr/local/bin/python
+  BET_SCRAPE_PIPELINE_V2_PERCENT: "${BET_SCRAPE_PIPELINE_V2_PERCENT:-0}"
   PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
   BET_SCHEDULED_JOBS_ENABLED: "false"
   BET_TRADING_ENABLED: "false"
@@ -104,7 +124,10 @@ services:
     environment: *api-environment
     command: [uvicorn, app.main:app, --host, 0.0.0.0, --port, "8000"]
     depends_on:
+      model-artifacts-init: {condition: service_completed_successfully}
       migrate: {condition: service_completed_successfully}
+    # The API verifies artifacts but cannot mutate the model-cpu-owned volume.
+    volumes: [model-artifacts:/model-artifacts:ro]
     healthcheck:
       test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=2)"]
       interval: 10s
@@ -117,18 +140,107 @@ services:
     <<: *service-defaults
     networks: [private, egress]
     image: ${BET_API_IMAGE:?must be an immutable image digest}
-    environment: *api-environment
-    command: [taskiq, worker, app.tasks.broker:broker, app.tasks.jobs]
+    environment:
+      <<: *api-environment
+      BET_TASKIQ_WORKER_LANE: control
+    # `world_cup_pipeline` remains legacy-control/v0 until decomposed, and can
+    # still invoke browser work; do not shrink this pool during staged rollout.
+    mem_limit: 4g
+    cpus: 2.0
+    pids_limit: 512
+    command:
+      [taskiq, worker, app.tasks.broker:broker, app.tasks.jobs, --workers, "1", --max-async-tasks, "2", --max-prefetch, "2", --log-level, WARNING]
     depends_on:
       migrate: {condition: service_completed_successfully}
       redis: {condition: service_healthy}
     healthcheck:
-      test: [CMD, python, -m, app.tasks.runtime, worker]
+      test: [CMD, python, -m, app.tasks.runtime, "worker:control"]
       interval: 30s
       timeout: 20s
       retries: 3
       start_period: 20s
     tmpfs: [/tmp:rw,noexec,nosuid,size=256m]
+
+  provider-http-worker:
+    <<: *service-defaults
+    profiles: [provider-lanes]
+    networks: [private, egress]
+    image: ${BET_API_IMAGE:?must be an immutable image digest}
+    environment:
+      <<: *api-environment
+      BET_TASKIQ_WORKER_LANE: provider-http
+    mem_limit: 1g
+    cpus: 1.0
+    pids_limit: 128
+    command:
+      [taskiq, worker, app.tasks.broker:broker, app.tasks.jobs, --workers, "1", --max-async-tasks, "4", --max-prefetch, "4", --log-level, WARNING]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, python, -m, app.tasks.runtime, "worker:provider-http"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 20s
+    tmpfs: [/tmp:rw,noexec,nosuid,size=256m]
+
+  provider-browser-worker:
+    <<: *service-defaults
+    profiles: [provider-lanes]
+    networks: [private, egress]
+    image: ${BET_API_IMAGE:?must be an immutable image digest}
+    environment:
+      <<: *api-environment
+      BET_TASKIQ_WORKER_LANE: provider-browser
+    mem_limit: 4g
+    cpus: 2.0
+    pids_limit: 512
+    command:
+      [taskiq, worker, app.tasks.broker:broker, app.tasks.jobs, --workers, "1", --max-async-tasks, "1", --max-prefetch, "1", --log-level, WARNING]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, python, -m, app.tasks.runtime, "worker:provider-browser"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 20s
+    tmpfs: [/tmp:rw,noexec,nosuid,size=512m]
+
+  model-cpu-worker:
+    <<: *service-defaults
+    profiles: [provider-lanes]
+    image: ${BET_API_IMAGE:?must be an immutable image digest}
+    environment:
+      <<: *api-environment
+      BET_TASKIQ_WORKER_LANE: model-cpu
+    mem_limit: 4g
+    cpus: 2.0
+    pids_limit: 256
+    command:
+      [taskiq, worker, app.tasks.broker:broker, app.tasks.jobs, --workers, "1", --max-async-tasks, "1", --max-prefetch, "1", --log-level, WARNING]
+    depends_on:
+      model-artifacts-init: {condition: service_completed_successfully}
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    volumes: [model-artifacts:/model-artifacts]
+    healthcheck:
+      test: [CMD, python, -m, app.tasks.runtime, "worker:model-cpu"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 20s
+    tmpfs: [/tmp:rw,noexec,nosuid,size=256m]
+
+  model-artifacts-init:
+    image: ${BET_API_IMAGE:?must be an immutable image digest}
+    user: "0:0"
+    command: [sh, -ec, "mkdir -p /model-artifacts && chown -R 1001:1001 /model-artifacts"]
+    volumes: [model-artifacts:/model-artifacts]
+    restart: "no"
+    security_opt: [no-new-privileges:true]
 
   scheduler:
     <<: *service-defaults
@@ -184,3 +296,4 @@ networks:
 volumes:
   postgres-data:
   redis-data:
+  model-artifacts:

@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import delete, or_, select
+from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import get_settings
@@ -28,6 +28,21 @@ from app.models.prediction import (
     Prediction,
     PredictionRun,
     PredictionSession,
+)
+from app.models.provider_identity import (
+    CompetitionProviderMapping,
+    CompetitionProviderMappingCandidate,
+    MatchProviderMapping,
+    MatchProviderMappingCandidate,
+    TeamProviderMapping,
+    TeamProviderMappingCandidate,
+)
+from app.models.provider_observation import (
+    ProviderObservation,
+    ProviderObservationConflict,
+    ProviderObservationDatasetLink,
+    ProviderObservationReceipt,
+    ProviderObservationSlot,
 )
 from app.models.scrape import ScrapedDataset, ScrapeJob, ScrapeJobLog
 from app.models.strategy import Strategy
@@ -286,6 +301,151 @@ async def build_cleanup_plan(session: AsyncSession) -> CleanupPlan:
         else [],
     )
 
+    receipt_conditions = []
+    if scrape_job_ids:
+        receipt_conditions.append(ProviderObservationReceipt.scrape_job_id.in_(scrape_job_ids))
+        receipt_conditions.append(ProviderObservationReceipt.scrape_job_id_snapshot.in_(scrape_job_ids))
+    if scheduled_run_ids:
+        receipt_conditions.append(ProviderObservationReceipt.scheduled_job_run_id.in_(scheduled_run_ids))
+        receipt_conditions.append(ProviderObservationReceipt.scheduled_job_run_id_snapshot.in_(scheduled_run_ids))
+    if dataset_ids:
+        receipt_conditions.append(ProviderObservationReceipt.origin_dataset_id.in_(dataset_ids))
+        receipt_conditions.append(ProviderObservationReceipt.origin_dataset_id_snapshot.in_(dataset_ids))
+    provider_receipts = (
+        await _rows(session, select(ProviderObservationReceipt).where(or_(*receipt_conditions)))
+        if receipt_conditions
+        else []
+    )
+    plan.add_ids("provider_observation_receipts", [row.id for row in provider_receipts])
+
+    provider_dataset_links = (
+        await _rows(
+            session,
+            select(ProviderObservationDatasetLink).where(ProviderObservationDatasetLink.dataset_id.in_(dataset_ids)),
+        )
+        if dataset_ids
+        else []
+    )
+    plan.add_ids("provider_observation_dataset_links", [row.id for row in provider_dataset_links])
+    provider_observation_ids = {
+        *(row.observation_id for row in provider_receipts),
+        *(row.observation_id for row in provider_dataset_links),
+    }
+    provider_target_match_ids = plan.ids["matches"]
+
+    async def _mapping_history(model, *, target_match: bool = False):
+        conditions = []
+        if provider_observation_ids:
+            conditions.append(model.evidence_observation_id.in_(provider_observation_ids))
+        if target_match and provider_target_match_ids:
+            conditions.append(model.match_id.in_(provider_target_match_ids))
+        seeds = await _rows(session, select(model).where(or_(*conditions))) if conditions else []
+        identities = {(row.adapter_key, row.source_key, row.source_id) for row in seeds}
+        if not identities:
+            return []
+        return await _rows(
+            session,
+            select(model).where(
+                or_(
+                    *(
+                        and_(
+                            model.adapter_key == adapter_key,
+                            model.source_key == source_key,
+                            model.source_id == source_id,
+                        )
+                        for adapter_key, source_key, source_id in identities
+                    )
+                )
+            ),
+        )
+
+    provider_team_mappings = await _mapping_history(TeamProviderMapping)
+    provider_competition_mappings = await _mapping_history(CompetitionProviderMapping)
+    provider_match_mappings = await _mapping_history(MatchProviderMapping, target_match=True)
+    if any(row.state == "accepted" for row in provider_team_mappings):
+        plan.blockers.append("provider team mapping history includes a canonical target outside E2E ownership")
+    if any(row.state == "accepted" for row in provider_competition_mappings):
+        plan.blockers.append("provider competition mapping history includes a canonical target outside E2E ownership")
+    external_match_targets = sorted(
+        {
+            row.match_id
+            for row in provider_match_mappings
+            if row.state == "accepted" and row.match_id not in provider_target_match_ids
+        }
+    )
+    if external_match_targets:
+        plan.blockers.append(
+            f"provider match mapping history includes non-E2E canonical matches: {external_match_targets[:10]}"
+        )
+    for name, rows in (
+        ("provider_team_mappings", provider_team_mappings),
+        ("provider_competition_mappings", provider_competition_mappings),
+        ("provider_match_mappings", provider_match_mappings),
+    ):
+        plan.add_ids(name, [row.id for row in rows])
+        provider_observation_ids.update(
+            row.evidence_observation_id for row in rows if row.evidence_observation_id is not None
+        )
+
+    for name, candidate_model, mappings in (
+        ("provider_team_mapping_candidates", TeamProviderMappingCandidate, provider_team_mappings),
+        (
+            "provider_competition_mapping_candidates",
+            CompetitionProviderMappingCandidate,
+            provider_competition_mappings,
+        ),
+        ("provider_match_mapping_candidates", MatchProviderMappingCandidate, provider_match_mappings),
+    ):
+        mapping_ids = [row.id for row in mappings]
+        plan.add_ids(
+            name,
+            await _ids(session, select(candidate_model.id).where(candidate_model.mapping_id.in_(mapping_ids)))
+            if mapping_ids
+            else [],
+        )
+
+    plan.add_ids("provider_observations", list(provider_observation_ids))
+    if provider_observation_ids:
+        conflicts = await _rows(
+            session,
+            select(ProviderObservationConflict).where(
+                or_(
+                    ProviderObservationConflict.left_observation_id.in_(provider_observation_ids),
+                    ProviderObservationConflict.right_observation_id.in_(provider_observation_ids),
+                )
+            ),
+        )
+        plan.add_ids("provider_observation_conflicts", [row.id for row in conflicts])
+        external_conflict_observations = sorted(
+            {
+                observation_id
+                for row in conflicts
+                for observation_id in (row.left_observation_id, row.right_observation_id)
+                if observation_id not in provider_observation_ids
+            }
+        )
+        if external_conflict_observations:
+            plan.blockers.append(
+                f"provider observations conflict with non-E2E observations: {external_conflict_observations[:10]}"
+            )
+        selected_observations = await _rows(
+            session, select(ProviderObservation).where(ProviderObservation.id.in_(provider_observation_ids))
+        )
+        candidate_slot_ids = {row.slot_id for row in selected_observations}
+        slots_with_external_observations = set(
+            await _ids(
+                session,
+                select(ProviderObservation.slot_id).where(
+                    ProviderObservation.slot_id.in_(candidate_slot_ids),
+                    ProviderObservation.id.not_in(provider_observation_ids),
+                ),
+            )
+        )
+        plan.add_ids("provider_observation_slots", list(candidate_slot_ids - slots_with_external_observations))
+    else:
+        plan.add_ids("provider_observation_conflicts", [])
+        plan.add_ids("provider_observation_slots", [])
+
     run_ids = plan.ids["prediction_runs"]
     match_ids = plan.ids["matches"]
     plan.add_ids(
@@ -392,6 +552,7 @@ async def _add_reference_blockers(
     ticket_ids = set(plan.ids.get("tickets", []))
     match_ids = plan.ids.get("matches", [])
     batch_ids = plan.ids.get("ticket_batches", [])
+    provider_observation_ids = plan.ids.get("provider_observations", [])
 
     if strategy_ids:
         external = await _ids(
@@ -443,6 +604,27 @@ async def _add_reference_blockers(
             plan.blockers.append(
                 f"matches referenced by non-E2E ensemble predictions: {external_ensemble_predictions[:10]}"
             )
+    if provider_observation_ids:
+        selected_receipts = set(plan.ids.get("provider_observation_receipts", []))
+        selected_links = set(plan.ids.get("provider_observation_dataset_links", []))
+        external_receipts = await _ids(
+            session,
+            select(ProviderObservationReceipt.id).where(
+                ProviderObservationReceipt.observation_id.in_(provider_observation_ids),
+                ProviderObservationReceipt.id.not_in(selected_receipts),
+            ),
+        )
+        external_links = await _ids(
+            session,
+            select(ProviderObservationDatasetLink.id).where(
+                ProviderObservationDatasetLink.observation_id.in_(provider_observation_ids),
+                ProviderObservationDatasetLink.id.not_in(selected_links),
+            ),
+        )
+        if external_receipts:
+            plan.blockers.append(f"provider observations have non-E2E receipts: {external_receipts[:10]}")
+        if external_links:
+            plan.blockers.append(f"provider observations have non-E2E dataset links: {external_links[:10]}")
 
 
 DELETE_ORDER = (
@@ -450,6 +632,17 @@ DELETE_ORDER = (
     ("execution_events", ExecutionEvent),
     ("execution_orders", ExecutionOrder),
     ("execution_intents", ExecutionIntent),
+    ("provider_observation_conflicts", ProviderObservationConflict),
+    ("provider_observation_dataset_links", ProviderObservationDatasetLink),
+    ("provider_observation_receipts", ProviderObservationReceipt),
+    ("provider_team_mapping_candidates", TeamProviderMappingCandidate),
+    ("provider_competition_mapping_candidates", CompetitionProviderMappingCandidate),
+    ("provider_match_mapping_candidates", MatchProviderMappingCandidate),
+    ("provider_team_mappings", TeamProviderMapping),
+    ("provider_competition_mappings", CompetitionProviderMapping),
+    ("provider_match_mappings", MatchProviderMapping),
+    ("provider_observations", ProviderObservation),
+    ("provider_observation_slots", ProviderObservationSlot),
     ("settlements", Settlement),
     ("ledger_entries", LedgerEntry),
     ("bet_placements", BetPlacement),
@@ -483,6 +676,14 @@ DELETE_ORDER = (
 async def apply_cleanup_plan(session: AsyncSession, plan: CleanupPlan) -> dict[str, int]:
     validate_plan_for_apply(plan)
     deleted: dict[str, int] = {}
+    for name, model in (
+        ("provider_team_mappings", TeamProviderMapping),
+        ("provider_competition_mappings", CompetitionProviderMapping),
+        ("provider_match_mappings", MatchProviderMapping),
+    ):
+        ids = plan.ids.get(name, [])
+        if ids:
+            await session.execute(update(model).where(model.id.in_(ids)).values(selected_candidate_id=None))
     for name, model in DELETE_ORDER:
         ids = plan.ids.get(name, [])
         if not ids:

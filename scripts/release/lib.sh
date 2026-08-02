@@ -41,10 +41,51 @@ record_known_good_manifest() {
   mv -f -- "$temporary" "$known_good"
 }
 
+enabled_lanes_from_manifest() {
+  local env_file=$1 output_name=$2 raw_lanes lane
+  local -n output=$output_name
+  output=()
+  raw_lanes=$(grep -E '^BET_TASKIQ_ENABLED_LANES=' "$env_file" | tail -n1 | cut -d= -f2- || true)
+  raw_lanes=${raw_lanes:-control}
+  IFS=',' read -r -a output <<< "$raw_lanes"
+  [[ ${#output[@]} -gt 0 && ${output[0]} == control ]] || \
+    fail "BET_TASKIQ_ENABLED_LANES must start with control"
+  for lane in "${output[@]}"; do
+    case "$lane" in
+      control|provider-http|provider-browser|model-cpu) ;;
+      *) fail "BET_TASKIQ_ENABLED_LANES contains unsupported lane: $lane" ;;
+    esac
+  done
+}
+
+worker_service_for_lane() {
+  case "$1" in
+    control) printf '%s\n' worker ;;
+    provider-http) printf '%s\n' provider-http-worker ;;
+    provider-browser) printf '%s\n' provider-browser-worker ;;
+    model-cpu) printf '%s\n' model-cpu-worker ;;
+    *) fail "unsupported worker lane: $1" ;;
+  esac
+}
+
+release_services_for_enabled_lanes() {
+  local env_file=$1 output_name=$2 lane
+  local -a lanes
+  local -n output=$output_name
+  enabled_lanes_from_manifest "$env_file" lanes
+  output=(api)
+  for lane in "${lanes[@]}"; do
+    output+=("$(worker_service_for_lane "$lane")")
+  done
+  output+=(scheduler frontend nginx)
+}
+
 restore_immutable_release() {
   local env_file=$1
-  compose "$env_file" pull api worker scheduler frontend nginx
-  compose "$env_file" up --detach --no-deps --wait --wait-timeout 180 api worker scheduler frontend nginx
+  local -a services
+  release_services_for_enabled_lanes "$env_file" services
+  compose "$env_file" pull "${services[@]}"
+  compose "$env_file" up --detach --no-deps --wait --wait-timeout 180 "${services[@]}"
   compose "$env_file" ps
 }
 

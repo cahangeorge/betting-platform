@@ -13,6 +13,7 @@ from app.api.v1.live import broadcast_prediction_update
 from app.database import get_db
 from app.models.match import Match, OddsEntry
 from app.models.prediction import ModelPrediction, PredictionRun
+from app.models.ticket import TicketLeg
 from app.models.user import User
 from app.schemas.prediction import (
     PredictionCalibrationBucket,
@@ -836,5 +837,11 @@ async def delete_prediction_run(
     run = result.scalar_one_or_none()
     if not run:
         raise HTTPException(status_code=404, detail="Prediction run not found")
+    retained_leg = await db.scalar(select(TicketLeg.id).where(TicketLeg.prediction_run_id_snapshot == run.id).limit(1))
+    if retained_leg is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="Prediction run is retained by immutable ticket-leg lineage",
+        )
     await db.delete(run)
     await db.flush()

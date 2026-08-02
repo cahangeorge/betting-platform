@@ -1,9 +1,10 @@
 import warnings
 from functools import lru_cache
 from pathlib import Path
+from typing import Annotated
 
-from pydantic import Field, field_validator, model_validator
-from pydantic_settings import BaseSettings
+from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic_settings import BaseSettings, NoDecode
 
 DEVELOPMENT_ENVIRONMENTS = {"development", "test"}
 SECURE_ENVIRONMENTS = {"staging", "production"}
@@ -13,6 +14,27 @@ INSECURE_JWT_SECRETS = {
     "replace-this-in-non-dev",
 }
 JWT_SECRET_MIN_LENGTH = 32
+TASKIQ_LANE_ORDER = ("control", "provider-http", "provider-browser", "model-cpu")
+
+
+def _validate_ordered_taskiq_lanes(value: object, *, field_name: str) -> tuple[str, ...]:
+    if isinstance(value, str):
+        lanes = tuple(part.strip().lower() for part in value.split(",") if part.strip())
+    elif isinstance(value, (tuple, list)):
+        lanes = tuple(str(part).strip().lower() for part in value if str(part).strip())
+    else:
+        raise ValueError(f"taskiq {field_name} lanes must be a comma-separated ordered lane list")
+
+    if not lanes or "control" not in lanes:
+        raise ValueError(f"taskiq {field_name} lanes must include control")
+    if len(set(lanes)) != len(lanes):
+        raise ValueError(f"taskiq {field_name} lanes must not contain duplicates")
+    if any(lane not in TASKIQ_LANE_ORDER for lane in lanes):
+        raise ValueError(f"taskiq {field_name} lanes contain an unknown lane")
+    ordered_subset = tuple(lane for lane in TASKIQ_LANE_ORDER if lane in lanes)
+    if lanes != ordered_subset:
+        raise ValueError(f"taskiq {field_name} lanes must use canonical order")
+    return lanes
 
 
 class Settings(BaseSettings):
@@ -60,10 +82,16 @@ class Settings(BaseSettings):
 
     bridge_timeout_seconds: int = 180
     oddsharvester_timeout_seconds: int = 600
+    # Deterministic canary percentage for the hybrid scraper pipeline.
+    scrape_pipeline_v2_percent: int = Field(default=0, ge=0, le=100)
 
     scheduled_jobs_enabled: bool = False
     scheduled_jobs_interval_seconds: int = 60
     task_queue_backend: str = "inprocess"
+    # The development fallback must not launch every browser-heavy scrape at
+    # once when Prepare creates several bounded jobs. Taskiq workers provide
+    # their own concurrency control in deployments.
+    inprocess_scrape_max_concurrency: int = Field(default=1, ge=1, le=4)
     task_run_lease_seconds: int = 300
     task_publish_retry_seconds: int = 15
     task_publish_max_attempts: int = 5
@@ -71,12 +99,78 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     taskiq_broker_url: str = ""
     taskiq_result_backend_url: str = ""
+    # `bet` remains the legacy-compatible control queue. Dedicated provider and
+    # model queues are deliberately explicit; callers do not select them.
     taskiq_queue_name: str = "bet"
     taskiq_consumer_group: str = "bet-workers"
+    # Set per worker process; API/scheduler processes retain the control default.
+    taskiq_worker_lane: str = "control"
+    # Staged rollout control. The order is semantic and must follow the
+    # backend-owned lane sequence; control is permanently required for legacy
+    # Taskiq work and scheduler/outbox recovery.
+    taskiq_enabled_lanes: Annotated[tuple[str, ...], NoDecode] = (
+        "control",
+        "provider-http",
+        "provider-browser",
+        "model-cpu",
+    )
+    # Consumer/drain availability is independent from new-work admission. This
+    # lets an operator stop publishing provider work while retained workers
+    # drain their durable backlog during a staged rollback.
+    taskiq_admitted_lanes: Annotated[tuple[str, ...], NoDecode] = (
+        "control",
+        "provider-http",
+        "provider-browser",
+        "model-cpu",
+    )
+    taskiq_provider_http_queue_name: str = "bet-provider-http"
+    taskiq_provider_http_consumer_group: str = "bet-provider-http-workers"
+    taskiq_provider_browser_queue_name: str = "bet-provider-browser"
+    taskiq_provider_browser_consumer_group: str = "bet-provider-browser-workers"
+    taskiq_model_cpu_queue_name: str = "bet-model-cpu"
+    taskiq_model_cpu_consumer_group: str = "bet-model-cpu-workers"
+    taskiq_control_worker_processes: int = Field(default=1, ge=1, le=16)
+    taskiq_control_max_async_tasks: int = Field(default=2, ge=1, le=64)
+    taskiq_control_prefetch: int = Field(default=2, ge=1, le=64)
+    taskiq_control_timeout_seconds: int = Field(default=300, ge=1, le=86_400)
+    taskiq_control_backlog_cap: int = Field(default=1000, ge=1, le=100_000)
+    taskiq_provider_http_worker_processes: int = Field(default=1, ge=1, le=16)
+    taskiq_provider_http_max_async_tasks: int = Field(default=4, ge=1, le=64)
+    taskiq_provider_http_prefetch: int = Field(default=4, ge=1, le=64)
+    taskiq_provider_http_timeout_seconds: int = Field(default=900, ge=1, le=86_400)
+    taskiq_provider_http_backlog_cap: int = Field(default=200, ge=1, le=100_000)
+    taskiq_provider_browser_worker_processes: int = Field(default=1, ge=1, le=16)
+    taskiq_provider_browser_max_async_tasks: int = Field(default=1, ge=1, le=64)
+    taskiq_provider_browser_prefetch: int = Field(default=1, ge=1, le=64)
+    taskiq_provider_browser_timeout_seconds: int = Field(default=3660, ge=1, le=86_400)
+    taskiq_provider_browser_backlog_cap: int = Field(default=50, ge=1, le=100_000)
+    taskiq_model_cpu_worker_processes: int = Field(default=1, ge=1, le=16)
+    taskiq_model_cpu_max_async_tasks: int = Field(default=1, ge=1, le=64)
+    taskiq_model_cpu_prefetch: int = Field(default=1, ge=1, le=64)
+    taskiq_model_cpu_timeout_seconds: int = Field(default=3600, ge=1, le=86_400)
+    taskiq_model_cpu_backlog_cap: int = Field(default=50, ge=1, le=100_000)
     taskiq_poll_interval_seconds: int = 60
     taskiq_result_ttl_seconds: int = 86400
     taskiq_runtime_heartbeat_seconds: int = 10
     taskiq_runtime_stale_seconds: int = 30
+
+    @field_validator("taskiq_worker_lane", mode="before")
+    @classmethod
+    def validate_taskiq_worker_lane(cls, value: object) -> str:
+        lane = str(value or "control").strip().lower()
+        if lane not in {"control", "provider-http", "provider-browser", "model-cpu"}:
+            raise ValueError("taskiq_worker_lane must be control, provider-http, provider-browser, or model-cpu")
+        return lane
+
+    @field_validator("taskiq_enabled_lanes", mode="before")
+    @classmethod
+    def validate_taskiq_enabled_lanes(cls, value: object) -> tuple[str, ...]:
+        return _validate_ordered_taskiq_lanes(value, field_name="enabled")
+
+    @field_validator("taskiq_admitted_lanes", mode="before")
+    @classmethod
+    def validate_taskiq_admitted_lanes(cls, value: object) -> tuple[str, ...]:
+        return _validate_ordered_taskiq_lanes(value, field_name="admitted")
 
     @field_validator("task_queue_backend", mode="before")
     @classmethod
@@ -133,6 +227,37 @@ class Settings(BaseSettings):
             if "*" in self.cors_origin_list:
                 raise ValueError("BET_CORS_ORIGINS must not contain '*' when BET_ENVIRONMENT is staging or production")
 
+        lane_queues = {
+            "control": self.taskiq_queue_name.strip(),
+            "provider-http": self.taskiq_provider_http_queue_name.strip(),
+            "provider-browser": self.taskiq_provider_browser_queue_name.strip(),
+            "model-cpu": self.taskiq_model_cpu_queue_name.strip(),
+        }
+        lane_groups = {
+            "control": self.taskiq_consumer_group.strip(),
+            "provider-http": self.taskiq_provider_http_consumer_group.strip(),
+            "provider-browser": self.taskiq_provider_browser_consumer_group.strip(),
+            "model-cpu": self.taskiq_model_cpu_consumer_group.strip(),
+        }
+        if not all(lane_queues.values()) or not all(lane_groups.values()):
+            raise ValueError("Taskiq lane queue names and consumer groups must not be empty")
+        if len(set(lane_queues.values())) != len(lane_queues):
+            raise ValueError("Taskiq lane queue names must be distinct")
+        if len(set(lane_groups.values())) != len(lane_groups):
+            raise ValueError("Taskiq lane consumer groups must be distinct")
+        if self.taskiq_worker_lane not in self.taskiq_enabled_lanes:
+            raise ValueError("taskiq_worker_lane must be enabled by taskiq_enabled_lanes")
+        if not set(self.taskiq_admitted_lanes).issubset(self.taskiq_enabled_lanes):
+            raise ValueError("taskiq admitted lanes must be a subset of taskiq enabled lanes")
+        for lane, max_async_tasks, prefetch in (
+            ("control", self.taskiq_control_max_async_tasks, self.taskiq_control_prefetch),
+            ("provider-http", self.taskiq_provider_http_max_async_tasks, self.taskiq_provider_http_prefetch),
+            ("provider-browser", self.taskiq_provider_browser_max_async_tasks, self.taskiq_provider_browser_prefetch),
+            ("model-cpu", self.taskiq_model_cpu_max_async_tasks, self.taskiq_model_cpu_prefetch),
+        ):
+            if prefetch > max_async_tasks:
+                raise ValueError(f"Taskiq {lane} prefetch must not exceed max async tasks")
+
         if self.environment == "production":
             if self.debug:
                 raise ValueError("BET_DEBUG must be false when BET_ENVIRONMENT is production")
@@ -156,10 +281,17 @@ class Settings(BaseSettings):
     penaltyblog_python: str = ""
     penaltyblog_bridge: str = ""
     penaltyblog_root: str = ""
+    # Backend-owned persistent storage for opaque trusted model artifacts.
+    # The model-cpu worker is the only writer; API processes may verify/read.
+    model_artifact_root: str = ""
     soccerdata_python: str = ""
     soccerdata_bridge: str = ""
     soccerdata_root: str = ""
     oddsharvester_python: str = ""
+    # Kept unset by default.  A credential alone does not enable the licensed
+    # source: the registry remains the approval boundary.
+    sportmonks_api_token: SecretStr | None = None
+    sportmonks_timeout_seconds: int = Field(default=20, ge=1, le=120)
 
     @property
     def resolved_taskiq_broker_url(self) -> str:
@@ -184,6 +316,10 @@ class Settings(BaseSettings):
             if candidate.exists():
                 return str(candidate)
         return str(candidates[0]) if candidates else ""
+
+    @property
+    def resolved_model_artifact_root(self) -> str:
+        return self.model_artifact_root or str(self.repo_root / ".model-artifacts")
 
     @property
     def resolved_penaltyblog_python(self) -> str:

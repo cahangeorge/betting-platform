@@ -17,7 +17,9 @@ ODDSHARVESTER_TIMEOUT = settings.oddsharvester_timeout_seconds
 
 
 class BridgeError(Exception):
-    pass
+    def __init__(self, message: str, *, failure_kind: str | None = None):
+        super().__init__(message)
+        self.failure_kind = failure_kind
 
 
 @dataclass(frozen=True)
@@ -56,6 +58,7 @@ async def run_bridge(
     label: str = "bridge",
     timeout: int = BRIDGE_TIMEOUT,
     extra_env: dict[str, str] | None = None,
+    payload_file: bool = False,
 ) -> dict:
     if not bridge_script:
         raise BridgeError(f"{label} bridge script is not configured. Set the corresponding BET_* bridge path env var.")
@@ -75,7 +78,24 @@ async def run_bridge(
         )
 
     output_path = TEMP_DIR / f"{label}_{os.getpid()}_{id(payload)}.json"
-    cmd = [python_bin, bridge_script, "--payload", json.dumps(payload), "--output", str(output_path)]
+    input_path: Path | None = None
+    if payload_file:
+        # Model commands can contain a complete, immutable training set. Keep
+        # it out of argv (OS command-size limits and process listings) and use
+        # a private bridge-local file which is removed on every exit path.
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=TEMP_DIR, prefix=f"{label}-payload-", suffix=".json", delete=False
+        ) as handle:
+            # Model payloads include timezone-aware datetimes. Use the same
+            # strict, deterministic JSON boundary as artifact fingerprints.
+            from app.services.model_artifacts import canonical_model_json
+
+            handle.write(canonical_model_json(payload))
+            input_path = Path(handle.name)
+        input_path.chmod(0o600)
+        cmd = [python_bin, bridge_script, "--payload-file", str(input_path), "--output", str(output_path)]
+    else:
+        cmd = [python_bin, bridge_script, "--payload", json.dumps(payload), "--output", str(output_path)]
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -88,11 +108,14 @@ async def run_bridge(
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
             proc.kill()
-            raise BridgeError(f"{label} request timed out after {timeout}s")
+            raise BridgeError(f"{label} request timed out after {timeout}s", failure_kind="timeout")
 
         if proc.returncode != 0:
             stderr_text = stderr.decode().strip() if stderr else ""
-            raise BridgeError(stderr_text or f"{label} bridge exited with code {proc.returncode}")
+            raise BridgeError(
+                stderr_text or f"{label} bridge exited with code {proc.returncode}",
+                failure_kind="transport",
+            )
 
         if not output_path.exists():
             raise BridgeError(f"{label} bridge produced no output file")
@@ -109,6 +132,10 @@ async def run_bridge(
         raise
     except Exception as e:
         raise BridgeError(f"{label} bridge error: {e}") from e
+    finally:
+        output_path.unlink(missing_ok=True)
+        if input_path is not None:
+            input_path.unlink(missing_ok=True)
 
 
 async def run_penaltyblog(payload: dict) -> dict:
@@ -118,7 +145,11 @@ async def run_penaltyblog(payload: dict) -> dict:
         settings.resolved_penaltyblog_python,
         settings.resolved_penaltyblog_bridge,
         label="penaltyblog",
-        extra_env={"BET_PENALTYBLOG_ROOT": settings.resolved_penaltyblog_root},
+        extra_env={
+            "BET_PENALTYBLOG_ROOT": settings.resolved_penaltyblog_root,
+            "BET_MODEL_ARTIFACT_ROOT": settings.resolved_model_artifact_root,
+        },
+        payload_file=True,
     )
 
 
@@ -159,11 +190,17 @@ async def run_oddsharvester(
         effective_timeout = timeout or ODDSHARVESTER_TIMEOUT
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=effective_timeout)
         if proc.returncode != 0:
-            raise BridgeError(stderr.decode().strip() or f"OddsHarvester exited with code {proc.returncode}")
+            raise BridgeError(
+                stderr.decode().strip() or f"OddsHarvester exited with code {proc.returncode}",
+                failure_kind="transport",
+            )
         return stdout.decode().strip()
     except asyncio.TimeoutError:
         proc.kill()
-        raise BridgeError(f"OddsHarvester request timed out after {timeout or ODDSHARVESTER_TIMEOUT}s")
+        raise BridgeError(
+            f"OddsHarvester request timed out after {timeout or ODDSHARVESTER_TIMEOUT}s",
+            failure_kind="timeout",
+        )
 
 
 async def validate_oddsharvester_football_catalog(

@@ -2,6 +2,7 @@ import pytest
 
 from app.services.e2e_cleanup import (
     CONFIRMATION_PHRASE,
+    DELETE_ORDER,
     CleanupGuardError,
     CleanupPlan,
     e2e_named_namespace,
@@ -94,3 +95,19 @@ def test_dry_run_report_is_explicit_and_includes_dependency_counts():
     assert "tickets: 2" in report
     assert "No rows changed" in report
     assert CONFIRMATION_PHRASE in report
+
+
+def test_provider_lineage_cleanup_precedes_matches_runs_and_datasets():
+    order = [name for name, _model in DELETE_ORDER]
+
+    for dependent in (
+        "provider_observation_conflicts",
+        "provider_observation_dataset_links",
+        "provider_observation_receipts",
+        "provider_match_mapping_candidates",
+        "provider_match_mappings",
+        "provider_observations",
+    ):
+        assert order.index(dependent) < order.index("matches")
+        assert order.index(dependent) < order.index("scraped_datasets")
+    assert order.index("provider_observations") < order.index("provider_observation_slots")

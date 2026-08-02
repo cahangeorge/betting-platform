@@ -1,6 +1,6 @@
 import re
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -14,8 +14,16 @@ SCHEDULED_JOB_TASK_TYPES = frozenset(
         "verify_and_settle",
         "verify_results",
         "world_cup_pipeline",
+        "soccerdata_http_ingest",
+        "soccerdata_browser_ingest",
+        "train_model",
+        "backtest_model",
+        "predict_model",
+        "fetch_latest_odds",
     }
 )
+MODEL_PIPELINE_SCHEDULED_TASK_TYPES = frozenset({"train_model", "backtest_model", "predict_model"})
+LICENSED_ODDS_SCHEDULED_TASK_TYPES = frozenset({"fetch_latest_odds"})
 _RESERVED_CONFIG_KEYS = frozenset({"_created_by_user_id", "user_id"})
 _HOURLY_CRON = re.compile(r"0 \*/([1-9][0-9]*) \* \* \*")
 _DAILY_CRON = re.compile(r"0 0 \*/([1-9][0-9]*) \* \*")
@@ -35,6 +43,54 @@ def _contains_reserved_key(value: Any) -> bool:
     if isinstance(value, list):
         return any(_contains_reserved_key(item) for item in value)
     return False
+
+
+def parse_model_pipeline_scheduled_config(task_type: str, config: dict[str, Any]) -> Any:
+    """Parse one immutable, versioned model-pipeline command.
+
+    Scheduled jobs intentionally store only the public command contract.  The
+    service turns it into a canonical JSON snapshot when enqueueing, so later
+    edits to the schedule cannot alter an already-delivered model run.
+    """
+    from app.schemas.model_pipeline import (
+        BacktestModelCommandV1,
+        PredictModelCommandV1,
+        TrainModelCommandV1,
+    )
+
+    command_types = {
+        "train_model": TrainModelCommandV1,
+        "backtest_model": BacktestModelCommandV1,
+        "predict_model": PredictModelCommandV1,
+    }
+    try:
+        command_type = command_types[task_type]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported model pipeline task type: {task_type}") from exc
+    try:
+        return command_type.model_validate(config)
+    except ValueError as exc:
+        raise ValueError(f"Invalid {task_type} model pipeline command: {exc}") from exc
+
+
+class LicensedOddsJobSpecV1(BaseModel):
+    """Immutable, secret-free command for the approved provider HTTP lane."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    contract_version: Literal["licensed-odds-job/v1"] = "licensed-odds-job/v1"
+    scope: Literal["prematch", "inplay"]
+    canary_stage_percent: Literal[10, 25, 50, 100]
+
+    def canonical_payload(self) -> dict[str, Any]:
+        return self.model_dump(mode="json")
+
+
+def parse_licensed_odds_scheduled_config(config: dict[str, Any]) -> LicensedOddsJobSpecV1:
+    try:
+        return LicensedOddsJobSpecV1.model_validate(config)
+    except ValueError as exc:
+        raise ValueError(f"Invalid fetch_latest_odds licensed odds command: {exc}") from exc
 
 
 class ScheduledJobResponse(BaseModel):
@@ -135,6 +191,21 @@ class ScheduledJobCreateRequest(BaseModel):
                     raise ValueError("config odds bounds must be positive and ordered") from None
         if self.task_type == "scrape_odds" and "params" in config and not isinstance(config["params"], dict):
             raise ValueError("config.params must be an object")
+        if self.task_type in {"soccerdata_http_ingest", "soccerdata_browser_ingest"}:
+            from app.providers.soccerdata import SoccerdataIngestionSpec
+
+            if config.get("page", 0) != 0 or config.get("start_cursor") not in {None, 0} or "generation_key" in config:
+                raise ValueError("Scheduled soccerdata jobs must start from page zero")
+            try:
+                spec = SoccerdataIngestionSpec.from_config(config)
+            except ValueError as exc:
+                raise ValueError(str(exc)) from exc
+            if spec.task_type != self.task_type:
+                raise ValueError("Soccerdata operation does not match the scheduled worker lane")
+        if self.task_type in MODEL_PIPELINE_SCHEDULED_TASK_TYPES:
+            parse_model_pipeline_scheduled_config(self.task_type, config)
+        if self.task_type in LICENSED_ODDS_SCHEDULED_TASK_TYPES:
+            parse_licensed_odds_scheduled_config(config)
         return self
 
 

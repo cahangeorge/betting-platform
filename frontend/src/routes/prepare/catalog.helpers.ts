@@ -201,11 +201,28 @@ export type LargeScrapeScopeWarning = {
 	message: string;
 };
 
+export const HISTORIC_SCRAPE_LEAGUE_BATCH_SIZE = 5;
+export const UPCOMING_SCRAPE_LEAGUE_BATCH_SIZE = 10;
+
+export function buildScrapeLeagueBatches(slugs: string[], batchSize: number): string[][] {
+	if (!Number.isInteger(batchSize) || batchSize < 1) {
+		throw new Error('Scrape league batch size must be a positive integer.');
+	}
+
+	const uniqueSlugs = [...new Set(slugs)];
+	if (uniqueSlugs.length === 0) return [[]];
+
+	const batches: string[][] = [];
+	for (let index = 0; index < uniqueSlugs.length; index += batchSize) {
+		batches.push(uniqueSlugs.slice(index, index + batchSize));
+	}
+	return batches;
+}
+
 /**
- * Historical scraping queues one backend job per season. A broad catalog
- * selection can still make each job process hundreds of league-season
- * combinations. Keep this visible without hiding or limiting any
- * OddsHarvester league.
+ * Historical scraping queues one backend job per bounded league batch and
+ * season. Keep the resulting queue depth visible without hiding or limiting
+ * any OddsHarvester league.
  */
 export function getLargeScrapeScopeWarning(
 	supportedLeagueCount: number,
@@ -218,11 +235,13 @@ export function getLargeScrapeScopeWarning(
 	if (!isBroadLeagueScope && !isLongHistory) return null;
 
 	const estimatedLeagueSeasonWork = supportedLeagueCount * historicSeasonCount;
+	const leagueBatchCount = Math.ceil(supportedLeagueCount / HISTORIC_SCRAPE_LEAGUE_BATCH_SIZE);
+	const queuedHistoricJobs = leagueBatchCount * historicSeasonCount;
 	return {
 		key: `${supportedLeagueCount}:${historicSeasonCount}`,
-		queuedHistoricJobs: historicSeasonCount,
+		queuedHistoricJobs,
 		estimatedLeagueSeasonWork,
-		message: `This queues ${historicSeasonCount} historical backend job${historicSeasonCount === 1 ? '' : 's'} covering up to ${estimatedLeagueSeasonWork} league-season combinations (${supportedLeagueCount} supported league${supportedLeagueCount === 1 ? '' : 's'} × ${historicSeasonCount} seasons).`
+		message: `This queues ${queuedHistoricJobs} bounded historical backend job${queuedHistoricJobs === 1 ? '' : 's'} covering up to ${estimatedLeagueSeasonWork} league-season combinations (${supportedLeagueCount} supported league${supportedLeagueCount === 1 ? '' : 's'} × ${historicSeasonCount} seasons, at most ${HISTORIC_SCRAPE_LEAGUE_BATCH_SIZE} leagues per job).`
 	};
 }
 
@@ -267,7 +286,10 @@ export function buildFootballSeasonsFromDateRange(from: string, to: string): str
 
 	const seasons: string[] = [];
 	const startSeasonYear = start.getMonth() >= 6 ? start.getFullYear() : start.getFullYear() - 1;
-	const endSeasonYear = end.getMonth() >= 6 ? end.getFullYear() : end.getFullYear() - 1;
+	// Historical collection must not queue the season that has only just begun.
+	// A football season ends in the following calendar year, so the latest
+	// completed season always starts in the previous calendar year.
+	const endSeasonYear = end.getFullYear() - 1;
 
 	for (let year = endSeasonYear; year >= startSeasonYear; year -= 1) {
 		seasons.push(`${year}-${year + 1}`);

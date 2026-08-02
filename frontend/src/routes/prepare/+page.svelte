@@ -18,8 +18,11 @@
 	import type { Country, LeagueInfo, ScheduledJob, ScrapeJob, ScrapeJobLogEntry, ScrapeJobLogPage } from '$lib/types';
 	import {
 		HISTORY_PRESET_OPTIONS,
+		HISTORIC_SCRAPE_LEAGUE_BATCH_SIZE,
+		UPCOMING_SCRAPE_LEAGUE_BATCH_SIZE,
 		buildHistoricSeasons,
 		buildHistoryDateRange,
+		buildScrapeLeagueBatches,
 		buildScrapeLeagueSlugs,
 		catalogAvailabilityLabel,
 		filterScrapeLeagueGroups,
@@ -43,6 +46,12 @@
 	} from './interval.helpers';
 
 	const BASE_URL = apiBaseUrl();
+	const JOB_PAGE_SIZE_OPTIONS = [
+		{ value: '10', label: '10 / pagină' },
+		{ value: '20', label: '20 / pagină' },
+		{ value: '50', label: '50 / pagină' },
+		{ value: '100', label: '100 / pagină' }
+	];
 
 	type WorldCupPipelineSummary = {
 		future_days: number;
@@ -196,6 +205,19 @@ function tomorrowLocalDate(): string {
 	// Jobs
 	let jobs = $state<ScrapeJob[]>([]);
 	let loadingJobs = $state(true);
+	let jobsPage = $state(1);
+	let jobsPerPage = $state('20');
+	let jobsTotal = $state(0);
+	let jobsRequestId = 0;
+	let jobsTotalPages = $derived(Math.max(1, Math.ceil(jobsTotal / Number(jobsPerPage))));
+	let jobsPageOptions = $derived(
+		Array.from({ length: jobsTotalPages }, (_, index) => ({
+			value: String(index + 1),
+			label: `Pagina ${index + 1}`
+		}))
+	);
+	let jobsRangeStart = $derived(jobsTotal === 0 ? 0 : (jobsPage - 1) * Number(jobsPerPage) + 1);
+	let jobsRangeEnd = $derived(Math.min(jobsTotal, jobsPage * Number(jobsPerPage)));
 	let scheduledJobs = $state<ScheduledJob[]>([]);
 	let loadingScheduledJobs = $state(true);
 	let scheduledJobsError = $state('');
@@ -423,25 +445,60 @@ function tomorrowLocalDate(): string {
 	}
 
 	async function fetchJobs() {
+		const requestId = ++jobsRequestId;
+		const requestedPage = jobsPage;
+		const requestedPerPage = Number(jobsPerPage);
 		jobsLoadError = '';
 		try {
-			const res = await fetch(`${BASE_URL}/api/v1/data/scrape`, { credentials: 'include' });
+			const query = new URLSearchParams({
+				page: String(requestedPage),
+				per_page: String(requestedPerPage)
+			});
+			const res = await fetch(`${BASE_URL}/api/v1/data/scrape?${query}`, { credentials: 'include' });
 			if (!res.ok) throw new Error(`HTTP ${res.status}`);
-			if (res.ok) {
-				jobs = await res.json();
-				if (selectedLogJobId === null && jobs.length > 0) {
-					selectedLogJobId = jobs[0].id;
-				}
+			const loadedJobs = (await res.json()) as ScrapeJob[];
+			if (requestId !== jobsRequestId) return;
+			jobs = loadedJobs;
+			const parsedTotal = Number.parseInt(res.headers.get('x-total-count') ?? '', 10);
+			jobsTotal = Number.isFinite(parsedTotal)
+				? parsedTotal
+				: Math.max(loadedJobs.length, (requestedPage - 1) * requestedPerPage + loadedJobs.length);
+			if (selectedLogJobId === null && jobs.length > 0) {
+				selectedLogJobId = jobs[0].id;
 			}
 		} catch (error) {
+			if (requestId !== jobsRequestId) return;
 			jobsLoadError = error instanceof Error ? error.message : 'Joburile nu au putut fi încărcate.';
 		} finally {
-			loadingJobs = false;
+			if (requestId === jobsRequestId) loadingJobs = false;
 		}
 
 		if (logsPanelDeschide) {
 			void fetchJobLogs(selectedLogJobId ?? jobs[0]?.id ?? null);
 		}
+	}
+
+	async function selectJobsPage(nextPage: number) {
+		const clampedPage = Math.min(Math.max(1, nextPage), jobsTotalPages);
+		if (clampedPage === jobsPage) return;
+		jobsPage = clampedPage;
+		expandedJobId = null;
+		loadingJobs = true;
+		await fetchJobs();
+	}
+
+	function handleJobsPageChange(event: Event) {
+		void selectJobsPage(Number((event.currentTarget as HTMLSelectElement).value));
+	}
+
+	function handleJobsPerPageChange(event: Event) {
+		const nextPerPage = (event.currentTarget as HTMLSelectElement).value;
+		if (nextPerPage === jobsPerPage) return;
+		jobsPerPage = nextPerPage;
+		jobsPage = 1;
+		expandedJobId = null;
+		loadingJobs = true;
+		void fetchJobs();
 	}
 
 	async function fetchScheduledJobs() {
@@ -475,6 +532,12 @@ function tomorrowLocalDate(): string {
 				return;
 			}
 			const scrapeLeagueSlugs = buildScrapeLeagueSlugs(allLeagues, selectedLeagues);
+			if (scrapeLeagueSlugs.length > UPCOMING_SCRAPE_LEAGUE_BATCH_SIZE) {
+				scheduledJobsError =
+					`O automatizare poate colecta maximum ${UPCOMING_SCRAPE_LEAGUE_BATCH_SIZE} ligi. ` +
+					'Creează automatizări separate pentru selecții mai mari.';
+				return;
+			}
 			const strategyIds = autoPredictionStrategyIds
 				.split(',')
 				.map((value) => Number.parseInt(value.trim(), 10))
@@ -735,25 +798,64 @@ function tomorrowLocalDate(): string {
 
 				const maxPages = Number.parseInt(historicMaxPages, 10) || 3;
 				const isWorldCupOnly = scrapeLeagueSlugs.length > 0 && scrapeLeagueSlugs.every((slug) => slug === 'world-cup');
+				const historicLeagueBatches = buildScrapeLeagueBatches(
+					scrapeLeagueSlugs,
+					HISTORIC_SCRAPE_LEAGUE_BATCH_SIZE
+				);
 				for (const season of sezoane) {
+					for (const [batchIndex, leagueBatch] of historicLeagueBatches.entries()) {
+						const params = {
+							...baseParams,
+							leagues: leagueBatch,
+							command: 'historic',
+							season,
+							past_from: pastFrom,
+							past_to: pastTo,
+							historic_range_days: historicMetadata.days || undefined,
+							history_years: historicMetadata.years || undefined,
+							max_pages: isWorldCupOnly ? Math.max(maxPages, 3) : maxPages,
+							timeout_seconds: isWorldCupOnly ? 2400 : undefined
+						};
+						const league = leagueBatch.length === 1 ? leagueBatch[0] : undefined;
+						const idempotencyKey = newScrapeIdempotencyKey();
+						try {
+							createdJobIds.push(await createAndExecuteScrapeJob(params, league, idempotencyKey));
+						} catch (error) {
+							failedAttempts.push({
+								label: `sezonul ${season}, lotul ${batchIndex + 1}/${historicLeagueBatches.length}`,
+								params,
+								league,
+								jobId: error instanceof ScrapeLaunchError ? error.jobId : undefined,
+								idempotencyKey,
+								reason: safeScrapeFailureReason(error)
+							});
+						}
+					}
+				}
+			}
+
+			if (futureEnabled && futureIntervalDays > 0) {
+				const upcomingLeagueBatches = buildScrapeLeagueBatches(
+					scrapeLeagueSlugs,
+					UPCOMING_SCRAPE_LEAGUE_BATCH_SIZE
+				);
+				for (const [batchIndex, leagueBatch] of upcomingLeagueBatches.entries()) {
 					const params = {
 						...baseParams,
-						command: 'historic',
-						season,
-						past_from: pastFrom,
-						past_to: pastTo,
-						historic_range_days: historicMetadata.days || undefined,
-						history_years: historicMetadata.years || undefined,
-						max_pages: isWorldCupOnly ? Math.max(maxPages, 3) : maxPages,
-						timeout_seconds: isWorldCupOnly ? 2400 : undefined
+						leagues: leagueBatch,
+						command: 'upcoming',
+						future_days: futureIntervalDays,
+						future_range: {
+							days: positiveInteger(futureDays)
+						}
 					};
-					const league = scrapeLeagueSlugs.length === 1 ? scrapeLeagueSlugs[0] : undefined;
+					const league = leagueBatch.length === 1 ? leagueBatch[0] : undefined;
 					const idempotencyKey = newScrapeIdempotencyKey();
 					try {
 						createdJobIds.push(await createAndExecuteScrapeJob(params, league, idempotencyKey));
 					} catch (error) {
 						failedAttempts.push({
-							label: `sezonul ${season}`,
+							label: `meciurile viitoare, lotul ${batchIndex + 1}/${upcomingLeagueBatches.length}`,
 							params,
 							league,
 							jobId: error instanceof ScrapeLaunchError ? error.jobId : undefined,
@@ -764,29 +866,6 @@ function tomorrowLocalDate(): string {
 				}
 			}
 
-			if (futureEnabled && futureIntervalDays > 0) {
-				const params = {
-					...baseParams,
-					command: 'upcoming',
-					future_days: futureIntervalDays,
-					future_range: {
-						days: positiveInteger(futureDays)
-					}
-				};
-				const idempotencyKey = newScrapeIdempotencyKey();
-				try {
-					createdJobIds.push(await createAndExecuteScrapeJob(params, undefined, idempotencyKey));
-				} catch (error) {
-					failedAttempts.push({
-						label: 'meciurile viitoare',
-						params,
-						jobId: error instanceof ScrapeLaunchError ? error.jobId : undefined,
-						idempotencyKey,
-						reason: safeScrapeFailureReason(error)
-					});
-				}
-			}
-
 			if (createdJobIds.length === 0 && failedAttempts.length === 0) {
 				throw new Error('Activează istoricul sau meciurile viitoare înainte de pornirea colectării.');
 			}
@@ -794,6 +873,7 @@ function tomorrowLocalDate(): string {
 			failedScrapeAttempts = failedAttempts;
 			submitSuccess = failedAttempts.length === 0 ? scrapeAttemptNotice(createdJobIds, failedAttempts) : '';
 			submitPartial = failedAttempts.length ? scrapeAttemptNotice(createdJobIds, failedAttempts) : '';
+			jobsPage = 1;
 			await fetchJobs();
 			setTimeout(() => (submitSuccess = ''), 4000);
 		} catch (err) {
@@ -827,6 +907,7 @@ function tomorrowLocalDate(): string {
 		submitPartial = remaining.length ? scrapeAttemptNotice(created, remaining) : '';
 		submitSuccess = remaining.length === 0 ? `Reluare reușită. Joburi pornite: #${created.join(', ')}.` : '';
 		retryingFailedScrapes = false;
+		jobsPage = 1;
 		await fetchJobs();
 	}
 
@@ -870,6 +951,7 @@ function tomorrowLocalDate(): string {
 			const job = (await res.json()) as ScrapeJob;
 			pipelineStartedJobId = job.id;
 			jobs = [job, ...jobs.filter((entry) => entry.id !== job.id)];
+			jobsPage = 1;
 			await fetchJobs();
 		} catch (err) {
 			pipelineError = err instanceof Error ? err.message : 'Fluxul pentru Cupa Mondială a eșuat';
@@ -2167,7 +2249,7 @@ function tomorrowLocalDate(): string {
 									{new Date(job.created_at).toLocaleString()}
 								</td>
 								<td class="px-3 py-2.5 font-mono text-xs text-muted-foreground">
-									{formatDuration(job.created_at, job.completed_at)}
+									{formatDuration(job.started_at ?? job.created_at, job.completed_at)}
 								</td>
 								<td class="px-3 py-2.5">
 									<div class="flex items-center gap-2">
@@ -2219,6 +2301,43 @@ function tomorrowLocalDate(): string {
 						{/each}
 					</tbody>
 				</table>
+			</div>
+			<div class="mt-4 flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-end sm:justify-between">
+				<p class="text-xs text-muted-foreground" aria-live="polite">
+					Se afișează {jobsRangeStart}–{jobsRangeEnd} din {jobsTotal} joburi.
+				</p>
+				<div class="flex flex-wrap items-end gap-2">
+					<Select
+						label="Rânduri"
+						name="scrape-jobs-page-size"
+						value={jobsPerPage}
+						options={JOB_PAGE_SIZE_OPTIONS}
+						onchange={handleJobsPerPageChange}
+					/>
+					<Select
+						label="Pagină"
+						name="scrape-jobs-page"
+						value={String(jobsPage)}
+						options={jobsPageOptions}
+						onchange={handleJobsPageChange}
+					/>
+					<Button
+						variant="secondary"
+						size="sm"
+						disabled={jobsPage <= 1 || loadingJobs}
+						onclick={() => selectJobsPage(jobsPage - 1)}
+					>
+						Anterior
+					</Button>
+					<Button
+						variant="secondary"
+						size="sm"
+						disabled={jobsPage >= jobsTotalPages || loadingJobs}
+						onclick={() => selectJobsPage(jobsPage + 1)}
+					>
+						Următor
+					</Button>
+				</div>
 			</div>
 		{/if}
 	</Card>

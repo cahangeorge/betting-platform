@@ -102,30 +102,51 @@ jobs:
           BET_TASKIQ_POLL_INTERVAL_SECONDS: 60
         run: |
           set -euo pipefail
-          taskiq worker app.tasks.broker:broker app.tasks.jobs \
-            --workers 1 --max-async-tasks 10 --log-level WARNING \
-            > /tmp/bet-taskiq-worker.log 2>&1 &
-          worker_pid=$!
+          BET_TASKIQ_WORKER_LANE=control taskiq worker app.tasks.broker:broker app.tasks.jobs \
+            --workers 1 --max-async-tasks 2 --max-prefetch 2 --log-level WARNING \
+            > /tmp/bet-taskiq-control.log 2>&1 &
+          control_pid=$!
+          BET_TASKIQ_WORKER_LANE=provider-http taskiq worker app.tasks.broker:broker app.tasks.jobs \
+            --workers 1 --max-async-tasks 4 --max-prefetch 4 --log-level WARNING \
+            > /tmp/bet-taskiq-provider-http.log 2>&1 &
+          http_pid=$!
+          BET_TASKIQ_WORKER_LANE=provider-browser taskiq worker app.tasks.broker:broker app.tasks.jobs \
+            --workers 1 --max-async-tasks 1 --max-prefetch 1 --log-level WARNING \
+            > /tmp/bet-taskiq-provider-browser.log 2>&1 &
+          browser_pid=$!
+          BET_TASKIQ_WORKER_LANE=model-cpu taskiq worker app.tasks.broker:broker app.tasks.jobs \
+            --workers 1 --max-async-tasks 1 --max-prefetch 1 --log-level WARNING \
+            > /tmp/bet-taskiq-model-cpu.log 2>&1 &
+          model_pid=$!
           python -m app.tasks.scheduler > /tmp/bet-taskiq-scheduler.log 2>&1 &
           scheduler_pid=$!
           cleanup() {
-            kill "$worker_pid" "$scheduler_pid" >/dev/null 2>&1 || true
-            wait "$worker_pid" "$scheduler_pid" >/dev/null 2>&1 || true
+            kill "$control_pid" "$http_pid" "$browser_pid" "$model_pid" "$scheduler_pid" >/dev/null 2>&1 || true
+            wait "$control_pid" "$http_pid" "$browser_pid" "$model_pid" "$scheduler_pid" >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
 
           for attempt in $(seq 1 30); do
-            if python -m app.tasks.runtime worker >/dev/null 2>&1 \
+            if python -m app.tasks.runtime worker:control >/dev/null 2>&1 \
+              && python -m app.tasks.runtime worker:provider-http >/dev/null 2>&1 \
+              && python -m app.tasks.runtime worker:provider-browser >/dev/null 2>&1 \
+              && python -m app.tasks.runtime worker:model-cpu >/dev/null 2>&1 \
               && python -m app.tasks.runtime scheduler >/dev/null 2>&1; then
               break
             fi
-            if ! kill -0 "$worker_pid" "$scheduler_pid" >/dev/null 2>&1; then
-              cat /tmp/bet-taskiq-worker.log
+            if ! kill -0 "$control_pid" "$http_pid" "$browser_pid" "$model_pid" "$scheduler_pid" >/dev/null 2>&1; then
+              cat /tmp/bet-taskiq-control.log
+              cat /tmp/bet-taskiq-provider-http.log
+              cat /tmp/bet-taskiq-provider-browser.log
+              cat /tmp/bet-taskiq-model-cpu.log
               cat /tmp/bet-taskiq-scheduler.log
               exit 1
             fi
             if [ "$attempt" -eq 30 ]; then
-              cat /tmp/bet-taskiq-worker.log
+              cat /tmp/bet-taskiq-control.log
+              cat /tmp/bet-taskiq-provider-http.log
+              cat /tmp/bet-taskiq-provider-browser.log
+              cat /tmp/bet-taskiq-model-cpu.log
               cat /tmp/bet-taskiq-scheduler.log
               exit 1
             fi
@@ -195,6 +216,7 @@ jobs:
           from pathlib import Path
 
           import asyncpg
+          import camoufox
           import oddsharvester
           import penaltyblog
           import soccerdata
@@ -202,7 +224,7 @@ jobs:
           from playwright.sync_api import sync_playwright
 
           assert app
-          assert asyncpg and oddsharvester and penaltyblog and soccerdata
+          assert asyncpg and camoufox and oddsharvester and penaltyblog and soccerdata
           assert os.environ["PLAYWRIGHT_BROWSERS_PATH"] == "/ms-playwright"
           assert os.environ["HOME"] == "/home/appuser"
           home = Path.home()
@@ -213,6 +235,12 @@ jobs:
           with sync_playwright() as playwright:
               browser = playwright.chromium.launch()
               browser.close()
+          from camoufox.addons import DefaultAddons
+          from camoufox.sync_api import Camoufox
+          with Camoufox(headless=True, exclude_addons=[DefaultAddons.UBO]) as browser:
+              page = browser.new_page()
+              page.set_content("<title>camoufox-smoke</title>")
+              assert page.title() == "camoufox-smoke"
           '
 
           test "$(docker run --rm --entrypoint id bet-frontend:${{ github.sha }} -u)" != "0"

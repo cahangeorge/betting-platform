@@ -6,6 +6,7 @@ import {
 	buildFootballSeasonsFromDateRange,
 	buildHistoricSeasons,
 	buildHistoryDateRange,
+	buildScrapeLeagueBatches,
 	buildScrapeLeagueSlugs,
 	buildWorldCupSeasonsFromDateRange,
 	catalogAvailabilityLabel,
@@ -35,6 +36,35 @@ test('maps selected catalog leagues to scrape slugs', () => {
 	);
 
 	assert.deepEqual(slugs, ['england-premier-league', 'world-cup']);
+});
+
+test('splits scrape leagues into bounded batches while preserving order and removing duplicates', () => {
+	assert.deepEqual(
+		buildScrapeLeagueBatches(
+			[
+				'england-premier-league',
+				'spain-la-liga',
+				'italy-serie-a',
+				'germany-bundesliga',
+				'france-ligue-1',
+				'portugal-primeira-liga',
+				'england-premier-league'
+			],
+			5
+		),
+		[
+			[
+				'england-premier-league',
+				'spain-la-liga',
+				'italy-serie-a',
+				'germany-bundesliga',
+				'france-ligue-1'
+			],
+			['portugal-primeira-liga']
+		]
+	);
+	assert.deepEqual(buildScrapeLeagueBatches([], 10), [[]]);
+	assert.throws(() => buildScrapeLeagueBatches(['england-premier-league'], 0), /positive integer/);
 });
 
 test('omits leagues that do not have scrape support', () => {
@@ -123,15 +153,15 @@ test('requires acknowledgement only for broad or long historical scrape scopes',
 	assert.equal(getLargeScrapeScopeWarning(24, 19), null);
 	assert.deepEqual(getLargeScrapeScopeWarning(25, 10), {
 		key: '25:10',
-		queuedHistoricJobs: 10,
+		queuedHistoricJobs: 50,
 		estimatedLeagueSeasonWork: 250,
-		message: 'This queues 10 historical backend jobs covering up to 250 league-season combinations (25 supported leagues × 10 seasons).'
+		message: 'This queues 50 bounded historical backend jobs covering up to 250 league-season combinations (25 supported leagues × 10 seasons, at most 5 leagues per job).'
 	});
 	assert.deepEqual(getLargeScrapeScopeWarning(1, 20), {
 		key: '1:20',
 		queuedHistoricJobs: 20,
 		estimatedLeagueSeasonWork: 20,
-		message: 'This queues 20 historical backend jobs covering up to 20 league-season combinations (1 supported league × 20 seasons).'
+		message: 'This queues 20 bounded historical backend jobs covering up to 20 league-season combinations (1 supported league × 20 seasons, at most 5 leagues per job).'
 	});
 });
 
@@ -154,6 +184,13 @@ test('builds football season ranges from explicit history dates', () => {
 		'2025-2026',
 		'2024-2025',
 		'2023-2024'
+	]);
+});
+
+test('excludes the newly started season from historical football collection', () => {
+	assert.deepEqual(buildFootballSeasonsFromDateRange('2024-07-31', '2026-07-31'), [
+		'2025-2026',
+		'2024-2025'
 	]);
 });
 

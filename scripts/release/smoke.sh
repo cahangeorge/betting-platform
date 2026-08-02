@@ -10,7 +10,12 @@ require_command curl
 for path in /health /ready /; do
   curl --fail --silent --show-error --max-time 15 "$base_url$path" >/dev/null
 done
-compose "$env_file" exec --no-TTY worker python -m app.tasks.runtime worker
+declare -a enabled_lanes
+enabled_lanes_from_manifest "$env_file" enabled_lanes
+for lane in "${enabled_lanes[@]}"; do
+  service=$(worker_service_for_lane "$lane")
+  compose "$env_file" exec --no-TTY "$service" python -m app.tasks.runtime "worker:$lane"
+done
 compose "$env_file" exec --no-TTY scheduler python -m app.tasks.runtime scheduler
 compose "$env_file" exec --no-TTY api python -m app.tasks.smoke
 compose "$env_file" exec --no-TTY api python -m app.diagnostics.provider_canary

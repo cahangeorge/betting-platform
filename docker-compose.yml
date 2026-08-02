@@ -51,7 +51,10 @@ services:
       BET_TASKIQ_RESULT_BACKEND_URL: redis://redis:6379/1
       BET_TASKIQ_QUEUE_NAME: bet
       BET_TASKIQ_CONSUMER_GROUP: bet-workers
+      BET_TASKIQ_WORKER_LANE: control
+      BET_TASKIQ_ENABLED_LANES: control,provider-http,provider-browser,model-cpu
       BET_SCHEDULED_JOBS_ENABLED: "false"
+      BET_SCRAPE_PIPELINE_V2_PERCENT: ${BET_SCRAPE_PIPELINE_V2_PERCENT:-0}
       BET_TRADING_ENABLED: "true"
       BET_TRADING_PAPER_ENABLED: "true"
       BET_TRADING_LIVE_ENABLED: "false"
@@ -62,6 +65,11 @@ services:
       BET_PENALTYBLOG_PYTHON: /workspace/penaltyblog/.venv/bin/python
       BET_PENALTYBLOG_BRIDGE: /app/app/bridges/penaltyblog_bridge.py
       BET_PENALTYBLOG_ROOT: /workspace/penaltyblog
+      BET_MODEL_ARTIFACT_ROOT: /model-artifacts
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      NUMEXPR_NUM_THREADS: "1"
       BET_SOCCERDATA_PYTHON: /workspace/soccerdata/.venv/bin/python
       BET_SOCCERDATA_BRIDGE: /app/app/bridges/soccerdata_bridge.py
       BET_SOCCERDATA_ROOT: /workspace/soccerdata
@@ -69,6 +77,8 @@ services:
     ports:
       - "8000:8000"
     depends_on:
+      model-artifacts-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -77,6 +87,7 @@ services:
       - ./backend:/app
       - ./OddsHarvester:/workspace/OddsHarvester:ro
       - ./penaltyblog:/workspace/penaltyblog:ro
+      - model_artifacts:/model-artifacts:ro
       - ./soccerdata:/workspace/soccerdata:ro
       - ./flumine:/workspace/flumine:ro
       - shared_data:/shared_data
@@ -103,6 +114,9 @@ services:
       BET_TASKIQ_RESULT_BACKEND_URL: redis://redis:6379/1
       BET_TASKIQ_QUEUE_NAME: bet
       BET_TASKIQ_CONSUMER_GROUP: bet-workers
+      BET_TASKIQ_WORKER_LANE: control
+      BET_TASKIQ_ENABLED_LANES: control,provider-http,provider-browser,model-cpu
+      BET_SCRAPE_PIPELINE_V2_PERCENT: ${BET_SCRAPE_PIPELINE_V2_PERCENT:-0}
       BET_TRADING_ENABLED: "true"
       BET_TRADING_PAPER_ENABLED: "true"
       BET_TRADING_LIVE_ENABLED: "false"
@@ -113,6 +127,7 @@ services:
       BET_PENALTYBLOG_PYTHON: /workspace/penaltyblog/.venv/bin/python
       BET_PENALTYBLOG_BRIDGE: /app/app/bridges/penaltyblog_bridge.py
       BET_PENALTYBLOG_ROOT: /workspace/penaltyblog
+      BET_MODEL_ARTIFACT_ROOT: /model-artifacts
       BET_SOCCERDATA_PYTHON: /workspace/soccerdata/.venv/bin/python
       BET_SOCCERDATA_BRIDGE: /app/app/bridges/soccerdata_bridge.py
       BET_SOCCERDATA_ROOT: /workspace/soccerdata
@@ -128,17 +143,162 @@ services:
       - ./backend:/app
       - ./OddsHarvester:/workspace/OddsHarvester:ro
       - ./penaltyblog:/workspace/penaltyblog:ro
+      - model_artifacts:/model-artifacts
       - ./soccerdata:/workspace/soccerdata:ro
       - ./flumine:/workspace/flumine:ro
       - shared_data:/shared_data
-    command: taskiq worker app.tasks.broker:broker app.tasks.jobs
+    # Compatibility service name retained; this is the control/default lane.
+    command: taskiq worker app.tasks.broker:broker app.tasks.jobs --workers 1 --max-async-tasks 2 --max-prefetch 2 --log-level WARNING
     healthcheck:
-      test: ["CMD", "python", "-m", "app.tasks.runtime", "worker"]
+      test: ["CMD", "python", "-m", "app.tasks.runtime", "worker:control"]
       interval: 10s
       timeout: 5s
       retries: 6
       start_period: 10s
     restart: unless-stopped
+    logging: *default-logging
+
+  provider-http-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      BET_DATABASE_URL: postgresql+asyncpg://betuser:${POSTGRES_PASSWORD:-not-a-real-dev-password}@postgres:5432/betting_platform
+      BET_JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production}
+      BET_TASK_QUEUE_BACKEND: taskiq
+      BET_REDIS_URL: redis://redis:6379/0
+      BET_TASKIQ_RESULT_BACKEND_URL: redis://redis:6379/1
+      BET_TASKIQ_QUEUE_NAME: bet
+      BET_TASKIQ_CONSUMER_GROUP: bet-workers
+      BET_TASKIQ_WORKER_LANE: provider-http
+      BET_TASKIQ_ENABLED_LANES: control,provider-http,provider-browser,model-cpu
+      BET_TASKIQ_PROVIDER_HTTP_QUEUE_NAME: bet-provider-http
+      BET_TASKIQ_PROVIDER_HTTP_CONSUMER_GROUP: bet-provider-http-workers
+      BET_SOCCERDATA_PYTHON: /workspace/soccerdata/.venv/bin/python
+      BET_SOCCERDATA_BRIDGE: /app/app/bridges/soccerdata_bridge.py
+      BET_SOCCERDATA_ROOT: /workspace/soccerdata
+      PYTHONPATH: /app
+    depends_on:
+      backend:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - ./soccerdata:/workspace/soccerdata:ro
+      - shared_data:/shared_data
+    command: taskiq worker app.tasks.broker:broker app.tasks.jobs --workers 1 --max-async-tasks 4 --max-prefetch 4 --log-level WARNING
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.tasks.runtime", "worker:provider-http"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+    logging: *default-logging
+
+  provider-browser-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      BET_DATABASE_URL: postgresql+asyncpg://betuser:${POSTGRES_PASSWORD:-not-a-real-dev-password}@postgres:5432/betting_platform
+      BET_JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production}
+      BET_TASK_QUEUE_BACKEND: taskiq
+      BET_REDIS_URL: redis://redis:6379/0
+      BET_TASKIQ_RESULT_BACKEND_URL: redis://redis:6379/1
+      BET_TASKIQ_QUEUE_NAME: bet
+      BET_TASKIQ_CONSUMER_GROUP: bet-workers
+      BET_TASKIQ_WORKER_LANE: provider-browser
+      BET_TASKIQ_ENABLED_LANES: control,provider-http,provider-browser,model-cpu
+      BET_TASKIQ_PROVIDER_BROWSER_QUEUE_NAME: bet-provider-browser
+      BET_TASKIQ_PROVIDER_BROWSER_CONSUMER_GROUP: bet-provider-browser-workers
+      BET_ODDSHARVESTER_PYTHON: /workspace/OddsHarvester/.venv/bin/python
+      BET_SOCCERDATA_PYTHON: /workspace/soccerdata/.venv/bin/python
+      BET_SOCCERDATA_BRIDGE: /app/app/bridges/soccerdata_bridge.py
+      BET_SOCCERDATA_ROOT: /workspace/soccerdata
+      PYTHONPATH: /app
+    depends_on:
+      backend:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - ./OddsHarvester:/workspace/OddsHarvester:ro
+      - ./soccerdata:/workspace/soccerdata:ro
+      - shared_data:/shared_data
+    command: taskiq worker app.tasks.broker:broker app.tasks.jobs --workers 1 --max-async-tasks 1 --max-prefetch 1 --log-level WARNING
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.tasks.runtime", "worker:provider-browser"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+    logging: *default-logging
+
+  model-cpu-worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.production
+    environment:
+      BET_DATABASE_URL: postgresql+asyncpg://betuser:${POSTGRES_PASSWORD:-not-a-real-dev-password}@postgres:5432/betting_platform
+      BET_JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production}
+      BET_TASK_QUEUE_BACKEND: taskiq
+      BET_REDIS_URL: redis://redis:6379/0
+      BET_TASKIQ_RESULT_BACKEND_URL: redis://redis:6379/1
+      BET_TASKIQ_QUEUE_NAME: bet
+      BET_TASKIQ_CONSUMER_GROUP: bet-workers
+      BET_TASKIQ_WORKER_LANE: model-cpu
+      BET_TASKIQ_ENABLED_LANES: control,provider-http,provider-browser,model-cpu
+      BET_TASKIQ_MODEL_CPU_QUEUE_NAME: bet-model-cpu
+      BET_TASKIQ_MODEL_CPU_CONSUMER_GROUP: bet-model-cpu-workers
+      BET_PENALTYBLOG_PYTHON: /usr/local/bin/python
+      BET_PENALTYBLOG_BRIDGE: /app/backend/app/bridges/penaltyblog_bridge.py
+      BET_PENALTYBLOG_ROOT: /app/penaltyblog
+      BET_MODEL_ARTIFACT_ROOT: /model-artifacts
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      NUMEXPR_NUM_THREADS: "1"
+      PYTHONPATH: /app
+    depends_on:
+      model-artifacts-init:
+        condition: service_completed_successfully
+      backend:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./penaltyblog:/app/penaltyblog:ro
+      - model_artifacts:/model-artifacts
+      - shared_data:/shared_data
+    command: taskiq worker app.tasks.broker:broker app.tasks.jobs --workers 1 --max-async-tasks 1 --max-prefetch 1 --log-level WARNING
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.tasks.runtime", "worker:model-cpu"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+    logging: *default-logging
+
+  model-artifacts-init:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    user: "0:0"
+    command: ["sh", "-ec", "mkdir -p /model-artifacts && chown -R 1001:1001 /model-artifacts"]
+    volumes:
+      - model_artifacts:/model-artifacts
+    restart: "no"
     logging: *default-logging
 
   trading-runner:
@@ -184,6 +344,7 @@ services:
       BET_TASKIQ_RESULT_BACKEND_URL: redis://redis:6379/1
       BET_TASKIQ_QUEUE_NAME: bet
       BET_TASKIQ_CONSUMER_GROUP: bet-workers
+      BET_TASKIQ_ENABLED_LANES: control,provider-http,provider-browser,model-cpu
       BET_TASKIQ_POLL_INTERVAL_SECONDS: 60
       PYTHONPATH: /app
     depends_on:
@@ -251,3 +412,4 @@ services:
 volumes:
   postgres_data:
   shared_data:
+  model_artifacts:

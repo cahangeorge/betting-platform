@@ -14,7 +14,7 @@ from app.models.odds_lineage import TicketLegQuoteSnapshot
 from app.models.prediction import ModelPrediction, PredictionRun
 from app.models.ticket import BetPlacement, Settlement, Ticket, TicketBatch, TicketLeg
 from app.models.trading import ExecutionIntent
-from app.services.model_governance import assess_prediction_runs_governance
+from app.services.model_governance import assess_prediction_runs_governance, pipeline_prediction_output_is_complete
 from app.services.odds_quotes import PREMATCH_MAX_AGE, select_quote_set
 from app.services.portfolio_risk import (
     LeagueExposure,
@@ -84,6 +84,42 @@ def _utc(value: datetime | None = None) -> datetime:
     if current.tzinfo is None:
         return current.replace(tzinfo=timezone.utc)
     return current.astimezone(timezone.utc)
+
+
+def _p4_canonical_fixture(prediction) -> tuple[dict | None, str | None]:
+    """Return immutable P4 fixture evidence; legacy predictions retain match reads."""
+    report = getattr(prediction, "quality_report", None)
+    if not isinstance(report, dict) or report.get("pipeline_contract_version") != "penaltyblog-model-pipeline/v1":
+        return None, None
+    snapshot = report.get("canonical_fixture")
+    if not isinstance(snapshot, dict) or snapshot.get("match_id") != getattr(prediction, "match_id", None):
+        return None, "canonical_fixture_missing_or_invalid"
+    home, away, kickoff, competition_key = (
+        snapshot.get("home_team"),
+        snapshot.get("away_team"),
+        snapshot.get("kickoff_at"),
+        snapshot.get("competition_key"),
+    )
+    if (
+        not isinstance(home, str)
+        or not home.strip()
+        or not isinstance(away, str)
+        or not away.strip()
+        or not isinstance(kickoff, str)
+        or not isinstance(competition_key, str)
+        or not (competition_key := " ".join(competition_key.split()))
+    ):
+        return None, "canonical_fixture_missing_or_invalid"
+    try:
+        normalized_kickoff = _utc(datetime.fromisoformat(kickoff.replace("Z", "+00:00")))
+    except ValueError:
+        return None, "canonical_fixture_missing_or_invalid"
+    return {
+        "home_team": home,
+        "away_team": away,
+        "kickoff": normalized_kickoff,
+        "competition_key": competition_key,
+    }, None
 
 
 def _risk_finding_payload(finding) -> dict:
@@ -399,7 +435,10 @@ def _prediction_ticket_exclusion_reason(
     match = getattr(prediction, "match", None)
     if match is None:
         return None, "match_missing"
-    kickoff = getattr(match, "match_date", None)
+    canonical_fixture, snapshot_error = _p4_canonical_fixture(prediction)
+    if snapshot_error is not None:
+        return None, snapshot_error
+    kickoff = canonical_fixture["kickoff"] if canonical_fixture is not None else getattr(match, "match_date", None)
     if kickoff is None:
         return None, "kickoff_missing"
     if kickoff.tzinfo is None:
@@ -423,6 +462,9 @@ def _prediction_ticket_exclusion_reason(
     )
     if candidate is not None:
         candidate["kickoff"] = kickoff
+        if canonical_fixture is not None:
+            candidate["team_ids"] = (canonical_fixture["home_team"], canonical_fixture["away_team"])
+            candidate["league_ids"] = (canonical_fixture["competition_key"],)
     return candidate, reason
 
 
@@ -445,6 +487,18 @@ def _match_league_kickoffs(matches: list[Match]) -> dict[int | str, tuple[dateti
         kickoff = getattr(match, "match_date", None)
         if league_id and kickoff is not None:
             values[league_id].add(_utc(kickoff))
+    return {league_id: tuple(sorted(kickoffs)) for league_id, kickoffs in values.items()}
+
+
+def _fixture_league_kickoffs(
+    fixtures: list[dict | None], matches: list[Match]
+) -> dict[int | str, tuple[datetime, ...]]:
+    values: dict[int | str, set[datetime]] = defaultdict(set)
+    for fixture, match in zip(fixtures, matches, strict=True):
+        league = fixture["competition_key"] if fixture is not None else getattr(match, "competition", None)
+        kickoff = fixture["kickoff"] if fixture is not None else getattr(match, "match_date", None)
+        if league and kickoff is not None:
+            values[league].add(_utc(kickoff))
     return {league_id: tuple(sorted(kickoffs)) for league_id, kickoffs in values.items()}
 
 
@@ -533,15 +587,11 @@ def _evaluate_ticket_candidates(
                 }
             )
         match = getattr(prediction, "match", None)
-        candidate["team_ids"] = tuple(
-            value
-            for value in (
-                getattr(match, "home_team", None),
-                getattr(match, "away_team", None),
+        if "team_ids" not in candidate:
+            candidate["team_ids"] = tuple(
+                value for value in (getattr(match, "home_team", None), getattr(match, "away_team", None)) if value
             )
-            if value
-        )
-        candidate["league_ids"] = tuple(value for value in (getattr(match, "competition", None),) if value)
+            candidate["league_ids"] = tuple(value for value in (getattr(match, "competition", None),) if value)
         candidates.append(candidate)
         eligible_by_run[str(prediction.run_id)] += 1
 
@@ -594,7 +644,10 @@ async def _load_portfolio_exposure(
 ) -> PortfolioExposure:
     active_result = await db.execute(
         select(Ticket)
-        .options(selectinload(Ticket.legs).selectinload(TicketLeg.match))
+        .options(
+            selectinload(Ticket.legs).selectinload(TicketLeg.match),
+            selectinload(Ticket.legs).selectinload(TicketLeg.model_prediction).selectinload(ModelPrediction.run),
+        )
         .where(Ticket.bankroll_id == bankroll_id, Ticket.status.in_(("open", "watchlist")))
     )
     active_tickets = list(active_result.scalars().unique().all())
@@ -612,6 +665,7 @@ async def _load_portfolio_exposure(
     by_match: dict[int | str, Decimal] = defaultdict(lambda: Decimal("0.00"))
     by_team: dict[int | str, Decimal] = defaultdict(lambda: Decimal("0.00"))
     league_exposures: list[LeagueExposure] = []
+    pipeline_run_integrity: dict[int, bool] = {}
     open_total = Decimal("0.00")
     for ticket in active_tickets:
         stake = quantize_money(ticket.stake)
@@ -622,11 +676,50 @@ async def _load_portfolio_exposure(
             match = getattr(leg, "match", None)
             if match is None:
                 continue
-            for team in (getattr(match, "home_team", None), getattr(match, "away_team", None)):
+            # A leg with a run snapshot once had an attributable prediction.
+            # Do not silently reclassify it as legacy after that prediction has
+            # been removed: doing so would make exposure fall back to mutable
+            # Match fields and could bypass governed P4 league limits.
+            if (
+                getattr(leg, "prediction_run_id_snapshot", None) is not None
+                and getattr(leg, "model_prediction", None) is None
+            ):
+                raise ValueError("Active ticket leg has lost immutable prediction lineage")
+            prediction = getattr(leg, "model_prediction", None)
+            prediction_run = getattr(prediction, "run", None)
+            if (
+                prediction_run is not None
+                and prediction_run.pipeline_contract_version == "penaltyblog-model-pipeline/v1"
+            ):
+                model_version_id = prediction_run.model_version_id
+                if getattr(leg, "prediction_run_id_snapshot", None) != prediction_run.id or model_version_id is None:
+                    raise ValueError("Governed active ticket has incomplete prediction-run lineage")
+                run_id = int(prediction_run.id)
+                if run_id not in pipeline_run_integrity:
+                    pipeline_run_integrity[run_id] = await pipeline_prediction_output_is_complete(
+                        db, prediction_run, int(model_version_id)
+                    )
+                if not pipeline_run_integrity[run_id]:
+                    raise ValueError("Governed active ticket has incomplete or tampered prediction output")
+            canonical_fixture, snapshot_error = _p4_canonical_fixture(prediction)
+            if snapshot_error is not None:
+                raise ValueError("Governed active ticket has invalid canonical fixture evidence")
+            teams = (
+                (canonical_fixture["home_team"], canonical_fixture["away_team"])
+                if canonical_fixture is not None
+                else (getattr(match, "home_team", None), getattr(match, "away_team", None))
+            )
+            for team in teams:
                 if team:
                     by_team[str(team)] += stake
-            league = getattr(match, "competition", None)
-            kickoff = getattr(match, "match_date", None)
+            league = (
+                canonical_fixture["competition_key"]
+                if canonical_fixture is not None
+                else getattr(match, "competition", None)
+            )
+            kickoff = (
+                canonical_fixture["kickoff"] if canonical_fixture is not None else getattr(match, "match_date", None)
+            )
             if league and kickoff is not None:
                 league_exposures.append(
                     LeagueExposure(
@@ -777,7 +870,7 @@ async def preflight_ticket_generation(
             select(PredictionRun).where(
                 PredictionRun.user_id == user_id,
                 PredictionRun.id.in_(requested_run_ids),
-                PredictionRun.status.in_(["completed", "partial"]),
+                PredictionRun.status == "completed",
             )
         )
         runs_by_id = {run.id: run for run in run_result.scalars().all()}
@@ -792,7 +885,7 @@ async def preflight_ticket_generation(
         run_stmt = select(PredictionRun).where(
             PredictionRun.user_id == user_id,
             PredictionRun.id == run_id,
-            PredictionRun.status.in_(["completed", "partial"]),
+            PredictionRun.status == "completed",
         )
         run_result = await db.execute(run_stmt.limit(1))
         selected_run = run_result.scalar_one_or_none()
@@ -1509,7 +1602,7 @@ async def generate_tickets(
         run_stmt = select(PredictionRun).where(
             PredictionRun.user_id == user_id,
             PredictionRun.id.in_(requested_run_ids),
-            PredictionRun.status.in_(["completed", "partial"]),
+            PredictionRun.status == "completed",
         )
         run_result = await db.execute(run_stmt)
         runs_by_id = {run.id: run for run in run_result.scalars().all()}
@@ -1524,7 +1617,7 @@ async def generate_tickets(
         run_stmt = select(PredictionRun).where(PredictionRun.user_id == user_id)
         run_stmt = run_stmt.where(
             PredictionRun.id == run_id,
-            PredictionRun.status.in_(["completed", "partial"]),
+            PredictionRun.status == "completed",
         )
         run_result = await db.execute(run_stmt.limit(1))
         selected_run = run_result.scalar_one_or_none()
@@ -1533,7 +1626,7 @@ async def generate_tickets(
         selected_runs = [selected_run]
     else:
         run_stmt = select(PredictionRun).where(PredictionRun.user_id == user_id)
-        run_stmt = run_stmt.where(PredictionRun.status.in_(["completed", "partial"]))
+        run_stmt = run_stmt.where(PredictionRun.status == "completed")
         run_stmt = run_stmt.order_by(
             PredictionRun.completed_at.desc().nulls_last(),
             PredictionRun.started_at.desc().nulls_last(),
@@ -2001,6 +2094,7 @@ async def activate_ticket_batch(
             ModelPrediction.id,
             ModelPrediction.run_id,
             ModelPrediction.match_id,
+            ModelPrediction.quality_report,
             PredictionRun.user_id,
             PredictionRun.source_dataset_id,
         )
@@ -2010,6 +2104,7 @@ async def activate_ticket_batch(
         .with_for_update()
     )
     predictions_by_id = {row.id: row for row in predictions_result.all()}
+    fixtures_by_prediction_id: dict[int, dict | None] = {}
     expected_dataset_id = report.get("source_dataset_id")
     for leg in legs:
         prediction = predictions_by_id.get(leg.model_prediction_id)
@@ -2023,6 +2118,10 @@ async def activate_ticket_batch(
             raise TicketActivationConflictError(f"Ticket leg {leg.id} prediction and match lineage are inconsistent")
         if expected_dataset_id is not None and prediction.source_dataset_id != expected_dataset_id:
             raise TicketActivationConflictError(f"Ticket leg {leg.id} prediction dataset lineage is inconsistent")
+        canonical_fixture, snapshot_error = _p4_canonical_fixture(prediction)
+        if snapshot_error is not None:
+            raise TicketActivationConflictError(f"Ticket leg {leg.id} has invalid governed fixture evidence")
+        fixtures_by_prediction_id[int(prediction.id)] = canonical_fixture
 
     match_ids = list(dict.fromkeys(int(leg.match_id) for leg in legs if leg.match_id is not None))
     matches_result = await db.execute(
@@ -2033,7 +2132,8 @@ async def activate_ticket_batch(
         match = matches_by_id.get(leg.match_id)
         if match is None:
             raise TicketActivationConflictError(f"Ticket leg {leg.id} references a missing match")
-        kickoff = match.match_date
+        canonical_fixture = fixtures_by_prediction_id[int(leg.model_prediction_id)]
+        kickoff = canonical_fixture["kickoff"] if canonical_fixture is not None else match.match_date
         if kickoff is None:
             raise TicketActivationConflictError(f"Ticket leg {leg.id} has no match kickoff")
         if kickoff.tzinfo is None:
@@ -2100,11 +2200,20 @@ async def activate_ticket_batch(
             team_scope: set[int | str] = set()
             league_scope: set[int | str] = set()
             scoped_matches: list[Match] = []
+            scoped_fixtures: list[dict | None] = []
             for leg in ticket_legs:
                 match = matches_by_id[int(leg.match_id)]
-                scoped_matches.append(match)
-                team_scope.update(value for value in (match.home_team, match.away_team) if value)
-                if match.competition:
+                canonical_fixture = fixtures_by_prediction_id[int(leg.model_prediction_id)]
+                if canonical_fixture is not None:
+                    team_scope.update((canonical_fixture["home_team"], canonical_fixture["away_team"]))
+                    league_scope.add(canonical_fixture["competition_key"])
+                    scoped_matches.append(match)
+                    scoped_fixtures.append(canonical_fixture)
+                else:
+                    scoped_matches.append(match)
+                    scoped_fixtures.append(None)
+                    team_scope.update(value for value in (match.home_team, match.away_team) if value)
+                if canonical_fixture is None and match.competition:
                     league_scope.add(match.competition)
             assessment = assess_portfolio_risk(
                 policy=active_policy,
@@ -2120,7 +2229,7 @@ async def activate_ticket_batch(
                     match_ids=frozenset(match_scope),
                     team_ids=frozenset(team_scope),
                     league_ids=frozenset(league_scope),
-                    league_kickoffs=_match_league_kickoffs(scoped_matches),
+                    league_kickoffs=_fixture_league_kickoffs(scoped_fixtures, scoped_matches),
                     accumulator_risk_acknowledged=bool(report.get("request", {}).get("accumulator_risk_acknowledged")),
                     is_automated=False,
                 ),
@@ -2136,7 +2245,7 @@ async def activate_ticket_batch(
                 stake=quantize_money(ticket.stake),
                 match_ids=match_scope,
                 team_ids=team_scope,
-                league_kickoffs=_match_league_kickoffs(scoped_matches),
+                league_kickoffs=_fixture_league_kickoffs(scoped_fixtures, scoped_matches),
                 exposure_id=ticket.id,
             )
     else:
@@ -2261,6 +2370,23 @@ async def refresh_ticket_batch(
     if not legs or any(leg.match_id is None for leg in legs):
         raise TicketRefreshConflictError("Every generated ticket must have complete match lineage")
 
+    prediction_ids = [int(leg.model_prediction_id) for leg in legs if leg.model_prediction_id is not None]
+    predictions_result = await db.execute(
+        select(ModelPrediction.id, ModelPrediction.match_id, ModelPrediction.quality_report).where(
+            ModelPrediction.id.in_(prediction_ids)
+        )
+    )
+    predictions_by_id = {row.id: row for row in predictions_result.all()}
+    fixtures_by_prediction_id: dict[int, dict | None] = {}
+    for leg in legs:
+        prediction = predictions_by_id.get(leg.model_prediction_id)
+        if prediction is None or prediction.match_id != leg.match_id:
+            raise TicketRefreshConflictError(f"Ticket leg {leg.id} prediction lineage is inconsistent")
+        canonical_fixture, snapshot_error = _p4_canonical_fixture(prediction)
+        if snapshot_error is not None:
+            raise TicketRefreshConflictError(f"Ticket leg {leg.id} has invalid governed fixture evidence")
+        fixtures_by_prediction_id[int(prediction.id)] = canonical_fixture
+
     match_ids = list(dict.fromkeys(int(leg.match_id) for leg in legs))
     matches_result = await db.execute(select(Match).where(Match.id.in_(match_ids)).with_for_update())
     matches_by_id = {match.id: match for match in matches_result.scalars().all()}
@@ -2276,7 +2402,9 @@ async def refresh_ticket_batch(
         raise TicketRefreshConflictError("Model governance no longer authorizes this batch")
     for leg in legs:
         match = matches_by_id.get(leg.match_id)
-        if match is None or match.match_date is None or _utc(match.match_date) <= refresh_time:
+        canonical_fixture = fixtures_by_prediction_id[int(leg.model_prediction_id)]
+        kickoff = canonical_fixture["kickoff"] if canonical_fixture is not None else getattr(match, "match_date", None)
+        if match is None or kickoff is None or _utc(kickoff) <= refresh_time:
             raise TicketRefreshConflictError(f"Ticket leg {leg.id} match is no longer eligible")
         if str(match.status or "").strip().lower() not in NOT_STARTED_MATCH_STATUSES:
             raise TicketRefreshConflictError(f"Ticket leg {leg.id} match is no longer eligible")
@@ -2325,15 +2453,24 @@ async def refresh_ticket_batch(
         team_scope: set[int | str] = set()
         league_scope: set[int | str] = set()
         scoped_matches: list[Match] = []
+        scoped_fixtures: list[dict | None] = []
         for leg in ticket_legs:
             quote, _market_probability, model_probability = quote_plans[leg.id]
             combined_odds *= quote.price
             combined_probability *= model_probability
             match_scope.add(int(leg.match_id))
             match = matches_by_id[int(leg.match_id)]
-            scoped_matches.append(match)
-            team_scope.update(value for value in (match.home_team, match.away_team) if value)
-            if match.competition:
+            canonical_fixture = fixtures_by_prediction_id[int(leg.model_prediction_id)]
+            if canonical_fixture is not None:
+                team_scope.update((canonical_fixture["home_team"], canonical_fixture["away_team"]))
+                league_scope.add(canonical_fixture["competition_key"])
+                scoped_matches.append(match)
+                scoped_fixtures.append(canonical_fixture)
+            else:
+                scoped_matches.append(match)
+                scoped_fixtures.append(None)
+                team_scope.update(value for value in (match.home_team, match.away_team) if value)
+            if canonical_fixture is None and match.competition:
                 league_scope.add(match.competition)
         calculation = calculate_stake(
             policy=policy.staking,
@@ -2359,7 +2496,7 @@ async def refresh_ticket_batch(
                 match_ids=frozenset(match_scope),
                 team_ids=frozenset(team_scope),
                 league_ids=frozenset(league_scope),
-                league_kickoffs=_match_league_kickoffs(scoped_matches),
+                league_kickoffs=_fixture_league_kickoffs(scoped_fixtures, scoped_matches),
                 accumulator_risk_acknowledged=accumulator_ack,
                 is_automated=False,
             ),
@@ -2374,7 +2511,7 @@ async def refresh_ticket_batch(
             stake=calculation.stake,
             match_ids=match_scope,
             team_ids=team_scope,
-            league_kickoffs=_match_league_kickoffs(scoped_matches),
+            league_kickoffs=_fixture_league_kickoffs(scoped_fixtures, scoped_matches),
             exposure_id=ticket.id,
         )
 

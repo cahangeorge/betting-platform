@@ -908,6 +908,68 @@ export interface ApiError {
 	status_code: number;
 }
 
+// ─── Provider runtime observability ────────────────────
+// This deliberately excludes credentials, provider response bodies, request
+// identifiers and raw upstream error messages. It is an operator-facing
+// snapshot of the generic adapter/source contract only.
+export interface ProviderRuntimeSource {
+	adapter_key: string;
+	source_key: string;
+	circuit_state: 'closed' | 'open' | 'half_open' | 'unknown' | string;
+	quota_limit: number | null;
+	quota_reserved: number;
+	quota_consumed: number;
+	provider_remaining: number | null;
+	consecutive_failures: number;
+	last_reconciled_at: string | null;
+	observation_count: number;
+	complete_snapshot_count: number;
+	partial_snapshot_count: number;
+	unmapped_observation_count: number;
+	coverage_percent: number;
+	latest_observed_at: string | null;
+	freshness_state: 'fresh' | 'stale' | 'no_data' | 'unknown';
+	cache_state: 'hit' | 'miss' | 'mixed' | 'not_applicable' | 'unknown';
+}
+
+export interface ProviderLaneSnapshot {
+	lane: string;
+	queued: number;
+	running: number;
+	oldest_queue_age_ms: number;
+	sampled_terminal_runs: number;
+	retries: number;
+	fallbacks: number;
+	freshness_failures: number;
+	peak_rss_bytes: number | null;
+	peak_pid_count: number | null;
+}
+
+export interface ProviderRuntimeAlert {
+	scope: 'source' | 'lane' | string;
+	scope_key: string;
+	code: string;
+	severity: 'warning' | 'critical' | string;
+}
+
+export interface ProviderPipelinePhase {
+	phase: 'backfill' | 'normalize' | 'features' | 'model';
+	status: 'idle' | 'queued' | 'running' | 'attention';
+	queued: number;
+	running: number;
+	failed: number;
+	partial: number;
+	attention_count: number;
+}
+
+export interface ProviderRuntimeSnapshot {
+	observed_at: string;
+	sources: ProviderRuntimeSource[];
+	lanes: ProviderLaneSnapshot[];
+	phases: ProviderPipelinePhase[];
+	alerts: ProviderRuntimeAlert[];
+}
+
 // ─── Polling ──────────────────────────────────────────
 export interface PollingState<T> {
 	data: T | null;

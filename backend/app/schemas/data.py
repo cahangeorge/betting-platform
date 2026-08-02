@@ -114,7 +114,9 @@ class WorldCupPipelineRequest(BaseModel):
     max_historic_seasons: int | None = Field(default=None, ge=0, le=20)
     upcoming_timeout_seconds: int | None = Field(default=None, ge=30, le=3600)
     historic_timeout_seconds: int | None = Field(default=None, ge=30, le=3600)
-    scraper_engine: str = Field(default="playwright", pattern="^(playwright|auto|scrapling-http|scrapling-stealth)$")
+    scraper_engine: str = Field(
+        default="playwright", pattern="^(playwright|auto|scrapling-http|scrapling-stealth|camoufox)$"
+    )
     ticket_count: int = Field(default=10, ge=1, le=50)
     ticket_stake: float = Field(default=10.0, ge=0)
     create_tickets: bool = True

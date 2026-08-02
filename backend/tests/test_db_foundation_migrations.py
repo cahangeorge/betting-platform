@@ -15,7 +15,21 @@ from app.models.risk import BankrollRiskPolicy, BankrollRiskState
 def test_foundation_revisions_form_one_linear_head() -> None:
     script = ScriptDirectory.from_config(Config("alembic.ini"))
 
-    assert script.get_heads() == ["025"]
+    assert script.get_heads() == ["043"]
+    assert script.get_revision("043").down_revision == "042"
+    assert script.get_revision("041").down_revision == "040"
+    assert script.get_revision("040").down_revision == "039"
+    assert script.get_revision("039").down_revision == "038"
+    assert script.get_revision("038").down_revision == "037"
+    assert script.get_revision("037").down_revision == "036"
+    assert script.get_revision("035").down_revision == "034"
+    assert script.get_revision("036").down_revision == "035"
+    assert script.get_revision("032").down_revision == "031"
+    assert script.get_revision("031").down_revision == "030"
+    assert script.get_revision("030").down_revision == "029"
+    assert script.get_revision("028").down_revision == "027"
+    assert script.get_revision("027").down_revision == "026"
+    assert script.get_revision("026").down_revision == "025"
     assert script.get_revision("025").down_revision == "024"
     assert script.get_revision("024").down_revision == "023"
     assert script.get_revision("023").down_revision == "022"

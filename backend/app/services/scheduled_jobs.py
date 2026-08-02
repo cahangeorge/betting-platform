@@ -2,7 +2,7 @@ import asyncio
 import contextlib
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -13,13 +13,47 @@ from app.config import get_settings
 from app.database import async_session_factory
 from app.models.job import ScheduledJob, ScheduledJobRun, TaskOutbox
 from app.models.prediction import ModelPrediction, PredictionRun
+from app.models.provider_observation import ProviderObservation
 from app.models.user import User
-from app.schemas.job import SCHEDULED_JOB_TASK_TYPES, validate_scheduled_job_cron
+from app.providers.soccerdata import SoccerdataIngestionSpec
+from app.schemas.job import (
+    LICENSED_ODDS_SCHEDULED_TASK_TYPES,
+    MODEL_PIPELINE_SCHEDULED_TASK_TYPES,
+    SCHEDULED_JOB_TASK_TYPES,
+    LicensedOddsJobSpecV1,
+    parse_licensed_odds_scheduled_config,
+    parse_model_pipeline_scheduled_config,
+    validate_scheduled_job_cron,
+)
 from app.schemas.strategy import StrategyRunFilters, StrategyRunRequest
+from app.services.licensed_odds import LicensedOddsAcquisitionStatus, LicensedOddsService
+from app.services.model_artifacts import model_fingerprint
+from app.services.odds_ingestion import OddsObservationMaterializationError, materialize_odds_observation
+from app.services.odds_rollout import canary_bucket, included_in_canary
+from app.services.python_bridge import BridgeError
 from app.services.result_settlement import evaluate_model_prediction, settle_due_tickets
 from app.services.scraper import create_scrape_job, execute_scrape_job
+from app.services.soccerdata_ingestion import (
+    SoccerdataBatch,
+    SoccerdataIngestionError,
+    SoccerdataIngestionResult,
+    authorize_soccerdata_ingestion,
+    fetch_soccerdata_batch,
+    persist_soccerdata_batch,
+    replay_soccerdata_batch,
+)
 from app.services.task_runs import (
+    RETRYABLE_FAILURE_KINDS,
+    TERMINAL_FAILURE_KINDS,
+    LaneBackpressureError,
+    StaleTaskRunFenceError,
+    TaskOutboxContractError,
+    TransientTaskRunError,
+    WorkerLaneAdmissionClosedError,
+    acquire_lane_advisory_lock,
+    assert_task_run_fence,
     claim_queued_task_run,
+    classify_execution_failure,
     create_task_outbox,
     create_task_run,
     find_active_scrape_task_run,
@@ -27,8 +61,20 @@ from app.services.task_runs import (
     heartbeat_task_run_by_id,
     mark_outbox_publish_failed,
     mark_outbox_published,
+    next_task_retry_at,
+    requeue_task_run_failure,
 )
 from app.services.ticket_engine import TicketGenerationError, TicketRiskPolicyRequiredError, generate_tickets
+from app.tasks.worker_lanes import (
+    LEGACY_WORKER_CONTRACT_VERSION,
+    WORKER_LANE_CONTRACT_VERSION,
+    WorkerLane,
+    WorkerLaneDisabledError,
+    is_worker_lane_enabled,
+    lane_for_operation,
+    queue_name_for_lane,
+    worker_lane_spec,
+)
 
 SCHEDULED_JOB_OWNER_CONFIG_KEY = "_created_by_user_id"
 SCHEDULED_JOB_QUARANTINE_CONFIG_KEY = "_scheduler_quarantine"
@@ -36,6 +82,7 @@ SCHEDULED_JOB_QUARANTINE_CONFIG_KEY = "_scheduler_quarantine"
 _scheduler_lock = asyncio.Lock()
 _scheduler_task: asyncio.Task | None = None
 _inprocess_tasks: set[asyncio.Task] = set()
+_inprocess_scrape_semaphore: tuple[int, asyncio.Semaphore] | None = None
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -44,13 +91,24 @@ logger = logging.getLogger(__name__)
 def _task_run_lease_seconds(run: ScheduledJobRun) -> int:
     configured_lease = settings.task_run_lease_seconds
     task_type = (run.task_type or "").lower()
+    if task_type in LICENSED_ODDS_SCHEDULED_TASK_TYPES:
+        return max(configured_lease, worker_lane_spec(lane_for_operation(task_type)).timeout_seconds + 60)
     if task_type == "world_cup_pipeline" or any(token in task_type for token in ("scrape", "odds")):
         # A healthy OddsHarvester subprocess may legitimately use its entire
         # timeout. The margin prevents a duplicate claim between timeout and
         # exception/final-state persistence, including SQLite dev mode where a
         # long write transaction may temporarily block the heartbeat session.
         return max(configured_lease, settings.oddsharvester_timeout_seconds + 60)
+    if task_type in {"soccerdata_http_ingest", "soccerdata_browser_ingest"} | MODEL_PIPELINE_SCHEDULED_TASK_TYPES:
+        return max(configured_lease, worker_lane_spec(lane_for_operation(task_type)).timeout_seconds + 60)
     return configured_lease
+
+
+def _run_execution_token(run: ScheduledJobRun) -> str | None:
+    """Legacy control envelopes retain compatibility without v1 fencing."""
+    if getattr(run, "queue_contract_version", LEGACY_WORKER_CONTRACT_VERSION) != WORKER_LANE_CONTRACT_VERSION:
+        return None
+    return getattr(run, "execution_token", None)
 
 
 async def _maintain_task_run_heartbeat(
@@ -58,6 +116,7 @@ async def _maintain_task_run_heartbeat(
     stopped: asyncio.Event,
     *,
     lease_seconds: int | None = None,
+    execution_token: str | None = None,
 ) -> None:
     """Renew a running task lease until execution finishes.
 
@@ -76,11 +135,10 @@ async def _maintain_task_run_heartbeat(
 
         try:
             async with async_session_factory() as heartbeat_db:
-                renewed = await heartbeat_task_run_by_id(
-                    heartbeat_db,
-                    run_id,
-                    lease_seconds=effective_lease_seconds,
-                )
+                heartbeat_kwargs = {"lease_seconds": effective_lease_seconds}
+                if execution_token is not None:
+                    heartbeat_kwargs["execution_token"] = execution_token
+                renewed = await heartbeat_task_run_by_id(heartbeat_db, run_id, **heartbeat_kwargs)
                 await heartbeat_db.commit()
         except Exception:
             logger.warning("Task run %s heartbeat renewal failed", run_id, exc_info=True)
@@ -90,10 +148,10 @@ async def _maintain_task_run_heartbeat(
 
 
 @contextlib.asynccontextmanager
-async def _task_run_heartbeat(run_id: int, *, lease_seconds: int | None = None):
+async def _task_run_heartbeat(run_id: int, *, lease_seconds: int | None = None, execution_token: str | None = None):
     stopped = asyncio.Event()
     task = asyncio.create_task(
-        _maintain_task_run_heartbeat(run_id, stopped, lease_seconds=lease_seconds),
+        _maintain_task_run_heartbeat(run_id, stopped, lease_seconds=lease_seconds, execution_token=execution_token),
         name=f"task-run-heartbeat-{run_id}",
     )
     try:
@@ -133,6 +191,309 @@ def _merge_run_artifacts(*results: ScheduledJobRunResult) -> dict[str, Any] | No
             else:
                 merged[key] = value
     return merged or None
+
+
+def _scheduled_job_run_artifacts(job: ScheduledJob) -> dict[str, Any] | None:
+    if job.task_type in MODEL_PIPELINE_SCHEDULED_TASK_TYPES:
+        public_config = {
+            key: value
+            for key, value in (job.config or {}).items()
+            if key not in {SCHEDULED_JOB_OWNER_CONFIG_KEY, "user_id"}
+        }
+        command = parse_model_pipeline_scheduled_config(job.task_type, public_config)
+        job_spec = command.model_dump(mode="json")
+        # `mode=json` gives immutable UTC-safe wire values; fingerprinting the
+        # exact stored object detects tampering or accidental config mutation.
+        return {
+            "model_pipeline_command": job_spec,
+            "model_pipeline_command_digest": model_fingerprint(job_spec),
+            "model_pipeline_contract_version": job_spec["contract_version"],
+        }
+    if job.task_type in LICENSED_ODDS_SCHEDULED_TASK_TYPES:
+        public_config = {
+            key: value
+            for key, value in (job.config or {}).items()
+            if key not in {SCHEDULED_JOB_OWNER_CONFIG_KEY, "user_id"}
+        }
+        spec = parse_licensed_odds_scheduled_config(public_config)
+        job_spec = spec.canonical_payload()
+        return {
+            "job_spec": job_spec,
+            "job_spec_digest": model_fingerprint(job_spec),
+            "licensed_odds_contract_version": job_spec["contract_version"],
+        }
+    if job.task_type not in {"soccerdata_http_ingest", "soccerdata_browser_ingest"}:
+        return None
+    public_config = {
+        key: value
+        for key, value in (job.config or {}).items()
+        if key not in {SCHEDULED_JOB_OWNER_CONFIG_KEY, "user_id"}
+    }
+    if (
+        public_config.get("page", 0) != 0
+        or public_config.get("start_cursor") not in {None, 0}
+        or "generation_key" in public_config
+    ):
+        raise ValueError("Scheduled soccerdata jobs must start from page zero")
+    spec = SoccerdataIngestionSpec.from_config(public_config)
+    if spec.task_type != job.task_type:
+        raise ValueError("Soccerdata operation does not match the scheduled worker lane")
+    return {
+        "job_spec": spec.to_config(),
+        "job_spec_digest": spec.spec_digest,
+        "request_fingerprint": spec.request_fingerprint,
+    }
+
+
+def _soccerdata_spec_from_run(run: ScheduledJobRun) -> SoccerdataIngestionSpec:
+    """Read and verify the immutable soccerdata request captured at enqueue time."""
+    artifacts = run.artifacts or {}
+    raw_spec = artifacts.get("job_spec")
+    if not isinstance(raw_spec, dict):
+        raise ValueError("soccerdata scheduled run is missing its immutable job_spec")
+    spec = SoccerdataIngestionSpec.from_config(raw_spec)
+    if spec.task_type != run.task_type:
+        raise ValueError("soccerdata scheduled run job_spec does not match its worker lane")
+    if artifacts.get("job_spec_digest") != spec.spec_digest:
+        raise ValueError("soccerdata scheduled run job_spec digest mismatch")
+    if artifacts.get("request_fingerprint") != spec.request_fingerprint:
+        raise ValueError("soccerdata scheduled run request fingerprint mismatch")
+    return spec
+
+
+def _model_pipeline_command_from_run(run: ScheduledJobRun) -> Any:
+    """Read a model command from its immutable enqueue snapshot, fail closed."""
+    artifacts = run.artifacts or {}
+    raw_command = artifacts.get("model_pipeline_command")
+    if not isinstance(raw_command, dict):
+        raise ValueError("model pipeline scheduled run is missing its immutable command")
+    command = parse_model_pipeline_scheduled_config(run.task_type, raw_command)
+    canonical_command = command.model_dump(mode="json")
+    if raw_command != canonical_command:
+        raise ValueError("model pipeline scheduled run command is not canonical")
+    if artifacts.get("model_pipeline_command_digest") != model_fingerprint(canonical_command):
+        raise ValueError("model pipeline scheduled run command digest mismatch")
+    if artifacts.get("model_pipeline_contract_version") != canonical_command["contract_version"]:
+        raise ValueError("model pipeline scheduled run contract version mismatch")
+    return command
+
+
+def _licensed_odds_spec_from_run(run: ScheduledJobRun) -> LicensedOddsJobSpecV1:
+    """Load a canonical immutable provider-http command captured at enqueue."""
+    artifacts = run.artifacts or {}
+    raw_spec = artifacts.get("job_spec")
+    if not isinstance(raw_spec, dict):
+        raise ValueError("licensed odds scheduled run is missing its immutable job_spec")
+    spec = parse_licensed_odds_scheduled_config(raw_spec)
+    canonical_spec = spec.canonical_payload()
+    if raw_spec != canonical_spec:
+        raise ValueError("licensed odds scheduled run job_spec is not canonical")
+    if artifacts.get("job_spec_digest") != model_fingerprint(canonical_spec):
+        raise ValueError("licensed odds scheduled run job_spec digest mismatch")
+    if artifacts.get("licensed_odds_contract_version") != canonical_spec["contract_version"]:
+        raise ValueError("licensed odds scheduled run contract version mismatch")
+    return spec
+
+
+def _soccerdata_result_artifacts(result: SoccerdataIngestionResult) -> dict[str, Any]:
+    artifacts: dict[str, Any] = {
+        "ingestion_checkpoint_id": result.checkpoint_id,
+        "ingestion_state": result.state,
+        "record_count": result.record_count,
+        "observation_count": result.observation_count,
+        "replayed": result.replayed,
+    }
+    if result.dataset_id is not None:
+        artifacts["dataset_ids"] = [result.dataset_id]
+    if result.generation_id is not None:
+        artifacts["provider_dataset_generation_ids"] = [result.generation_id]
+        if result.state == "completed" and result.cursor is None:
+            # Exact scalar consumed by TrainModelCommandV1.source_generation_id.
+            artifacts["source_generation_id"] = result.generation_id
+    if result.cursor is not None:
+        artifacts["next_cursor"] = result.cursor
+    return artifacts
+
+
+async def _run_licensed_odds_job(
+    db: AsyncSession,
+    run: ScheduledJobRun,
+    *,
+    spec: LicensedOddsJobSpecV1,
+    execution_token: str | None,
+) -> ScheduledJobRunResult:
+    """Acquire then persist a licensed odds batch without a browser fallback.
+
+    The acquisition service owns a short, clean quota transaction.  Accepted
+    envelope rows are committed even when canonical match/bookmaker mapping is
+    incomplete, so operators can repair identity data without reacquiring.
+    """
+    canary_fingerprint = model_fingerprint(
+        {
+            "contract": "licensed-odds-canary/v1",
+            "scheduled_job_id": run.scheduled_job_id,
+            "scheduled_job_run_id": run.id,
+            "scope": spec.scope,
+        }
+    )
+    bucket = canary_bucket(canary_fingerprint)
+    if not included_in_canary(canary_fingerprint, spec.canary_stage_percent):
+        return ScheduledJobRunResult(
+            job_id=run.scheduled_job_id or 0,
+            task_type=run.task_type,
+            status="skipped",
+            detail="licensed_odds_canary_excluded",
+            artifacts={
+                "licensed_odds": {
+                    "contract_version": spec.contract_version,
+                    "scope": spec.scope,
+                    "canary_stage_percent": spec.canary_stage_percent,
+                    "canary_bucket": bucket,
+                    "canary_included": False,
+                    "status": "skipped",
+                    "reason_code": "canary_excluded",
+                    "charged": False,
+                    "record_count": 0,
+                }
+            },
+        )
+
+    # Close the scheduled-job read transaction before quota admission/egress.
+    await db.commit()
+    acquisition = await LicensedOddsService(settings).acquire_sportmonks_latest(
+        db,
+        scope=spec.scope,
+        job_id=f"scheduled-job:{run.scheduled_job_id}",
+        run_id=str(run.id),
+        correlation_id=f"scheduled-job-run:{run.id}",
+        execution_token=execution_token,
+        scheduled_job_run_id=run.id,
+    )
+    telemetry = acquisition.telemetry
+    artifacts: dict[str, Any] = {
+        "licensed_odds": {
+            "contract_version": spec.contract_version,
+            "scope": spec.scope,
+            "canary_stage_percent": spec.canary_stage_percent,
+            "canary_bucket": bucket,
+            "canary_included": True,
+            "status": telemetry.status.value,
+            "reason_code": telemetry.reason_code,
+            "charged": telemetry.charged,
+            "record_count": telemetry.record_count,
+        }
+    }
+    if telemetry.status is LicensedOddsAcquisitionStatus.DENIED:
+        return ScheduledJobRunResult(
+            job_id=run.scheduled_job_id or 0,
+            task_type=run.task_type,
+            status="skipped",
+            detail=f"licensed_odds_denied:{telemetry.reason_code}",
+            artifacts=artifacts,
+        )
+    if telemetry.status is LicensedOddsAcquisitionStatus.FAILED:
+        return ScheduledJobRunResult(
+            job_id=run.scheduled_job_id or 0,
+            task_type=run.task_type,
+            status="failed",
+            detail=f"licensed_odds_failed:{telemetry.reason_code}",
+            artifacts=artifacts,
+        )
+
+    observation_ids: list[int] = []
+    materialized = 0
+    unmapped = 0
+    for observation_id in acquisition.observation_ids:
+        observation = await db.get(ProviderObservation, observation_id)
+        if observation is None:
+            unmapped += 1
+            continue
+        observation_ids.append(observation_id)
+        try:
+            await materialize_odds_observation(db, observation, bookmaker_mapping={})
+        except OddsObservationMaterializationError:
+            unmapped += 1
+        else:
+            materialized += 1
+    if execution_token is not None:
+        await assert_task_run_fence(db, run.id, execution_token)
+    artifacts["provider_observation_ids"] = observation_ids
+    artifacts["materialized_observation_count"] = materialized
+    artifacts["unmapped_observation_count"] = unmapped
+    status = "partial" if unmapped else "completed"
+    return ScheduledJobRunResult(
+        job_id=run.scheduled_job_id or 0,
+        task_type=run.task_type,
+        status=status,
+        detail=(
+            f"licensed_odds:{status}; records:{len(acquisition.observation_ids)}; "
+            f"unmapped:{unmapped}; replayed:{str(acquisition.replayed).lower()}"
+        ),
+        artifacts=artifacts,
+    )
+
+
+async def _run_soccerdata_job(
+    db: AsyncSession,
+    run: ScheduledJobRun,
+    *,
+    spec: SoccerdataIngestionSpec,
+    batch: SoccerdataBatch,
+    execution_token: str | None,
+) -> ScheduledJobRunResult:
+    """Persist a pre-fetched soccerdata batch with the terminal run fence."""
+
+    async def fence() -> None:
+        if execution_token is not None:
+            await assert_task_run_fence(db, run.id, execution_token)
+
+    result = await persist_soccerdata_batch(
+        db,
+        spec,
+        batch,
+        fence=fence if execution_token is not None else None,
+        job_id=f"scheduled-job:{run.scheduled_job_id}",
+        run_id=str(run.id),
+        correlation_id=f"scheduled-job-run:{run.id}",
+        scheduled_job_run_id=run.id,
+        now=datetime.now(timezone.utc),
+    )
+    artifacts = _soccerdata_result_artifacts(result)
+    replay = "; replayed" if result.replayed else ""
+    detail = (
+        f"soccerdata:{result.state}{replay}; checkpoint:{result.checkpoint_id}; "
+        f"records:{result.record_count}; observations:{result.observation_count}"
+    )
+    # No rows is a durable non-error checkpoint, but must not be represented
+    # as a completed data-producing run.
+    return ScheduledJobRunResult(
+        job_id=run.scheduled_job_id or 0,
+        task_type=run.task_type,
+        status="skipped" if result.state == "no_data" else "completed",
+        detail=detail,
+        artifacts=artifacts,
+    )
+
+
+async def _replay_scheduled_soccerdata_page(spec: SoccerdataIngestionSpec) -> SoccerdataIngestionResult | None:
+    """Probe a checkpoint in an isolated short-lived session.
+
+    The worker session retains the claimed run and job ORM identities.  A
+    rollback on that session after a replay SELECT can expire those identities
+    and later lazy-load during the fenced persistence path.  The replay probe
+    is pure read-only work, so isolate and close it before bridge I/O instead.
+    """
+    async with async_session_factory() as replay_db:
+        # Lightweight scheduler doubles used by legacy unit tests do not
+        # expose the database read surface.
+        if not hasattr(replay_db, "scalar"):
+            return None
+        replay = await replay_soccerdata_batch(replay_db, spec)
+        # End the read transaction explicitly before returning.  This matters
+        # for long cursor chains even though session close would also roll back.
+        if getattr(replay_db, "in_transaction", lambda: False)():
+            await replay_db.rollback()
+        return replay
 
 
 def _summarize_prediction_statuses(statuses: list[str]) -> str:
@@ -188,7 +549,51 @@ def _scrape_job_artifacts(job: Any) -> dict[str, Any]:
     report = summary.get("scrape_report")
     if isinstance(report, dict):
         artifacts["scrape_report"] = report
+    failure = summary.get("failure")
+    failure_kind = failure.get("kind") if isinstance(failure, dict) else None
+    if failure_kind in RETRYABLE_FAILURE_KINDS | TERMINAL_FAILURE_KINDS:
+        artifacts["failure_kind"] = failure_kind
     return artifacts
+
+
+async def _apply_scrape_failure_retry(
+    db: AsyncSession,
+    run: ScheduledJobRun,
+    *,
+    artifacts: dict[str, Any] | None,
+    execution_token: str | None,
+    error: str,
+) -> bool:
+    safe_artifacts = artifacts or {}
+    failure_kind = safe_artifacts.get("failure_kind")
+    if not isinstance(failure_kind, str):
+        return False
+    if execution_token is None:
+        return False
+    changed = await requeue_task_run_failure(
+        db,
+        run,
+        execution_token=execution_token,
+        failure_kind=failure_kind,
+        error=error,
+    )
+    if not changed:
+        raise StaleTaskRunFenceError(f"Task run {run.id} lost its execution fence during scrape failure")
+    run.artifacts = {**(run.artifacts or {}), **safe_artifacts}
+    await db.flush()
+    return True
+
+
+def _worker_metrics_from_artifacts(artifacts: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Extract only bounded operational outcomes from a scrape report."""
+    report = (artifacts or {}).get("scrape_report")
+    if not isinstance(report, dict):
+        return None
+    raw_fallbacks = report.get("fallback_count", 1 if report.get("fallback_used") is True else 0)
+    fallback_count = raw_fallbacks if isinstance(raw_fallbacks, int) and raw_fallbacks >= 0 else 0
+    raw_freshness = str(report.get("freshness_status") or "unknown").strip().lower()
+    freshness_status = raw_freshness if raw_freshness in {"fresh", "stale", "expired", "failed"} else "unknown"
+    return {"fallback_count": fallback_count, "freshness_status": freshness_status}
 
 
 def utcnow() -> datetime:
@@ -829,13 +1234,94 @@ async def _run_verification_and_settlement_job(db: AsyncSession, job: ScheduledJ
     )
 
 
+async def _run_model_pipeline_job(
+    db: AsyncSession,
+    job: ScheduledJob,
+    *,
+    command: Any,
+    fence: Any | None = None,
+) -> ScheduledJobRunResult:
+    """Run only a strict, versioned command on the isolated model-cpu lane."""
+    from app.services.model_pipeline import backtest_model, predict_model, train_model
+
+    task_type = (job.task_type or "").lower()
+    config = dict(job.config or {})
+    owner = await _load_scheduled_job_owner(db, config)
+    user_id = owner.id if owner is not None else None
+
+    if task_type == "train_model":
+        artifact = await train_model(db, command, **({"fence": fence} if fence is not None else {}))
+        return ScheduledJobRunResult(
+            job_id=job.id,
+            task_type=job.task_type,
+            status="completed",
+            detail=f"model_artifact:{artifact.id}",
+            artifacts={
+                "model_artifact_ids": [artifact.id],
+                "model_artifact_key": artifact.artifact_key,
+                "source_generation_id": artifact.source_generation_id,
+            },
+        )
+    if task_type == "backtest_model":
+        evaluation = await backtest_model(
+            db, command, user_id=user_id, **({"fence": fence} if fence is not None else {})
+        )
+        return ScheduledJobRunResult(
+            job_id=job.id,
+            task_type=job.task_type,
+            status="completed",
+            detail=f"model_evaluation:{evaluation.id}",
+            artifacts={
+                "model_evaluation_ids": [evaluation.id],
+                "model_artifact_ids": [command.model_artifact_id],
+                "source_generation_id": command.source_generation_id,
+            },
+        )
+    if task_type == "predict_model":
+        prediction_run = await predict_model(
+            db, command, user_id=user_id, **({"fence": fence} if fence is not None else {})
+        )
+        return ScheduledJobRunResult(
+            job_id=job.id,
+            task_type=job.task_type,
+            status="completed",
+            detail=f"prediction_run:{prediction_run.id}",
+            artifacts={
+                "prediction_run_ids": [prediction_run.id],
+                "model_artifact_ids": [command.model_artifact_id],
+                "source_generation_id": command.source_generation_id,
+            },
+        )
+    raise ValueError(f"Unsupported model pipeline task type: {job.task_type}")
+
+
 async def dispatch_scheduled_job(
-    db: AsyncSession, job: ScheduledJob, *, scheduled_job_run_id: int | None = None
+    db: AsyncSession,
+    job: ScheduledJob,
+    *,
+    scheduled_job_run_id: int | None = None,
+    model_pipeline_command: Any | None = None,
+    model_pipeline_fence: Any | None = None,
 ) -> ScheduledJobRunResult:
     task_type = (job.task_type or "").lower()
     if task_type not in SCHEDULED_JOB_TASK_TYPES:
         return ScheduledJobRunResult(
             job_id=job.id, task_type=job.task_type, status="skipped", detail="unsupported_task_type"
+        )
+    # Exact model task types must dispatch before the legacy substring router.
+    # The worker supplies an immutable delivery snapshot; direct service users
+    # are still parsed through the same strict contract.
+    if task_type in MODEL_PIPELINE_SCHEDULED_TASK_TYPES:
+        command = model_pipeline_command or parse_model_pipeline_scheduled_config(task_type, dict(job.config or {}))
+        return await _run_model_pipeline_job(db, job, command=command, fence=model_pipeline_fence)
+    # Keep the explicit licensed operation ahead of the legacy ``odds``
+    # substring branch. Real execution requires the run-bound immutable spec.
+    if task_type == "fetch_latest_odds":
+        return ScheduledJobRunResult(
+            job_id=job.id,
+            task_type=job.task_type,
+            status="skipped",
+            detail="licensed_odds_requires_immutable_run_spec",
         )
     if "world_cup_pipeline" in task_type:
         return await _run_world_cup_pipeline_job(db, job)
@@ -871,29 +1357,52 @@ def taskiq_queue_enabled() -> bool:
 
 
 async def _send_taskiq_run(run: ScheduledJobRun, *, task_name: str) -> str | None:
+    if run.queue_contract_version not in {WORKER_LANE_CONTRACT_VERSION, LEGACY_WORKER_CONTRACT_VERSION}:
+        raise ValueError(f"Unsupported Taskiq queue contract: {run.queue_contract_version}")
+    if run.queue_contract_version == LEGACY_WORKER_CONTRACT_VERSION and run.queue_lane != "control":
+        raise ValueError("legacy-control/v0 Taskiq messages may only use the control lane")
+    if not is_worker_lane_enabled(settings, run.queue_lane):
+        raise WorkerLaneDisabledError(f"Worker lane {run.queue_lane!r} is disabled")
+    queue_name = queue_name_for_lane(settings, run.queue_lane)
     if task_name == "scheduled_job":
         from app.tasks.jobs import execute_scheduled_job_run_task
 
-        task = await execute_scheduled_job_run_task.kiq(run.id)
+        kicker = execute_scheduled_job_run_task.kicker()
     elif task_name == "scrape_job":
         from app.tasks.jobs import execute_scrape_job_task
 
-        task = await execute_scrape_job_task.kiq(run.id)
+        kicker = execute_scrape_job_task.kicker()
     elif task_name == "world_cup_pipeline":
         from app.tasks.jobs import execute_world_cup_pipeline_task
 
-        task = await execute_world_cup_pipeline_task.kiq(run.id)
+        kicker = execute_world_cup_pipeline_task.kicker()
     else:
         raise ValueError(f"Unsupported Taskiq task name: {task_name}")
+    # Redis carries no business payload besides the durable run ID. `queue_name`
+    # is a transport label used by taskiq-redis dynamic queue routing.
+    task = await kicker.with_labels(queue_name=queue_name).kiq(run.id)
     return getattr(task, "task_id", None)
 
 
 async def _send_inprocess_run(run: ScheduledJobRun, *, task_name: str) -> str:
-    del task_name  # execution routing is derived durably from the run record
-    task = asyncio.create_task(execute_task_run(run.id), name=f"task-run-{run.id}")
+    task = asyncio.create_task(_execute_inprocess_task(run.id, task_name=task_name), name=f"task-run-{run.id}")
     _inprocess_tasks.add(task)
     task.add_done_callback(_inprocess_tasks.discard)
     return f"inprocess:{run.id}"
+
+
+async def _execute_inprocess_task(run_id: int, *, task_name: str) -> ScheduledJobRun:
+    """Serialize browser-heavy scrape runs when development uses in-process delivery."""
+    if task_name != "scrape_job":
+        return await execute_task_run(run_id)
+
+    global _inprocess_scrape_semaphore
+    limit = settings.inprocess_scrape_max_concurrency
+    if _inprocess_scrape_semaphore is None or _inprocess_scrape_semaphore[0] != limit:
+        _inprocess_scrape_semaphore = (limit, asyncio.Semaphore(limit))
+
+    async with _inprocess_scrape_semaphore[1]:
+        return await execute_task_run(run_id)
 
 
 async def _send_outbox_run(run: ScheduledJobRun, outbox: TaskOutbox) -> str | None:
@@ -931,6 +1440,27 @@ async def _replay_stale_published_outbox_entry(
         raise LookupError(f"Task outbox {outbox.id} references missing run {outbox.run_id}")
     if run.status != "queued" or run.started_at is not None or run.finished_at is not None:
         return run
+    predecessor_result = await db.execute(
+        select(ScheduledJobRun.id)
+        .join(TaskOutbox, TaskOutbox.run_id == ScheduledJobRun.id)
+        .where(
+            TaskOutbox.id < outbox.id,
+            TaskOutbox.transport == "taskiq",
+            TaskOutbox.status == "published",
+            TaskOutbox.queue_lane == outbox.queue_lane,
+            TaskOutbox.queue_contract_version == outbox.queue_contract_version,
+            ScheduledJobRun.transport == "taskiq",
+            ScheduledJobRun.status.in_(("queued", "running")),
+            ScheduledJobRun.finished_at.is_(None),
+        )
+        .limit(1)
+    )
+    if predecessor_result.scalar_one_or_none() is not None:
+        # A published Taskiq message can legitimately remain unclaimed while
+        # the single conservative worker is processing an earlier long-running
+        # scrape. Do not replay or exhaust later queue entries as though their
+        # delivery had been lost.
+        return run
     if outbox.attempts >= outbox.max_attempts:
         outbox.status = "failed"
         outbox.last_error = "task delivery remained unconfirmed after the replay limit"
@@ -958,6 +1488,93 @@ async def _replay_stale_published_outbox_entry(
         outbox.transport_task_id,
     )
     return replayed
+
+
+async def requeue_expired_task_run_leases(
+    db: AsyncSession,
+    *,
+    now: datetime | None = None,
+    limit: int = 100,
+) -> list[ScheduledJobRun]:
+    """Durably recover lost workers before outbox publication/replay.
+
+    This changes execution state, not outbox publication attempts.  A later
+    reconcile publishes the same run ID, while claim fencing rejects any old
+    worker token.
+    """
+    current = now or utcnow()
+    for lane in WorkerLane:
+        await acquire_lane_advisory_lock(db, lane)
+    stmt = (
+        select(ScheduledJobRun.id)
+        .where(
+            ScheduledJobRun.status == "running",
+            ScheduledJobRun.queue_contract_version == WORKER_LANE_CONTRACT_VERSION,
+            ScheduledJobRun.lease_expires_at.is_not(None),
+            ScheduledJobRun.lease_expires_at <= current,
+        )
+        .order_by(ScheduledJobRun.lease_expires_at.asc(), ScheduledJobRun.id.asc())
+        .limit(limit)
+    )
+    result = await db.execute(stmt)
+    recovered: list[ScheduledJobRun] = []
+    for candidate in result.scalars().all():
+        run_id = candidate.id if hasattr(candidate, "id") else int(candidate)
+        # Canonical lock order is outbox -> run, matching publication/replay.
+        outbox_result = await db.execute(select(TaskOutbox).where(TaskOutbox.run_id == run_id).with_for_update())
+        outbox = outbox_result.scalar_one_or_none()
+        if outbox is None:
+            raise TaskOutboxContractError(f"Task run {run_id} has no durable outbox for lease recovery")
+        run_result = await db.execute(
+            select(ScheduledJobRun)
+            .where(
+                ScheduledJobRun.id == run_id,
+                ScheduledJobRun.status == "running",
+                ScheduledJobRun.queue_contract_version == WORKER_LANE_CONTRACT_VERSION,
+                ScheduledJobRun.lease_expires_at.is_not(None),
+                ScheduledJobRun.lease_expires_at <= current,
+            )
+            .with_for_update()
+        )
+        run = run_result.scalar_one_or_none()
+        if run is None:
+            continue
+        if outbox.queue_lane != run.queue_lane or outbox.queue_contract_version != run.queue_contract_version:
+            raise TaskOutboxContractError(f"Task outbox {outbox.id} lane contract does not match run {run.id}")
+        if run.attempt >= run.max_attempts:
+            await finish_task_run(
+                db,
+                run,
+                status="timed_out",
+                detail="lease_retry_limit_exhausted",
+                error="task lease expired and retry limit was exhausted",
+                failure_kind="lease_expired",
+                retry_disposition="terminal",
+                execution_token=_run_execution_token(run),
+            )
+            recovered.append(run)
+            continue
+        retry_at = next_task_retry_at(run, "lease_expired", now=current)
+        run.status = "queued"
+        run.next_attempt_at = retry_at
+        run.started_at = None
+        run.finished_at = None
+        run.duration_ms = None
+        run.queue_wait_ms = None
+        run.lease_expires_at = None
+        run.heartbeat_at = current
+        run.execution_token = None
+        run.error = "task lease expired; queued for durable recovery"
+        run.failure_kind = "lease_expired"
+        run.retry_disposition = "retryable"
+        outbox.delivery_generation += 1
+        outbox.attempts = 0
+        outbox.status = "pending"
+        outbox.available_at = retry_at
+        outbox.last_error = "execution lease expired; awaiting durable republish"
+        recovered.append(run)
+    await db.flush()
+    return recovered
 
 
 async def reconcile_task_outbox(db: AsyncSession, *, limit: int = 100) -> list[ScheduledJobRun]:
@@ -1046,6 +1663,45 @@ async def _publish_committed_taskiq_run(db: AsyncSession, run: ScheduledJobRun, 
         return run
 
 
+async def _recover_execution_exception(
+    db: AsyncSession,
+    *,
+    run_id: int,
+    execution_token: str | None,
+    exc: Exception,
+) -> ScheduledJobRun:
+    """Rollback caller writes, then terminalize or requeue in a clean transaction."""
+    await db.rollback()
+    run = await db.get(ScheduledJobRun, run_id)
+    if run is None:
+        raise LookupError(f"Task run {run_id} not found after rollback") from exc
+    failure_kind = classify_execution_failure(exc)
+    if execution_token is not None:
+        changed = await requeue_task_run_failure(
+            db,
+            run,
+            execution_token=execution_token,
+            failure_kind=failure_kind,
+            error=str(exc),
+        )
+        if changed:
+            await db.commit()
+            return run
+        await db.rollback()
+        return run
+    await finish_task_run(
+        db,
+        run,
+        status="failed",
+        detail=str(exc),
+        error=str(exc),
+        failure_kind=failure_kind,
+        execution_token=None,
+    )
+    await db.commit()
+    return run
+
+
 async def execute_scheduled_job_run(run_id: int) -> ScheduledJobRun:
     async with async_session_factory() as db:
         existing_run = await db.get(ScheduledJobRun, run_id)
@@ -1063,31 +1719,192 @@ async def execute_scheduled_job_run(run_id: int) -> ScheduledJobRun:
                 status="failed",
                 detail="scheduled_job_missing",
                 error=f"Scheduled job run {run_id} is not attached to a scheduled job",
+                execution_token=_run_execution_token(run),
             )
             await db.commit()
             return run
         job = await db.get(ScheduledJob, run.scheduled_job_id)
         if job is None:
             await finish_task_run(
-                db, run, status="failed", detail="scheduled_job_missing", error="Scheduled job not found"
+                db,
+                run,
+                status="failed",
+                detail="scheduled_job_missing",
+                error="Scheduled job not found",
+                execution_token=_run_execution_token(run),
             )
             await db.commit()
             return run
 
+        execution_token = _run_execution_token(run)
         try:
-            async with _task_run_heartbeat(run.id, lease_seconds=lease_seconds):
-                result = await dispatch_scheduled_job(db, job, scheduled_job_run_id=run.id)
+            soccerdata_spec: SoccerdataIngestionSpec | None = None
+            soccerdata_batch: SoccerdataBatch | None = None
+            model_pipeline_command: Any | None = None
+            licensed_odds_spec: LicensedOddsJobSpecV1 | None = None
+            if run.task_type in {"soccerdata_http_ingest", "soccerdata_browser_ingest"}:
+                # The enqueue snapshot is authoritative. Do not allow edits to
+                # ScheduledJob.config after delivery to alter this execution.
+                soccerdata_spec = _soccerdata_spec_from_run(run)
+                authorize_soccerdata_ingestion(soccerdata_spec)
+                # `db.get()` above opened a read transaction. Commit it before
+                # crossing the external bridge boundary; persistence happens
+                # later with the task-run fence in one new transaction.
+                await db.commit()
+            elif run.task_type in MODEL_PIPELINE_SCHEDULED_TASK_TYPES:
+                # The durable delivery snapshot, not mutable ScheduledJob.config,
+                # is authoritative for every model-cpu execution.
+                model_pipeline_command = _model_pipeline_command_from_run(run)
+            elif run.task_type in LICENSED_ODDS_SCHEDULED_TASK_TYPES:
+                licensed_odds_spec = _licensed_odds_spec_from_run(run)
+                # Acquiring uses the clean worker session only after this
+                # initial scheduled-job lookup transaction is closed.
+                await db.commit()
+            async with _task_run_heartbeat(
+                run.id,
+                lease_seconds=lease_seconds,
+                **({"execution_token": execution_token} if execution_token is not None else {}),
+            ):
+                if licensed_odds_spec is not None:
+                    result = await _run_licensed_odds_job(
+                        db,
+                        run,
+                        spec=licensed_odds_spec,
+                        execution_token=execution_token,
+                    )
+                elif soccerdata_spec is not None:
+                    # Heartbeat the lease during the external fetch while the
+                    # worker session itself remains outside a DB transaction.
+                    page_spec = soccerdata_spec
+                    page_results: list[ScheduledJobRunResult] = []
+                    while True:
+                        # Policy is deliberately repeated for every page before
+                        # crossing the external boundary; completed pages replay
+                        # from their checkpoint without a bridge fetch.
+                        authorize_soccerdata_ingestion(page_spec)
+                        replayed_page = await _replay_scheduled_soccerdata_page(page_spec)
+                        if replayed_page is not None:
+                            page_result = ScheduledJobRunResult(
+                                job_id=run.scheduled_job_id or 0,
+                                task_type=run.task_type,
+                                status="skipped" if replayed_page.state == "no_data" else "completed",
+                                detail=f"soccerdata:{replayed_page.state}; replayed",
+                                artifacts=_soccerdata_result_artifacts(replayed_page),
+                            )
+                        else:
+                            # The dedicated replay session is already closed;
+                            # the worker session still owns stable run/job ORM
+                            # identities and remains transaction-free here.
+                            try:
+                                soccerdata_batch = await fetch_soccerdata_batch(page_spec)
+                            except BridgeError as exc:
+                                if exc.failure_kind in RETRYABLE_FAILURE_KINDS:
+                                    raise TransientTaskRunError(exc.failure_kind, str(exc)) from exc
+                                raise
+                            page_result = await _run_soccerdata_job(
+                                db, run, spec=page_spec, batch=soccerdata_batch, execution_token=execution_token
+                            )
+                        page_results.append(page_result)
+                        await db.commit()  # each staged page and checkpoint is durable before the next fetch
+                        page_artifacts = page_result.artifacts or {}
+                        cursor = page_artifacts.get("next_cursor")
+                        if not cursor:
+                            result = page_result
+                            break
+                        page_spec = replace(
+                            page_spec,
+                            page=cursor["page"],
+                            start_cursor=cursor["start_cursor"],
+                            generation_key=cursor["generation_key"],
+                        )
+                    if len(page_results) > 1:
+                        artifact_rows = [item.artifacts or {} for item in page_results]
+                        dataset_ids = [
+                            artifacts["dataset_ids"][0] for artifacts in artifact_rows if artifacts.get("dataset_ids")
+                        ]
+                        total_records = sum(int(artifacts.get("record_count") or 0) for artifacts in artifact_rows)
+                        total_observations = sum(
+                            int(artifacts.get("observation_count") or 0) for artifacts in artifact_rows
+                        )
+                        ingestion_state = "completed" if total_records else "no_data"
+                        generation_ids = list(
+                            dict.fromkeys(
+                                generation_id
+                                for artifacts in artifact_rows
+                                for generation_id in artifacts.get("provider_dataset_generation_ids", [])
+                            )
+                        )
+                        aggregate_artifacts = {
+                            **(result.artifacts or {}),
+                            "dataset_ids": dataset_ids,
+                            "checkpoint_ids": [artifacts["ingestion_checkpoint_id"] for artifacts in artifact_rows],
+                            "ingestion_state": ingestion_state,
+                            "record_count": total_records,
+                            "observation_count": total_observations,
+                            "page_count": len(page_results),
+                            "replayed": all(bool(artifacts.get("replayed")) for artifacts in artifact_rows),
+                        }
+                        if generation_ids:
+                            aggregate_artifacts["provider_dataset_generation_ids"] = generation_ids
+                        if total_records and len(generation_ids) == 1:
+                            # A terminal empty continuation can still publish
+                            # the data-bearing generation built by earlier pages.
+                            aggregate_artifacts["source_generation_id"] = generation_ids[0]
+                        result = ScheduledJobRunResult(
+                            job_id=run.scheduled_job_id or 0,
+                            task_type=run.task_type,
+                            status="completed" if total_records else "skipped",
+                            detail=(
+                                f"soccerdata:{ingestion_state}; pages:{len(page_results)}; "
+                                f"records:{total_records}; observations:{total_observations}"
+                            ),
+                            artifacts=aggregate_artifacts,
+                        )
+                else:
+
+                    async def model_fence() -> None:
+                        if execution_token is not None:
+                            await assert_task_run_fence(db, run.id, execution_token)
+
+                    result = await dispatch_scheduled_job(
+                        db,
+                        job,
+                        scheduled_job_run_id=run.id,
+                        model_pipeline_command=model_pipeline_command,
+                        model_pipeline_fence=(
+                            model_fence if model_pipeline_command is not None and execution_token is not None else None
+                        ),
+                    )
+            if await _apply_scrape_failure_retry(
+                db,
+                run,
+                artifacts=result.artifacts,
+                execution_token=execution_token,
+                error=result.detail or "scheduled scrape execution failed",
+            ):
+                await db.commit()
+                return run
+            if execution_token is not None:
+                await assert_task_run_fence(db, run.id, execution_token)
             await finish_task_run(
                 db,
                 run,
                 status=result.status,
                 detail=result.detail,
                 artifacts=result.artifacts,
+                metrics=_worker_metrics_from_artifacts(result.artifacts),
+                execution_token=execution_token,
             )
             await db.commit()
-        except Exception as exc:
-            await finish_task_run(db, run, status="failed", detail=str(exc), error=str(exc))
+        except SoccerdataIngestionError as exc:
+            # The ingestion service rolls partial dataset/observation writes
+            # back to its savepoint and leaves a durable failed checkpoint.
+            # Preserve that checkpoint before task-run recovery starts a clean
+            # outbox -> run lock transaction.
             await db.commit()
+            return await _recover_execution_exception(db, run_id=run_id, execution_token=execution_token, exc=exc)
+        except Exception as exc:
+            return await _recover_execution_exception(db, run_id=run_id, execution_token=execution_token, exc=exc)
         return run
 
 
@@ -1104,24 +1921,60 @@ async def execute_scrape_job_run(run_id: int) -> ScheduledJobRun:
         scrape_job_ids = (run.artifacts or {}).get("scrape_job_ids") or []
         if not scrape_job_ids:
             await finish_task_run(
-                db, run, status="failed", detail="missing_scrape_job_id", error="missing_scrape_job_id"
+                db,
+                run,
+                status="failed",
+                detail="missing_scrape_job_id",
+                error="missing_scrape_job_id",
+                execution_token=_run_execution_token(run),
             )
             await db.commit()
             return run
 
         try:
-            async with _task_run_heartbeat(run.id, lease_seconds=lease_seconds):
-                job = await execute_scrape_job(db, int(scrape_job_ids[0]))
+            async with _task_run_heartbeat(
+                run.id,
+                lease_seconds=lease_seconds,
+                **({"execution_token": token} if (token := _run_execution_token(run)) is not None else {}),
+            ):
+                try:
+                    job = await execute_scrape_job(db, int(scrape_job_ids[0]))
+                    # Do not commit business state independently. The fence
+                    # and terminal run update below share one transaction.
+                except Exception:
+                    await db.rollback()
+                    raise
             artifacts = _scrape_job_artifacts(job)
             status = _scrape_task_run_status(job.status or "failed", artifacts)
             detail = f"scrape_job:{job.id}; status:{status}"
             if getattr(job, "error", None):
                 detail = f"{detail}; error:{job.error}"
-            await finish_task_run(db, run, status=status, detail=detail, artifacts=artifacts)
+            token = _run_execution_token(run)
+            if await _apply_scrape_failure_retry(
+                db,
+                run,
+                artifacts=artifacts,
+                execution_token=token,
+                error=str(getattr(job, "error", None) or detail),
+            ):
+                await db.commit()
+                return run
+            if (token := _run_execution_token(run)) is not None:
+                await assert_task_run_fence(db, run.id, token)
+            await finish_task_run(
+                db,
+                run,
+                status=status,
+                detail=detail,
+                artifacts=artifacts,
+                metrics=_worker_metrics_from_artifacts(artifacts),
+                execution_token=_run_execution_token(run),
+            )
             await db.commit()
         except Exception as exc:
-            await finish_task_run(db, run, status="failed", detail=str(exc), error=str(exc))
-            await db.commit()
+            return await _recover_execution_exception(
+                db, run_id=run_id, execution_token=_run_execution_token(run), exc=exc
+            )
         return run
 
 
@@ -1142,19 +1995,35 @@ async def execute_world_cup_pipeline_run(run_id: int) -> ScheduledJobRun:
         user_id = artifacts.get("user_id")
         if not scrape_job_ids or not user_id:
             await finish_task_run(
-                db, run, status="failed", detail="missing_pipeline_inputs", error="missing_pipeline_inputs"
+                db,
+                run,
+                status="failed",
+                detail="missing_pipeline_inputs",
+                error="missing_pipeline_inputs",
+                execution_token=_run_execution_token(run),
             )
             await db.commit()
             return run
 
         try:
-            async with _task_run_heartbeat(run.id, lease_seconds=lease_seconds):
+            async with _task_run_heartbeat(
+                run.id,
+                lease_seconds=lease_seconds,
+                **({"execution_token": token} if (token := _run_execution_token(run)) is not None else {}),
+            ):
                 await execute_world_cup_pipeline_job(int(scrape_job_ids[0]), int(user_id))
-            await finish_task_run(db, run, status="completed", detail=f"world_cup_pipeline:{scrape_job_ids[0]}")
+            await finish_task_run(
+                db,
+                run,
+                status="completed",
+                detail=f"world_cup_pipeline:{scrape_job_ids[0]}",
+                execution_token=_run_execution_token(run),
+            )
             await db.commit()
         except Exception as exc:
-            await finish_task_run(db, run, status="failed", detail=str(exc), error=str(exc))
-            await db.commit()
+            return await _recover_execution_exception(
+                db, run_id=run_id, execution_token=_run_execution_token(run), exc=exc
+            )
         return run
 
 
@@ -1260,14 +2129,19 @@ async def enqueue_due_scheduled_jobs(
                 quarantined_jobs = True
                 continue
 
-            run = await create_task_run(
-                db,
-                task_type=job.task_type,
-                scheduled_job=job,
-                due_at=job.next_run,
-                triggered_by="scheduler",
-                transport=transport,
-            )
+            try:
+                run = await create_task_run(
+                    db,
+                    task_type=job.task_type,
+                    scheduled_job=job,
+                    due_at=job.next_run,
+                    triggered_by="scheduler",
+                    transport=transport,
+                    artifacts=_scheduled_job_run_artifacts(job),
+                )
+            except (LaneBackpressureError, WorkerLaneAdmissionClosedError):
+                # Keep this due job untouched; another lane must still advance.
+                continue
             outbox_entries.append(await create_task_outbox(db, run, task_name="scheduled_job", transport=transport))
             job.last_run = current
             job.next_run = next_run

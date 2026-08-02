@@ -391,6 +391,7 @@ async def test_build_top_ticket_candidates_skips_unreliable_predictions():
     predictions = [
         SimpleNamespace(
             id=1,
+            run=SimpleNamespace(status="completed"),
             match=match,
             market="1x2",
             home_prob=0.62,
@@ -443,6 +444,7 @@ async def test_build_top_ticket_candidates_can_include_unreliable_watchlist():
     predictions = [
         SimpleNamespace(
             id=1,
+            run=SimpleNamespace(status="completed"),
             match=match,
             market="1x2",
             home_prob=0.62,
@@ -471,6 +473,60 @@ async def test_build_top_ticket_candidates_can_include_unreliable_watchlist():
     assert candidates[0]["is_ticket_eligible"] is False
     assert candidates[0]["reliability"] == "unreliable"
     assert candidates[0]["quality_reasons"] == ["market_disagreement"]
+
+
+@pytest.mark.asyncio
+async def test_build_top_ticket_candidates_excludes_partial_runs_from_experimental_watchlist():
+    class _Scalars:
+        def unique(self):
+            return self
+
+        def all(self):
+            return [
+                SimpleNamespace(
+                    id=1,
+                    run=SimpleNamespace(status="partial"),
+                    match=SimpleNamespace(
+                        id=19,
+                        home_team="USA",
+                        away_team="Australia",
+                        competition="World Cup",
+                        match_date=None,
+                        odds=[
+                            SimpleNamespace(
+                                market="1x2:FullTime",
+                                home_odds=2.1,
+                                draw_odds=3.4,
+                                away_odds=4.0,
+                                bookmaker="Book",
+                            )
+                        ],
+                    ),
+                    market="1x2",
+                    home_prob=0.62,
+                    draw_prob=0.23,
+                    away_prob=0.15,
+                    model_type="PoissonGoalsModel",
+                    quality_report={"reliability": {"is_ticket_eligible": False, "label": "unreliable"}},
+                )
+            ]
+
+    class _Result:
+        def scalars(self):
+            return _Scalars()
+
+    class _DB:
+        async def execute(self, _stmt):
+            return _Result()
+
+    candidates = await world_cup_pipeline._build_top_ticket_candidates(
+        _DB(),
+        run_ids=[123],
+        limit=10,
+        include_unreliable=True,
+    )
+
+    assert candidates == []
 
 
 @pytest.mark.asyncio

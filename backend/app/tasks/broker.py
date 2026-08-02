@@ -2,8 +2,10 @@ import asyncio
 
 from app.config import get_settings
 from app.tasks.runtime import runtime_heartbeat, stop_runtime_heartbeat
+from app.tasks.worker_lanes import consumer_group_for_lane, normalize_worker_lane, queue_name_for_lane
 
 settings = get_settings()
+worker_lane = normalize_worker_lane(settings.taskiq_worker_lane)
 
 try:
     from taskiq import TaskiqEvents, TaskiqState
@@ -19,18 +21,20 @@ result_backend = RedisAsyncResultBackend(
     result_ex_time=settings.taskiq_result_ttl_seconds,
 )
 
+# A process consumes exactly one configured lane.  The durable run remains the
+# work specification; Taskiq receives only run_id plus this routing label.
 broker = RedisStreamBroker(
     url=settings.resolved_taskiq_broker_url,
-    queue_name=settings.taskiq_queue_name,
-    consumer_group_name=settings.taskiq_consumer_group,
+    queue_name=queue_name_for_lane(settings, worker_lane),
+    consumer_group_name=consumer_group_for_lane(settings, worker_lane),
 ).with_result_backend(result_backend)
 
 
 @broker.on_event(TaskiqEvents.WORKER_STARTUP)
 async def start_worker_heartbeat(state: TaskiqState) -> None:
     state.runtime_heartbeat_task = asyncio.create_task(
-        runtime_heartbeat("worker"),
-        name="taskiq-worker-heartbeat",
+        runtime_heartbeat(f"worker:{worker_lane.value}"),
+        name=f"taskiq-worker-{worker_lane.value}-heartbeat",
     )
 
 

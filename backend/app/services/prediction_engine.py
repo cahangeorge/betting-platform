@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.match import Match, OddsEntry
 from app.models.prediction import ModelPrediction, PredictionRun
+from app.providers import DEFAULT_PROVIDER_REGISTRY, ProviderExecutionContext
 from app.services.odds_quotes import QuoteSet, load_odds_entries, select_quote_set
 from app.services.prediction_quality import (
     best_market_odds_by_outcome,
@@ -34,6 +35,16 @@ MODEL_TYPE_ALIASES = {
     "bayesian_hierarchical": "HierarchicalBayesianGoalModel",
     "HierarchicalBayesianGoalModel": "HierarchicalBayesianGoalModel",
 }
+
+
+def _authorize_penaltyblog_operation(operation: str) -> None:
+    """Fail closed before a platform prediction path crosses the bridge."""
+    DEFAULT_PROVIDER_REGISTRY.require_operation(
+        "penaltyblog",
+        "local-model",
+        operation,
+        context=ProviderExecutionContext.PRODUCTION,
+    )
 
 
 def prediction_error_payload(summary: dict) -> str:
@@ -324,6 +335,7 @@ async def calculate_implied_probabilities_with_penaltyblog(
         return None
 
     try:
+        _authorize_penaltyblog_operation("calculate_implied")
         response = await run_penaltyblog(
             {
                 "operation": "calculate_implied",
@@ -531,6 +543,7 @@ async def execute_single_model_run(
             raise ValueError("Time-decay weighting requires match dates for all training matches")
 
         try:
+            _authorize_penaltyblog_operation("dixon_coles_weights")
             weights_response = await run_penaltyblog(
                 {
                     "operation": "dixon_coles_weights",
@@ -553,6 +566,9 @@ async def execute_single_model_run(
     fallbacks = 0
     target_errors: list[dict] = []
     concurrency = 3
+    # This is a run-wide policy decision, not a per-target model outcome. Keep
+    # it outside the worker exception boundary so a denial remains systemic.
+    _authorize_penaltyblog_operation("model_fit_predict")
 
     async def predict_one(target: Match) -> None:
         nonlocal written, failed, fallbacks

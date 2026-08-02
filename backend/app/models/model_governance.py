@@ -36,6 +36,11 @@ class ModelVersion(Base):
         ),
         Index("ix_model_versions_model_key_status", "model_key", "status"),
         Index("ix_model_versions_training_fingerprint", "training_data_fingerprint"),
+        Index("ix_model_versions_feature_set", "feature_set_id"),
+        CheckConstraint(
+            "runtime_dependency_fingerprint IS NULL OR length(runtime_dependency_fingerprint) = 64",
+            name="ck_model_versions_runtime_fingerprint_length",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -43,10 +48,14 @@ class ModelVersion(Base):
     version: Mapped[str] = mapped_column(String(100), nullable=False)
     build_revision: Mapped[str] = mapped_column(String(100), nullable=False)
     engine_version: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    feature_set_id: Mapped[int | None] = mapped_column(
+        ForeignKey("model_feature_sets.id", ondelete="SET NULL"), nullable=True
+    )
     feature_schema_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     strategy_config_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     training_data_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     training_cutoff_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    runtime_dependency_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="candidate", nullable=False)
     metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -63,6 +72,15 @@ class ModelEvaluation(Base):
         CheckConstraint("sample_size >= 0 AND resolved_count >= 0", name="ck_model_evaluations_counts"),
         Index("ix_model_evaluations_version_scope", "model_version_id", "scope_key", "created_at"),
         Index("ix_model_evaluations_status", "status"),
+        CheckConstraint(
+            "evaluation_fingerprint IS NULL OR length(evaluation_fingerprint) = 64",
+            name="ck_model_evaluations_fingerprint_length",
+        ),
+        CheckConstraint(
+            "pipeline_contract_version IS NULL OR pipeline_contract_version != 'penaltyblog-model-pipeline/v1' "
+            "OR evaluation_fingerprint IS NOT NULL",
+            name="ck_model_evaluations_p4_fingerprint_required",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -73,6 +91,8 @@ class ModelEvaluation(Base):
     scope_key: Mapped[str] = mapped_column(String(255), nullable=False)
     scope_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     parameters: Mapped[dict] = mapped_column(JSON, nullable=False)
+    pipeline_contract_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    evaluation_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     sample_size: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     resolved_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     valid_folds: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -101,6 +121,9 @@ class ModelEvaluationFold(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     evaluation_id: Mapped[int] = mapped_column(ForeignKey("model_evaluations.id", ondelete="CASCADE"), nullable=False)
+    feature_artifact_id: Mapped[int | None] = mapped_column(
+        ForeignKey("model_artifacts.id", ondelete="RESTRICT"), nullable=True
+    )
     fold_number: Mapped[int] = mapped_column(Integer, nullable=False)
     training_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     training_cutoff_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -138,6 +161,7 @@ class ModelEvaluationPrediction(Base):
     fair_odds: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
     quoted_odds: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)
     quote_observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    forecast_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     kickoff_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     actual_selection: Mapped[str | None] = mapped_column(String(50), nullable=True)
     is_correct: Mapped[bool | None] = mapped_column(Boolean, nullable=True)

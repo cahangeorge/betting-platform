@@ -2,6 +2,7 @@ import asyncio
 import os
 
 from app.config import get_settings
+from app.providers import DEFAULT_PROVIDER_REGISTRY, ProviderExecutionContext
 from app.services.python_bridge import run_penaltyblog, run_soccerdata
 
 settings = get_settings()
@@ -36,6 +37,13 @@ asyncio.run(main())
 
 
 async def verify_provider_runtime() -> None:
+    # Evaluate the provider gate before any runtime or subprocess work.
+    DEFAULT_PROVIDER_REGISTRY.require_operation(
+        "penaltyblog",
+        "local-model",
+        "goal_expectancy",
+        context=ProviderExecutionContext.CANARY,
+    )
     issues = settings.bridge_validation_issues()
     if issues:
         raise RuntimeError("Provider runtime paths are incomplete")

@@ -1,11 +1,16 @@
 # ruff: noqa
 # Kept mechanically aligned with the legacy subprocess contract; refactor separately.
 import argparse
+import fcntl
+import hashlib
+import io
 import json
 import os
 import signal
 import sys
 import traceback
+import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # The tls_requests native library (tls-client-xgo) sends SIGINT to its own
@@ -41,6 +46,21 @@ def serialize_value(value):
 
 def serialize_records(records):
     return [{key: serialize_value(value) for key, value in record.items()} for record in records]
+
+
+def _serialize_utc_datetime(value):
+    serialized = serialize_value(value)
+    if not isinstance(serialized, str) or not serialized.strip():
+        raise ValueError("soccerdata fixture date must be a nonempty timestamp")
+    try:
+        parsed = datetime.fromisoformat(serialized.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("soccerdata fixture date must be an ISO timestamp") from exc
+    if parsed.tzinfo is None:
+        # Understat's league payload represents its naive match datetimes in
+        # UTC.  Make that source convention explicit at the adapter boundary.
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def load_soccerdata_paths():
@@ -164,13 +184,211 @@ def _set_fbref_headers():
 def _reader_kwargs(payload):
     """Extract common reader constructor kwargs (proxy, no_cache, no_store) from payload."""
     kwargs = {
-        "no_cache": bool(payload.get("refresh", False)),
+        "no_cache": bool(payload.get("refresh", False) or payload.get("no_store", False)),
         "no_store": bool(payload.get("no_store", False)),
     }
     proxy = payload.get("proxy")
     if proxy:
         kwargs["proxy"] = proxy
     return kwargs
+
+
+def _instrument_reader_cache(reader, payload, *, ttl_seconds):
+    """Apply backend-owned TTL and record actual cache-vs-upstream decisions."""
+    if isinstance(ttl_seconds, bool) or not isinstance(ttl_seconds, int) or ttl_seconds < 0:
+        raise ValueError("cache ttl_seconds must be a nonnegative integer")
+    telemetry = {
+        "cache_hits": 0,
+        "upstream_requests": 0,
+        "cache_paths": set(),
+        "no_store": bool(payload.get("no_store", False)),
+        "page_payload": payload,
+    }
+    original_get = reader.get
+
+    # Newer soccerdata Understat readers bypass BaseRequestsReader.get via a
+    # private JSON API helper and eagerly initialize cookies before checking
+    # their file cache.  Instrument that path explicitly and defer cookie I/O
+    # until a cache miss so both quota and warm-cache evidence stay truthful.
+    original_request_api = getattr(reader, "_request_api", None)
+    original_ensure_cookies = getattr(reader, "_ensure_cookies", None)
+    if callable(original_request_api) and callable(original_ensure_cookies):
+
+        def measured_request_api(url, filepath=None, no_cache=False):
+            path = Path(filepath) if filepath is not None else None
+            now = datetime.now(timezone.utc)
+            cache_valid = False
+            if path is not None and path.is_file():
+                modified = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+                cache_valid = now - modified <= timedelta(seconds=ttl_seconds)
+            bypass = bool(no_cache or reader.no_cache)
+            cache_valid = cache_valid and not bypass
+            if cache_valid:
+                telemetry["cache_hits"] += 1
+            else:
+                if not getattr(reader, "_cookies_initialized", False):
+                    if "source_key" in payload or "requests_per_minute" in payload:
+                        _acquire_source_rate_limit(payload.get("source_key"), payload.get("requests_per_minute"))
+                    telemetry["upstream_requests"] += 1
+                    original_ensure_cookies()
+                if "source_key" in payload or "requests_per_minute" in payload:
+                    _acquire_source_rate_limit(payload.get("source_key"), payload.get("requests_per_minute"))
+                telemetry["upstream_requests"] += 1
+            # Understat's private helper has no max-age argument. Force its
+            # cache bypass when the backend-owned TTL says the file is stale.
+            result = original_request_api(url, filepath=path, no_cache=not cache_valid)
+            if path is not None and path.is_file():
+                telemetry["cache_paths"].add(path)
+            return result
+
+        reader._ensure_cookies = lambda: None
+        reader._request_api = measured_request_api
+
+    def measured_get(url, filepath=None, max_age=None, no_cache=False, var=None):
+        del max_age
+        path = Path(filepath) if filepath is not None else None
+        now = datetime.now(timezone.utc)
+        cache_valid = False
+        if path is not None and path.is_file():
+            modified = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+            cache_valid = now - modified <= timedelta(seconds=ttl_seconds)
+        bypass = bool(no_cache or getattr(reader, "no_cache", False))
+        if cache_valid and not bypass:
+            telemetry["cache_hits"] += 1
+        else:
+            telemetry["upstream_requests"] += 1
+            if "source_key" in payload or "requests_per_minute" in payload:
+                _acquire_source_rate_limit(payload.get("source_key"), payload.get("requests_per_minute"))
+        result = original_get(
+            url,
+            filepath=path,
+            max_age=timedelta(seconds=ttl_seconds),
+            no_cache=no_cache,
+            var=var,
+        )
+        if path is not None and path.is_file():
+            telemetry["cache_paths"].add(path)
+        return result
+
+    reader.get = measured_get
+    return telemetry
+
+
+def _acquire_source_rate_limit(source_key, requests_per_minute, *, clock=time.time, sleeper=time.sleep):
+    """Single-host, shared-SOCCERDATA_DIR limiter; cache hits never call this."""
+    if (
+        not isinstance(source_key, str)
+        or not source_key
+        or not isinstance(requests_per_minute, int)
+        or requests_per_minute < 1
+    ):
+        raise ValueError("source rate limit metadata is invalid")
+    interval = 60.0 / requests_per_minute
+    cache_dir = Path(os.environ.get("SOCCERDATA_DIR", Path.home() / ".cache" / "soccerdata"))
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    path = cache_dir / f".bet-rate-{hashlib.sha256(source_key.encode()).hexdigest()}.lock"
+    with path.open("a+", encoding="utf8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        handle.seek(0)
+        try:
+            previous = float(handle.read() or "0")
+        except ValueError:
+            previous = 0.0
+        now = clock()
+        # A corrupt/future rate-state must not create an unbounded sleep.
+        previous = min(previous, now)
+        wait = max(0.0, previous + interval - now)
+        if wait:
+            sleeper(wait)
+            now = clock()
+        handle.seek(0)
+        handle.truncate()
+        handle.write(str(now))
+        handle.flush()
+        os.fsync(handle.fileno())
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _slice_page(rows, payload):
+    page, offset, chunk_size, limit = (
+        int(payload.get("page", 0)),
+        int(payload.get("start_cursor", 0)),
+        int(payload.get("chunk_size", payload.get("limit", 1))),
+        int(payload.get("limit", 1)),
+    )
+    if page < 0 or offset != page * chunk_size or chunk_size < 1 or limit < 1:
+        raise ValueError("invalid immutable page request")
+    bounded = rows[:limit]
+    page_rows = bounded[offset : offset + chunk_size]
+    next_cursor = None
+    if offset + chunk_size < len(bounded):
+        next_cursor = {"page": page + 1, "start_cursor": offset + chunk_size}
+    return page_rows, next_cursor
+
+
+def _paged_result(result, payload):
+    rows, cursor = _slice_page(result["rows"], payload)
+    result["rows"] = rows
+    result["cursor"] = cursor
+    # Do not claim bounded upstream coverage that the reader did not provide.
+    result["summary"]["count"] = len(rows)
+    return result
+
+
+def _attach_cache_telemetry(result, telemetry):
+    # Fingerprint the complete reader result before page slicing so every page
+    # in one acquisition observes the same immutable upstream generation.
+    unpaged_result_digest = hashlib.sha256(
+        json.dumps(result, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    ).hexdigest()
+    page_payload = telemetry.get("page_payload")
+    if page_payload is not None:
+        result = _paged_result(result, page_payload)
+    paths = sorted(telemetry["cache_paths"], key=str)
+    artifact_digest = None
+    cache_as_of = None
+    if paths:
+        digest = hashlib.sha256()
+        for path in paths:
+            digest.update(str(path.name).encode())
+            digest.update(path.read_bytes())
+        artifact_digest = digest.hexdigest()
+        cache_as_of = (
+            max(datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc) for path in paths)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+    upstream_requests = int(telemetry["upstream_requests"])
+    cache_hits = int(telemetry["cache_hits"])
+    # A successful upstream validation renews freshness even when the
+    # response body is unchanged and the cache file keeps its old mtime.
+    if upstream_requests:
+        cache_as_of = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    if telemetry["no_store"]:
+        # An old cache path may still exist, but no-store always describes the
+        # freshly fetched result and must never fingerprint that stale file.
+        artifact_digest = unpaged_result_digest
+    if upstream_requests and artifact_digest is None:
+        artifact_digest = unpaged_result_digest
+    if telemetry["no_store"]:
+        cache_mode = "no-store"
+    elif upstream_requests == 0 and cache_hits:
+        cache_mode = "warm"
+    elif cache_hits:
+        cache_mode = "revalidated"
+    else:
+        cache_mode = "cold"
+    rows = result.get("rows")
+    summary = result.setdefault("summary", {})
+    summary["cache"] = {
+        "mode": cache_mode,
+        "as_of": cache_as_of,
+        "cache_hits": cache_hits,
+        "upstream_requests": upstream_requests,
+        "artifact_digest": artifact_digest,
+    }
+    summary.setdefault("coverage_complete", isinstance(rows, list) and summary.get("count") == len(rows))
+    return result
 
 
 def get_team_mapping(_payload):
@@ -223,7 +441,9 @@ def get_espn_schedule(payload):
         seasons=season,
         **_reader_kwargs(payload),
     )
+    cache = _instrument_reader_cache(reader, payload, ttl_seconds=int(payload["ttl_seconds"]))
     df = reader.read_schedule(force_cache=not refresh).reset_index()
+    total_rows = len(df)
     df = df.sort_values("date", ascending=True).head(limit)
 
     rows = []
@@ -241,16 +461,20 @@ def get_espn_schedule(payload):
             }
         )
 
-    return {
-        "rows": rows,
-        "summary": {
-            "league": league,
-            "season": season,
-            "count": len(rows),
-            "source": "ESPN",
-            "refresh": refresh,
+    return _attach_cache_telemetry(
+        {
+            "rows": rows,
+            "summary": {
+                "league": league,
+                "season": season,
+                "count": len(rows),
+                "source": "ESPN",
+                "refresh": refresh,
+                "coverage_complete": total_rows <= limit,
+            },
         },
-    }
+        cache,
+    )
 
 
 def get_clubelo_ratings(payload):
@@ -308,7 +532,9 @@ def get_matchhistory_games(payload):
         seasons=season,
         **_reader_kwargs(payload),
     )
+    cache = _instrument_reader_cache(reader, payload, ttl_seconds=int(payload["ttl_seconds"]))
     df = reader.read_games().reset_index()
+    total_rows = len(df)
     df = df.sort_values("date", ascending=False).head(limit)
 
     rows = []
@@ -327,16 +553,20 @@ def get_matchhistory_games(payload):
             }
         )
 
-    return {
-        "rows": rows,
-        "summary": {
-            "league": league,
-            "season": season,
-            "count": len(rows),
-            "source": "MatchHistory",
-            "refresh": refresh,
+    return _attach_cache_telemetry(
+        {
+            "rows": rows,
+            "summary": {
+                "league": league,
+                "season": season,
+                "count": len(rows),
+                "source": "MatchHistory",
+                "refresh": refresh,
+                "coverage_complete": total_rows <= limit,
+            },
         },
-    }
+        cache,
+    )
 
 
 def get_fbref_schedule(payload):
@@ -354,7 +584,9 @@ def get_fbref_schedule(payload):
         seasons=season,
         **_reader_kwargs(payload),
     )
+    cache = _instrument_reader_cache(reader, payload, ttl_seconds=int(payload["ttl_seconds"]))
     df = reader.read_schedule(force_cache=not refresh).reset_index()
+    total_rows = len(df)
     df = df.sort_values("date", ascending=False).head(limit)
 
     rows = []
@@ -377,16 +609,20 @@ def get_fbref_schedule(payload):
             }
         )
 
-    return {
-        "rows": rows,
-        "summary": {
-            "league": league,
-            "season": season,
-            "count": len(rows),
-            "source": "FBref",
-            "refresh": refresh,
+    return _attach_cache_telemetry(
+        {
+            "rows": rows,
+            "summary": {
+                "league": league,
+                "season": season,
+                "count": len(rows),
+                "source": "FBref",
+                "refresh": refresh,
+                "coverage_complete": total_rows <= limit,
+            },
         },
-    }
+        cache,
+    )
 
 
 def get_fbref_team_stats(payload):
@@ -607,21 +843,28 @@ def get_understat_schedule(payload):
     league = payload["league"]
     season = payload["season"]
     refresh = bool(payload.get("refresh", False))
+    limit = int(payload.get("limit", 2_000))
 
-    reader = sd.Understat(leagues=[league], seasons=[season])
+    reader = sd.Understat(leagues=[league], seasons=[season], **_reader_kwargs(payload))
+    cache = _instrument_reader_cache(reader, payload, ttl_seconds=int(payload["ttl_seconds"]))
     df = reader.read_schedule(include_matches_without_data=True, force_cache=not refresh)
 
     if df.empty:
-        return {"rows": [], "summary": {"league": league, "season": season, "count": 0, "source": "Understat"}}
+        return _attach_cache_telemetry(
+            {"rows": [], "summary": {"league": league, "season": season, "count": 0, "source": "Understat"}},
+            cache,
+        )
 
     df = df.reset_index()
+    total_rows = len(df)
+    df = df.head(limit)
     rows = []
     for record in serialize_records(df.to_dict(orient="records")):
         rows.append(
             {
                 "game": record.get("game"),
                 "gameId": record.get("game_id"),
-                "date": record.get("date"),
+                "date": _serialize_utc_datetime(record.get("date")),
                 "homeTeam": record.get("home_team"),
                 "awayTeam": record.get("away_team"),
                 "homeGoals": record.get("home_goals"),
@@ -631,7 +874,19 @@ def get_understat_schedule(payload):
                 "isResult": record.get("is_result"),
             }
         )
-    return {"rows": rows, "summary": {"league": league, "season": season, "count": len(rows), "source": "Understat"}}
+    return _attach_cache_telemetry(
+        {
+            "rows": rows,
+            "summary": {
+                "league": league,
+                "season": season,
+                "count": len(rows),
+                "source": "Understat",
+                "coverage_complete": total_rows <= limit,
+            },
+        },
+        cache,
+    )
 
 
 def get_understat_team_match_stats(payload):
@@ -640,20 +895,27 @@ def get_understat_team_match_stats(payload):
     league = payload["league"]
     season = payload["season"]
     refresh = bool(payload.get("refresh", False))
+    limit = int(payload.get("limit", 5_000))
 
-    reader = sd.Understat(leagues=[league], seasons=[season])
+    reader = sd.Understat(leagues=[league], seasons=[season], **_reader_kwargs(payload))
+    cache = _instrument_reader_cache(reader, payload, ttl_seconds=int(payload["ttl_seconds"]))
     df = reader.read_team_match_stats(force_cache=not refresh)
 
     if df.empty:
-        return {"rows": [], "summary": {"league": league, "season": season, "count": 0, "source": "Understat"}}
+        return _attach_cache_telemetry(
+            {"rows": [], "summary": {"league": league, "season": season, "count": 0, "source": "Understat"}},
+            cache,
+        )
 
     df = _flatten_columns(df.reset_index())
+    total_rows = len(df)
+    df = df.head(limit)
     rows = []
     for record in serialize_records(df.to_dict(orient="records")):
         rows.append(
             {
                 "game": record.get("game"),
-                "date": record.get("date"),
+                "date": _serialize_utc_datetime(record.get("date")),
                 "homeTeam": record.get("home_team"),
                 "awayTeam": record.get("away_team"),
                 "homeXg": record.get("home_xg"),
@@ -668,7 +930,19 @@ def get_understat_team_match_stats(payload):
                 "awayGoals": record.get("away_goals"),
             }
         )
-    return {"rows": rows, "summary": {"league": league, "season": season, "count": len(rows), "source": "Understat"}}
+    return _attach_cache_telemetry(
+        {
+            "rows": rows,
+            "summary": {
+                "league": league,
+                "season": season,
+                "count": len(rows),
+                "source": "Understat",
+                "coverage_complete": total_rows <= limit,
+            },
+        },
+        cache,
+    )
 
 
 def get_understat_player_season_stats(payload):
@@ -783,24 +1057,40 @@ def get_fbref_team_match_stats(payload):
     stat_type = payload.get("stat_type", "schedule")
     team = payload.get("team") or None
     refresh = bool(payload.get("refresh", False))
+    limit = int(payload.get("limit", 5_000))
 
     _set_fbref_headers()
 
     reader = sd.FBref(leagues=league, seasons=season, **_reader_kwargs(payload))
+    cache = _instrument_reader_cache(reader, payload, ttl_seconds=int(payload["ttl_seconds"]))
     df = reader.read_team_match_stats(stat_type=stat_type, team=team)
 
     if df.empty:
-        return {
-            "rows": [],
-            "summary": {"league": league, "season": season, "statType": stat_type, "count": 0, "source": "FBref"},
-        }
+        return _attach_cache_telemetry(
+            {
+                "rows": [],
+                "summary": {"league": league, "season": season, "statType": stat_type, "count": 0, "source": "FBref"},
+            },
+            cache,
+        )
 
     df = _flatten_columns(df.reset_index())
-    rows = serialize_records(df.head(500).to_dict(orient="records"))
-    return {
-        "rows": rows,
-        "summary": {"league": league, "season": season, "statType": stat_type, "count": len(rows), "source": "FBref"},
-    }
+    total_rows = len(df)
+    rows = serialize_records(df.head(limit).to_dict(orient="records"))
+    return _attach_cache_telemetry(
+        {
+            "rows": rows,
+            "summary": {
+                "league": league,
+                "season": season,
+                "statType": stat_type,
+                "count": len(rows),
+                "source": "FBref",
+                "coverage_complete": total_rows <= limit,
+            },
+        },
+        cache,
+    )
 
 
 def get_espn_matchsheet(payload):

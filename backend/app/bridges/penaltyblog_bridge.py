@@ -1,8 +1,13 @@
 # ruff: noqa
 # Kept mechanically aligned with the legacy subprocess contract; refactor separately.
 import argparse
+import hashlib
+import importlib.metadata
+import io
 import json
 import os
+import pickle
+import platform
 import signal
 import sys
 import traceback
@@ -10,8 +15,30 @@ from dataclasses import asdict, is_dataclass
 from enum import Enum
 from pathlib import Path
 
+# Numerical libraries read these limits while importing.  Keep model-cpu
+# workers bounded before NumPy (and its BLAS backend) can initialize pools.
+for _thread_env in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+    os.environ.setdefault(_thread_env, "1")
+
 import numpy as np
 import pandas as pd
+
+
+MODEL_RUNTIME_VERSION = "penaltyblog-model-runtime/v1"
+REPRODUCIBLE_MODEL_ALLOWLIST = frozenset(
+    {
+        "PoissonGoalsModel",
+        "DixonColesGoalModel",
+        "BivariatePoissonGoalModel",
+        "NegativeBinomialGoalModel",
+        "ZeroInflatedPoissonGoalsModel",
+    }
+)
+MAX_MODEL_ROWS = 50_000
+MAX_BATCH_PREDICTIONS = 2_000
+MAX_BACKTEST_PREDICTIONS = 2_000
+MAX_MODEL_ARTIFACT_BYTES = 128 * 1024 * 1024
+THREAD_ENVIRONMENT_KEYS = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS")
 
 # Keep child Python isolated from the Vite dev server process group.
 try:
@@ -149,6 +176,26 @@ def catalog(payload=None):  # noqa: ARG001 — payload accepted for uniform disp
                         "id": "model_fit_predict",
                         "label": "Fit + Predict",
                         "description": "Fit a penaltyblog goals model and produce a probability grid.",
+                    },
+                    {
+                        "id": "runtime_info",
+                        "label": "Runtime Info",
+                        "description": "Report the versioned reproducible model runtime.",
+                    },
+                    {
+                        "id": "model_train",
+                        "label": "Train Model Artifact",
+                        "description": "Fit an approved classic model and write a backend-owned artifact.",
+                    },
+                    {
+                        "id": "model_predict_batch",
+                        "label": "Predict Batch",
+                        "description": "Verify and load a backend-owned model artifact for batched predictions.",
+                    },
+                    {
+                        "id": "model_backtest_fold",
+                        "label": "Backtest Fold",
+                        "description": "Fit and score one strictly chronological backtest fold.",
                     },
                     {
                         "id": "goal_expectancy",
@@ -420,6 +467,405 @@ def _normalize_match_rows(rows):
         raise ValueError("matches must include a date column")
     frame["date"] = pd.to_datetime(frame["date"])
     return frame
+
+
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as artifact:
+        for chunk in iter(lambda: artifact.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _read_verified_model_artifact(path, expected_digest):
+    """Read, verify, and deserialize one immutable byte snapshot.
+
+    Do not hash a pathname and then reopen it: a replacement between those two
+    operations would make the verified digest refer to different bytes.
+    """
+    with path.open("rb") as artifact:
+        artifact_bytes = artifact.read(MAX_MODEL_ARTIFACT_BYTES + 1)
+    if len(artifact_bytes) > MAX_MODEL_ARTIFACT_BYTES:
+        raise ValueError(f"model artifact exceeds the {MAX_MODEL_ARTIFACT_BYTES} byte limit")
+    actual_digest = hashlib.sha256(artifact_bytes).hexdigest()
+    if actual_digest != expected_digest:
+        raise ValueError("model artifact digest verification failed")
+    return pickle.load(io.BytesIO(artifact_bytes)), actual_digest  # noqa: S301 - verified backend artifact bytes only
+
+
+def _training_config_digest(payload, spec):
+    """Bind every bridge input that can alter fitted model parameters."""
+    base_date = payload.get("base_date") or payload.get("training_cutoff_at")
+    if isinstance(base_date, str):
+        parsed_base_date = pd.Timestamp(base_date)
+        if parsed_base_date.tzinfo is None:
+            raise ValueError("base_date must be timezone-aware")
+        base_date = parsed_base_date.tz_convert("UTC").isoformat().replace("+00:00", "Z")
+    return _json_digest(
+        {
+            **spec,
+            "use_time_decay": bool(payload.get("use_time_decay", False)),
+            "xi": payload.get("xi"),
+            "base_date": base_date,
+        }
+    )
+
+
+def _json_digest(value):
+    encoded = json.dumps(serialize_value(value), sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _training_wire_timestamp(value):
+    timestamp = pd.Timestamp(value)
+    if timestamp.tzinfo is None:
+        raise ValueError("training wire timestamps must be timezone-aware")
+    return timestamp.tz_convert("UTC").isoformat().replace("+00:00", "Z")
+
+
+def _canonical_training_wire_rows(rows):
+    """Mirror the dependency-free backend training-wire/v1 projection.
+
+    The bridge's venv deliberately does not import backend code.  ``source_id``
+    and ``observed_at`` define stable tie ordering but are not model inputs.
+    """
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("matches must be a nonempty list")
+    normalized = []
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError("training wire rows must be objects")
+        try:
+            source_id = str(row["source_id"])
+            observed_at = _training_wire_timestamp(row["observed_at"])
+            date = _training_wire_timestamp(row["date"])
+            projected = {
+                "date": date,
+                "team_home": str(row["team_home"]),
+                "team_away": str(row["team_away"]),
+                "goals_home": int(row["goals_home"]),
+                "goals_away": int(row["goals_away"]),
+            }
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("training wire row is incomplete") from exc
+        normalized.append(((date, source_id, observed_at), projected))
+    return [projected for _order, projected in sorted(normalized, key=lambda item: item[0])]
+
+
+def _training_wire_digest(rows):
+    return _json_digest(_canonical_training_wire_rows(rows))
+
+
+def _git_revision(root):
+    git_marker = root / ".git"
+    configured_revision = os.environ.get("BET_PENALTYBLOG_REVISION")
+    if not git_marker.exists() and configured_revision:
+        if len(configured_revision) == 40 and all(character in "0123456789abcdef" for character in configured_revision):
+            return configured_revision
+        raise RuntimeError("BET_PENALTYBLOG_REVISION must be a full lowercase Git SHA")
+    git_dir = git_marker
+    if git_marker.is_file():
+        marker = git_marker.read_text(encoding="utf-8").strip()
+        if not marker.startswith("gitdir: "):
+            raise RuntimeError("penaltyblog checkout has an invalid git marker")
+        git_dir = (root / marker.removeprefix("gitdir: ")).resolve()
+    head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+    if head.startswith("ref: "):
+        head = (git_dir / head.removeprefix("ref: ")).read_text(encoding="utf-8").strip()
+    if len(head) != 40 or any(character not in "0123456789abcdef" for character in head):
+        raise RuntimeError("penaltyblog checkout revision is not a full Git SHA")
+    return head
+
+
+def _runtime_details():
+    import penaltyblog as pb
+
+    def version(package, fallback="unknown"):
+        try:
+            return importlib.metadata.version(package)
+        except importlib.metadata.PackageNotFoundError:
+            return getattr(pb, "__version__", fallback) if package == "penaltyblog" else fallback
+
+    root_value = os.environ.get("BET_PENALTYBLOG_ROOT")
+    if not root_value:
+        raise RuntimeError("BET_PENALTYBLOG_ROOT must be configured for model runtime attestation")
+    root = Path(root_value).expanduser().resolve()
+    lock_path = root / "uv.lock"
+    if not lock_path.is_file():
+        raise RuntimeError("penaltyblog uv.lock is required for model runtime attestation")
+    details = {
+        "runtime_version": MODEL_RUNTIME_VERSION,
+        "python_version": platform.python_version(),
+        "penaltyblog_version": version("penaltyblog"),
+        "penaltyblog_revision": _git_revision(root),
+        "numpy_version": version("numpy", np.__version__),
+        "pandas_version": version("pandas", pd.__version__),
+        "scipy_version": version("scipy"),
+        "lock_digest": hashlib.sha256(lock_path.read_bytes()).hexdigest(),
+        "image_digest": os.environ.get("BET_RUNTIME_IMAGE_DIGEST") or None,
+        "blas_threads": int(os.environ["OMP_NUM_THREADS"]),
+        "thread_environment": {key: int(os.environ[key]) for key in THREAD_ENVIRONMENT_KEYS},
+        "reproducible_model_allowlist": sorted(REPRODUCIBLE_MODEL_ALLOWLIST),
+    }
+    details["runtime_fingerprint"] = _json_digest(details)
+    return details
+
+
+def _model_artifact_root():
+    configured_root = os.environ.get("BET_MODEL_ARTIFACT_ROOT")
+    if not configured_root:
+        raise RuntimeError("BET_MODEL_ARTIFACT_ROOT must be configured for model artifact operations")
+    root = Path(configured_root).expanduser().resolve(strict=False)
+    if not root.is_dir():
+        raise RuntimeError("BET_MODEL_ARTIFACT_ROOT must be an existing directory")
+    return root
+
+
+def _artifact_path(payload, key="artifact_path", *, must_exist=False):
+    requested = payload.get(key)
+    if not isinstance(requested, str) or not requested:
+        raise ValueError(f"{key} is required")
+    raw = Path(requested)
+    if not raw.is_absolute() and any(part == ".." for part in raw.parts):
+        raise ValueError(f"{key} must not contain path traversal")
+    root = _model_artifact_root()
+    candidate = (root / raw).resolve(strict=False) if not raw.is_absolute() else raw.resolve(strict=False)
+    try:
+        candidate.relative_to(root)
+    except ValueError as error:
+        raise ValueError(f"{key} must resolve under BET_MODEL_ARTIFACT_ROOT") from error
+    if candidate.suffix != ".pkl":
+        raise ValueError(f"{key} must name a .pkl artifact")
+    if must_exist and not candidate.is_file():
+        raise ValueError("model artifact does not exist")
+    return candidate
+
+
+def _approved_model_class(pb, model_name):
+    if model_name not in REPRODUCIBLE_MODEL_ALLOWLIST:
+        raise ValueError("model class is not approved for reproducible runtime operations")
+    model_class = getattr(pb.models, model_name, None)
+    if model_class is None:
+        raise ValueError("approved model class is unavailable in this penaltyblog runtime")
+    return model_class
+
+
+def _training_frame(payload, key="matches"):
+    rows = payload.get(key)
+    if not isinstance(rows, list) or not rows:
+        raise ValueError(f"{key} must be a nonempty list")
+    if len(rows) > MAX_MODEL_ROWS:
+        raise ValueError(f"{key} exceeds the {MAX_MODEL_ROWS} row limit")
+    if key == "matches":
+        rows = _canonical_training_wire_rows(rows)
+    frame = _normalize_match_rows(rows)
+    required = {"team_home", "team_away", "goals_home", "goals_away", "date"}
+    missing = sorted(required.difference(frame.columns))
+    if missing:
+        raise ValueError(f"{key} missing columns: {', '.join(missing)}")
+    if frame[list(required)].isnull().any().any():
+        raise ValueError(f"{key} contains null required values")
+    frame = frame.sort_values("date", kind="stable").reset_index(drop=True)
+    return frame
+
+
+def _model_spec(payload):
+    config = payload.get("model_config") or {}
+    if not isinstance(config, dict):
+        raise ValueError("model_config must be an object")
+    name = config.get("model_class", payload.get("model_class", payload.get("model", "PoissonGoalsModel")))
+    model_kwargs = config.get("model_kwargs", payload.get("model_kwargs", {}))
+    fit_kwargs = config.get("fit_kwargs", payload.get("fit_kwargs", {}))
+    if not isinstance(model_kwargs, dict) or not isinstance(fit_kwargs, dict):
+        raise ValueError("model_kwargs and fit_kwargs must be objects")
+    return name, model_kwargs, fit_kwargs
+
+
+def _dixon_weights(pb, frame, payload):
+    if not payload.get("use_time_decay", False):
+        return None
+    base_date = payload.get("base_date") or payload.get("training_cutoff_at")
+    if not isinstance(base_date, str) or not base_date:
+        raise ValueError("base_date is required when use_time_decay is enabled")
+    cutoff = pd.Timestamp(base_date)
+    if cutoff.tzinfo is None:
+        raise ValueError("base_date must be timezone-aware")
+    dates = pd.to_datetime(frame["date"], utc=True)
+    if (dates > cutoff).any():
+        raise ValueError("training rows must not be after the explicit base_date cutoff")
+    return pb.models.dixon_coles_weights(list(dates), xi=float(payload.get("xi", 0.0018)), base_date=cutoff)
+
+
+def _fit_reproducible_model(pb, frame, payload):
+    model_name, model_kwargs, fit_kwargs = _model_spec(payload)
+    model_class = _approved_model_class(pb, model_name)
+    weights = _dixon_weights(pb, frame, payload)
+    args = (
+        frame["goals_home"].astype(float).tolist(),
+        frame["goals_away"].astype(float).tolist(),
+        frame["team_home"].astype(str).tolist(),
+        frame["team_away"].astype(str).tolist(),
+    )
+    model = (
+        model_class(*args, weights=weights, **model_kwargs)
+        if weights is not None
+        else model_class(*args, **model_kwargs)
+    )
+    model.fit(**fit_kwargs)
+    return model, model_name, {"model_class": model_name, "model_kwargs": model_kwargs, "fit_kwargs": fit_kwargs}
+
+
+def _safe_params_metadata(model):
+    params = model.get_params() if hasattr(model, "get_params") else {}
+    serialized = serialize_value(params)
+    # NPZ is deliberately metadata only: it is never used to reconstruct a model.
+    encoded = json.dumps(serialized, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    archive = io.BytesIO()
+    np.savez_compressed(archive, params_json=np.frombuffer(encoded, dtype=np.uint8))
+    npz_bytes = archive.getvalue()
+    return {
+        "params_digest": hashlib.sha256(encoded).hexdigest(),
+        "params_npz_digest": hashlib.sha256(npz_bytes).hexdigest(),
+        "params_npz_bytes": len(npz_bytes),
+        "params": serialized,
+    }
+
+
+def run_runtime_info(_payload):
+    return _runtime_details()
+
+
+def run_model_train(payload):
+    import penaltyblog as pb
+
+    frame = _training_frame(payload)
+    model, model_name, spec = _fit_reproducible_model(pb, frame, payload)
+    artifact_path = _artifact_path(payload)
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = artifact_path.with_suffix(".pkl.tmp")
+    with temporary_path.open("wb") as artifact:
+        pickle.dump(model, artifact, protocol=pickle.HIGHEST_PROTOCOL)
+        artifact.flush()
+        os.fsync(artifact.fileno())
+    if temporary_path.stat().st_size > MAX_MODEL_ARTIFACT_BYTES:
+        temporary_path.unlink()
+        raise ValueError(f"model artifact exceeds the {MAX_MODEL_ARTIFACT_BYTES} byte limit")
+    os.replace(temporary_path, artifact_path)
+    params = _safe_params_metadata(model)
+    runtime = _runtime_details()
+    model_config_digest = _training_config_digest(payload, spec)
+    training_data_digest = _training_wire_digest(payload["matches"])
+    if payload.get("expected_model_config_digest") != model_config_digest:
+        raise ValueError("model configuration digest does not match the requested training input")
+    if payload.get("expected_training_data_digest") != training_data_digest:
+        raise ValueError("training data digest does not match the requested training input")
+    return {
+        "runtime_version": MODEL_RUNTIME_VERSION,
+        "model_class": model_name,
+        "training_rows": len(frame),
+        "artifact_path": str(artifact_path.relative_to(_model_artifact_root())),
+        "artifact_digest": _sha256_file(artifact_path),
+        "model_config_digest": model_config_digest,
+        "training_data_digest": training_data_digest,
+        "runtime_fingerprint": runtime["runtime_fingerprint"],
+        "runtime": runtime,
+        **params,
+    }
+
+
+def run_model_predict_batch(payload):
+    runtime = _runtime_details()
+    expected_runtime = payload.get("expected_runtime_fingerprint")
+    if expected_runtime != runtime["runtime_fingerprint"]:
+        raise ValueError("model artifact runtime verification failed; retraining is required")
+    expected_digest = payload.get("expected_artifact_digest")
+    if not isinstance(expected_digest, str) or len(expected_digest) != 64:
+        raise ValueError("expected_artifact_digest must be a SHA256 digest")
+    artifact_path = _artifact_path(payload, must_exist=True)
+    targets = payload.get("targets")
+    if not isinstance(targets, list) or not targets or len(targets) > MAX_BATCH_PREDICTIONS:
+        raise ValueError(f"targets must contain 1..{MAX_BATCH_PREDICTIONS} entries")
+    model, actual_digest = _read_verified_model_artifact(artifact_path, expected_digest)
+    home_teams = []
+    away_teams = []
+    for target in targets:
+        if not isinstance(target, dict) or not target.get("home_team") or not target.get("away_team"):
+            raise ValueError("each prediction target requires home_team and away_team")
+        home_teams.append(str(target["home_team"]))
+        away_teams.append(str(target["away_team"]))
+    if not hasattr(model, "predict_many"):
+        raise ValueError("trusted model does not support predict_many")
+    grids = list(model.predict_many(home_teams, away_teams, max_goals=int(payload.get("max_goals", 10))))
+    if len(grids) != len(home_teams):
+        raise ValueError("trusted model returned an incomplete prediction batch")
+    return {
+        "runtime_version": MODEL_RUNTIME_VERSION,
+        "runtime_fingerprint": runtime["runtime_fingerprint"],
+        "artifact_digest": actual_digest,
+        "predictions": [serialize_probability_grid(grid) for grid in grids],
+        "prediction_count": len(home_teams),
+    }
+
+
+def run_model_backtest_fold(payload):
+    import penaltyblog as pb
+
+    train = _training_frame(payload, "training_matches")
+    test = _training_frame(payload, "test_matches")
+    if len(test) > MAX_BACKTEST_PREDICTIONS:
+        raise ValueError(f"test_matches exceeds the {MAX_BACKTEST_PREDICTIONS} row limit")
+    cutoff = payload.get("training_cutoff_at") or payload.get("base_date")
+    if not isinstance(cutoff, str) or not cutoff:
+        raise ValueError("training_cutoff_at is required")
+    cutoff_at = pd.Timestamp(cutoff)
+    if cutoff_at.tzinfo is None:
+        raise ValueError("training_cutoff_at must be timezone-aware")
+    train_dates = pd.to_datetime(train["date"], utc=True)
+    test_dates = pd.to_datetime(test["date"], utc=True)
+    if (train_dates > cutoff_at).any() or (test_dates <= cutoff_at).any() or train_dates.max() >= test_dates.min():
+        raise ValueError("backtest fold must be strictly chronological around training_cutoff_at")
+    model_payload = dict(payload)
+    if model_payload.get("use_time_decay"):
+        model_payload["base_date"] = cutoff
+    model, model_name, _spec = _fit_reproducible_model(pb, train, model_payload)
+    home_teams = test["team_home"].astype(str).tolist()
+    away_teams = test["team_away"].astype(str).tolist()
+    if not hasattr(model, "predict_many"):
+        raise ValueError("approved model does not support predict_many")
+    grids = list(model.predict_many(home_teams, away_teams, max_goals=int(payload.get("max_goals", 10))))
+    if len(grids) != len(home_teams):
+        raise ValueError("approved model returned an incomplete backtest batch")
+    predictions = []
+    squared_errors = []
+    for row, grid in zip(test.to_dict(orient="records"), grids, strict=True):
+        actual = (
+            "home"
+            if row["goals_home"] > row["goals_away"]
+            else "away"
+            if row["goals_home"] < row["goals_away"]
+            else "draw"
+        )
+        probabilities = {"home": float(grid.home_win), "draw": float(grid.draw), "away": float(grid.away_win)}
+        squared_errors.append(sum((probabilities[key] - float(key == actual)) ** 2 for key in probabilities))
+        predictions.append(
+            {
+                "date": row["date"],
+                "home_team": row["team_home"],
+                "away_team": row["team_away"],
+                "actual": actual,
+                "probabilities": probabilities,
+            }
+        )
+    runtime = _runtime_details()
+    return {
+        "runtime_version": MODEL_RUNTIME_VERSION,
+        "runtime_fingerprint": runtime["runtime_fingerprint"],
+        "model_class": model_name,
+        "training_rows": len(train),
+        "test_rows": len(test),
+        "metrics": {"multiclass_brier": sum(squared_errors) / len(squared_errors)},
+        "predictions": predictions,
+    }
 
 
 def run_model_fit_predict(payload):
@@ -1277,6 +1723,10 @@ def run_bayesian_diagnostic_plots(payload):
 
 OPERATIONS = {
     "catalog": catalog,
+    "runtime_info": run_runtime_info,
+    "model_train": run_model_train,
+    "model_predict_batch": run_model_predict_batch,
+    "model_backtest_fold": run_model_backtest_fold,
     "model_fit_predict": run_model_fit_predict,
     "goal_expectancy": run_goal_expectancy,
     "goal_expectancy_extended": run_goal_expectancy_extended,
@@ -1321,13 +1771,16 @@ OPERATIONS = {
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--payload", required=True)
+    payload_group = parser.add_mutually_exclusive_group(required=True)
+    payload_group.add_argument("--payload")
+    payload_group.add_argument("--payload-file")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
 
     try:
         load_penaltyblog_paths()
-        request = json.loads(args.payload)
+        payload_json = Path(args.payload_file).read_text(encoding="utf-8") if args.payload_file else args.payload
+        request = json.loads(payload_json)
         operation = request["operation"]
         payload = request.get("payload", {})
 

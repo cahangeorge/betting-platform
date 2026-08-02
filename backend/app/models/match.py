@@ -18,6 +18,9 @@ class Match(Base):
         Index("ix_matches_status", "status"),
         Index("ix_matches_match_date", "match_date"),
         Index("ix_matches_competition", "competition"),
+        Index("ix_matches_home_team_id", "home_team_id"),
+        Index("ix_matches_away_team_id", "away_team_id"),
+        Index("ix_matches_competition_id", "competition_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -30,6 +33,11 @@ class Match(Base):
     status: Mapped[str] = mapped_column(String(50), default="scheduled", nullable=False)
     match_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     competition: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    home_team_id: Mapped[int | None] = mapped_column(ForeignKey("teams.id", ondelete="RESTRICT"), nullable=True)
+    away_team_id: Mapped[int | None] = mapped_column(ForeignKey("teams.id", ondelete="RESTRICT"), nullable=True)
+    competition_id: Mapped[int | None] = mapped_column(
+        ForeignKey("competitions.id", ondelete="RESTRICT"), nullable=True
+    )
     season: Mapped[str | None] = mapped_column(String(50), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(

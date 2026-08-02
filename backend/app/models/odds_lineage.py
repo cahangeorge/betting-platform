@@ -29,6 +29,12 @@ class OddsSnapshot(Base):
         Index("ix_odds_snapshots_match_observed", "match_id", "observed_at"),
         Index("ix_odds_snapshots_dataset_id", "dataset_id"),
         Index("ix_odds_snapshots_scrape_job_id", "scrape_job_id"),
+        Index("ix_odds_snapshots_provider_observation_id", "provider_observation_id"),
+        Index(
+            "uq_odds_snapshots_provider_observation_id",
+            "provider_observation_id",
+            unique=True,
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -39,10 +45,52 @@ class OddsSnapshot(Base):
         ForeignKey("scraped_datasets.id", ondelete="SET NULL"), nullable=True
     )
     scrape_job_id: Mapped[int | None] = mapped_column(ForeignKey("scrape_jobs.id", ondelete="SET NULL"), nullable=True)
+    # Legacy snapshots deliberately remain unlinked. New provider-backed odds
+    # snapshots carry immutable observation and contract provenance here.
+    provider_observation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("provider_observations.id", ondelete="RESTRICT"), nullable=True
+    )
+    contract_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    payload_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    mapping_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     quality: Mapped[str] = mapped_column(String(32), default="complete", nullable=False)
     metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+
+class OddsQuote(Base):
+    """Canonical, row-per-selection quote belonging to one odds snapshot.
+
+    ``OddsEntry`` remains the legacy 1X2 compatibility projection.  Provider
+    adapters must write this lossless representation instead of extending it.
+    """
+
+    __tablename__ = "odds_quotes"
+    __table_args__ = (
+        CheckConstraint("price > 1", name="ck_odds_quotes_price"),
+        UniqueConstraint("odds_snapshot_id", "identity_digest", name="uq_odds_quotes_snapshot_identity"),
+        Index("ix_odds_quotes_snapshot_id", "odds_snapshot_id"),
+        CheckConstraint("status IN ('active', 'suspended', 'stopped')", name="ck_odds_quotes_status"),
+        Index("ix_odds_quotes_market", "market_key", "period_key", "selection_key"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    odds_snapshot_id: Mapped[int] = mapped_column(ForeignKey("odds_snapshots.id", ondelete="RESTRICT"), nullable=False)
+    source_quote_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    provider_bookmaker_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    bookmaker_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    provider_market_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    market_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    period_key: Mapped[str] = mapped_column(String(64), nullable=False, server_default="full_time")
+    selection_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    identity_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    price: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
+    line: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
+    provider_updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="active")
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 class TicketLegQuoteSnapshot(Base):

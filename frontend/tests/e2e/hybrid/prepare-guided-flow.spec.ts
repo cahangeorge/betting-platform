@@ -27,3 +27,64 @@ test('Prepare offers a compact preset-first data collection flow', async ({ page
 		await cleanupSessionArtifacts(session);
 	}
 });
+
+test('Prepare paginates recent scrape jobs by the selected page and page size', async ({ browser }) => {
+	const context = await browser.newContext({ serviceWorkers: 'block' });
+	const page = await context.newPage();
+	const session = await createAuthenticatedSession(context);
+	const requestedPages: string[] = [];
+	const jobs = Array.from({ length: 25 }, (_, index) => {
+		const id = 25 - index;
+		return {
+			id,
+			job_type: 'scrape_odds',
+			status: 'completed',
+			league: null,
+			params: { command: 'historic' },
+			started_at: null,
+			completed_at: '2026-07-30T00:00:00Z',
+			output: null,
+			error: null,
+			created_at: `2026-07-${String(30 - index).padStart(2, '0')}T00:00:00Z`
+		};
+	});
+
+	await page.route('**/api/v1/data/scrape*', async (route) => {
+		const url = new URL(route.request().url());
+		const selectedPage = Number(url.searchParams.get('page') ?? '1');
+		const perPage = Number(url.searchParams.get('per_page') ?? '20');
+		const offset = (selectedPage - 1) * perPage;
+		requestedPages.push(url.search);
+		await route.fulfill({
+			status: 200,
+			contentType: 'application/json',
+			headers: {
+				'x-total-count': String(jobs.length),
+				'x-page': String(selectedPage),
+				'x-per-page': String(perPage)
+			},
+			body: JSON.stringify(jobs.slice(offset, offset + perPage))
+		});
+	});
+
+	try {
+		await page.goto('/prepare');
+		const jobsCard = page.locator('#jobs');
+
+		await expect(jobsCard.getByText('Se afișează 1–20 din 25 joburi.')).toBeVisible();
+		await jobsCard.getByLabel('Pagină').selectOption('2');
+		await expect(jobsCard.getByText('Se afișează 21–25 din 25 joburi.')).toBeVisible();
+
+		await jobsCard.getByLabel('Rânduri').selectOption('10');
+		await expect(jobsCard.getByText('Se afișează 1–10 din 25 joburi.')).toBeVisible();
+		await jobsCard.getByLabel('Pagină').selectOption('3');
+		await expect(jobsCard.getByText('Se afișează 21–25 din 25 joburi.')).toBeVisible();
+
+		expect(requestedPages).toContain('?page=2&per_page=20');
+		expect(requestedPages).toContain('?page=1&per_page=10');
+		expect(requestedPages).toContain('?page=3&per_page=10');
+	} finally {
+		await cleanupSessionArtifacts(session);
+		await context.close();
+	}
+});

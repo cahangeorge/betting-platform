@@ -102,7 +102,61 @@ async def test_taskiq_readiness_requires_fresh_worker_and_scheduler_heartbeats(m
     response = await main.readiness()
 
     assert response["task_runtime"] == "ready"
-    assert checked_roles == ["worker", "scheduler"]
+    assert checked_roles == [
+        "worker:control",
+        "worker:provider-http",
+        "worker:provider-browser",
+        "worker:model-cpu",
+        "scheduler",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_taskiq_readiness_checks_only_enabled_worker_lanes(monkeypatch):
+    connection = _Connection()
+    monkeypatch.setattr(main, "engine", _Engine(_ConnectionContext(connection=connection)))
+    monkeypatch.setattr(main.settings, "task_queue_backend", "taskiq")
+    monkeypatch.setattr(main.settings, "taskiq_enabled_lanes", ("control", "model-cpu"))
+    from app.tasks import runtime
+
+    async def ready_queue(*_args):
+        return None
+
+    checked_roles: list[str] = []
+
+    async def ready_role(role):
+        checked_roles.append(role)
+
+    monkeypatch.setattr(runtime, "task_queue_probe", ready_queue)
+    monkeypatch.setattr(runtime, "verify_any_runtime_role", ready_role)
+
+    response = await main.readiness()
+
+    assert response["task_runtime"] == "ready"
+    assert checked_roles == ["worker:control", "worker:model-cpu", "scheduler"]
+
+
+@pytest.mark.asyncio
+async def test_taskiq_readiness_does_not_require_disabled_provider_heartbeats(monkeypatch):
+    connection = _Connection()
+    monkeypatch.setattr(main, "engine", _Engine(_ConnectionContext(connection=connection)))
+    monkeypatch.setattr(main.settings, "task_queue_backend", "taskiq")
+    monkeypatch.setattr(main.settings, "taskiq_enabled_lanes", ("control",))
+    from app.tasks import runtime
+
+    async def ready_queue(*_args):
+        return None
+
+    async def control_and_scheduler_only(role):
+        if role not in {"worker:control", "scheduler"}:
+            raise AssertionError(f"readiness unexpectedly requested disabled role {role}")
+
+    monkeypatch.setattr(runtime, "task_queue_probe", ready_queue)
+    monkeypatch.setattr(runtime, "verify_any_runtime_role", control_and_scheduler_only)
+
+    response = await main.readiness()
+
+    assert response["task_runtime"] == "ready"
 
 
 def test_readiness_is_available_at_root_and_api_alias():

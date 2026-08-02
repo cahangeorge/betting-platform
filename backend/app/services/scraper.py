@@ -1,22 +1,25 @@
 import asyncio
+import hashlib
 import json
 import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any
-from urllib.parse import urlparse, urlsplit
+from typing import Any, TypedDict
+from urllib.parse import urlparse, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import event, inspect, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.live import broadcast_match_update, broadcast_odds_update
+from app.config import get_settings
 from app.models.football_catalog import FootballLeagueCatalog
 from app.models.job import ScheduledJobRun
 from app.models.match import Match, MatchSource, OddsEntry
 from app.models.odds_lineage import OddsSnapshot
-from app.models.scrape import ScrapedDataset, ScrapeJob, ScrapeJobLog
+from app.models.scrape import ScrapedDataset, ScrapeJob, ScrapeJobLog, ScraperRecipe, ScraperValidationCache
 from app.services.python_bridge import (
     BridgeError,
     OddsHarvesterJsonResult,
@@ -27,7 +30,17 @@ from app.services.python_bridge import (
 logger = logging.getLogger(__name__)
 
 ODDS_SOURCE = "OddsHarvester"
+settings = get_settings()
+DEFAULT_INGESTION_BATCH_SIZE = 250
 DEFAULT_MARKETS = ["1x2"]
+
+
+class OddsIngestResult(TypedDict):
+    written: int
+    changed: int
+    broadcast_payload: dict[str, Any] | None
+
+
 FOOTBALL_ALL_MARKETS = [
     "1x2",
     "btts",
@@ -120,19 +133,46 @@ LIVE_RELEVANT_ODDS_MARKETS = {"1x2", "home_away", "homeaway", "match_winner", "m
 FINAL_MATCH_STATUSES = {"finished", "ft", "fulltime", "completed", "final"}
 LOCALE_PATTERN = re.compile(r"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$")
 ANTI_BOT_MARKERS = ("anti-bot", "antibot", "captcha", "cloudflare", "challenge", "rate limit", "blocked")
+
+
+def _pipeline_v2_enabled_for_job(job_id: int | None, *, percent: int | None = None) -> bool:
+    configured_percent = getattr(settings, "scrape_pipeline_v2_percent", 0) if percent is None else percent
+    try:
+        if job_id is None:
+            return False
+        bucket_key = f"scrape-pipeline-v2:{int(job_id)}".encode()
+        bucket = int.from_bytes(hashlib.sha256(bucket_key).digest()[:8], "big") % 100
+        return bucket < int(configured_percent)
+    except (TypeError, ValueError):
+        return False
+
+
+def _selected_scraper_engine(job: ScrapeJob, *, v2_percent: int | None = None) -> tuple[str, bool]:
+    """Keep an explicit operator choice stable; canary jobs enter the auto cascade."""
+    configured = (job.params or {}).get("scraper_engine")
+    # `auto` is the normal UI default, not an opt-out: it only reaches the
+    # hybrid cascade for the deterministic rollout cohort.
+    if configured and str(configured) != "auto":
+        return str(configured), False
+    v2_active = _pipeline_v2_enabled_for_job(job.id, percent=v2_percent)
+    return ("auto", True) if v2_active else ("playwright", False)
+
+
 SUPPORTED_SCRAPE_JOB_TYPES = {"oddsportal", "scrape_odds", "refresh_results", "world_cup_pipeline"}
 BRIDGE_SCRAPE_JOB_TYPES = {"oddsportal", "scrape_odds", "refresh_results"}
 SUPPORTED_SCRAPE_COMMANDS = {"upcoming", "historic"}
 UPCOMING_DEDUP_MAX_AGE = timedelta(minutes=10)
 MAX_MATCH_LINKS = 100
 MAX_LEAGUES = 50
+MAX_HISTORIC_LEAGUES_PER_JOB = 5
+MAX_UPCOMING_LEAGUES_PER_JOB = 10
 MAX_MARKETS = 100
 MAX_SCRAPE_PARAMS_BYTES = 64 * 1024
 MAX_SCRAPE_PARAM_STRING_LENGTH = 2048
 MAX_SCRAPE_PARAM_KEY_LENGTH = 100
 MAX_SCRAPE_PARAM_COLLECTION_ITEMS = 100
 MAX_SCRAPE_PARAM_DEPTH = 8
-SUPPORTED_SCRAPER_ENGINES = {"playwright", "auto", "scrapling-http", "scrapling-stealth"}
+SUPPORTED_SCRAPER_ENGINES = {"playwright", "auto", "scrapling-http", "scrapling-stealth", "camoufox"}
 
 SENSITIVE_ARG_FLAGS = {
     "--password",
@@ -387,11 +427,7 @@ async def create_scrape_job(
     league: str | None = None,
     params: dict | None = None,
 ) -> ScrapeJob:
-    if league is not None and (
-        not isinstance(league, str)
-        or not league.strip()
-        or len(league.strip()) > 255
-    ):
+    if league is not None and (not isinstance(league, str) or not league.strip() or len(league.strip()) > 255):
         raise ValueError("league must be a non-empty string of at most 255 characters")
     normalized_params = _normalize_scrape_params(job_type, params)
     job = ScrapeJob(
@@ -737,23 +773,17 @@ def _validate_scrape_param_shape(value: Any, *, depth: int = 0) -> None:
         return
     if isinstance(value, str):
         if len(value) > MAX_SCRAPE_PARAM_STRING_LENGTH:
-            raise ValueError(
-                f"scrape param strings must be at most {MAX_SCRAPE_PARAM_STRING_LENGTH} characters"
-            )
+            raise ValueError(f"scrape param strings must be at most {MAX_SCRAPE_PARAM_STRING_LENGTH} characters")
         return
     if isinstance(value, list):
         if len(value) > MAX_SCRAPE_PARAM_COLLECTION_ITEMS:
-            raise ValueError(
-                f"scrape param lists must contain at most {MAX_SCRAPE_PARAM_COLLECTION_ITEMS} items"
-            )
+            raise ValueError(f"scrape param lists must contain at most {MAX_SCRAPE_PARAM_COLLECTION_ITEMS} items")
         for item in value:
             _validate_scrape_param_shape(item, depth=depth + 1)
         return
     if isinstance(value, dict):
         if len(value) > MAX_SCRAPE_PARAM_COLLECTION_ITEMS:
-            raise ValueError(
-                f"scrape param objects must contain at most {MAX_SCRAPE_PARAM_COLLECTION_ITEMS} keys"
-            )
+            raise ValueError(f"scrape param objects must contain at most {MAX_SCRAPE_PARAM_COLLECTION_ITEMS} keys")
         for key, item in value.items():
             if not isinstance(key, str) or not key or len(key) > MAX_SCRAPE_PARAM_KEY_LENGTH:
                 raise ValueError(
@@ -795,10 +825,7 @@ def _normalize_scrape_params(job_type: str, params: dict | None, *, now: datetim
         raise ValueError("Unsupported scrape command")
     normalized["command"] = command
     sport = normalized.get("sport", "football")
-    if (
-        not isinstance(sport, str)
-        or not re.fullmatch(r"[A-Za-z0-9_-]{1,50}", sport.strip())
-    ):
+    if not isinstance(sport, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,50}", sport.strip()):
         raise ValueError("sport must be a 1-50 character slug")
     normalized["sport"] = sport.strip()
 
@@ -827,16 +854,20 @@ def _normalize_scrape_params(job_type: str, params: dict | None, *, now: datetim
                 not isinstance(value, list)
                 or len(value) > limit
                 or any(
-                    not isinstance(item, str)
-                    or not item.strip()
-                    or len(item.strip()) > item_limit
-                    for item in value
+                    not isinstance(item, str) or not item.strip() or len(item.strip()) > item_limit for item in value
                 )
             ):
                 raise ValueError(
                     f"{key} must be a list of at most {limit} non-empty strings up to {item_limit} characters"
                 )
             normalized[key] = [item.strip() for item in value]
+
+    leagues = normalized.get("leagues") or []
+    league_limit = MAX_HISTORIC_LEAGUES_PER_JOB if command == "historic" else MAX_UPCOMING_LEAGUES_PER_JOB
+    if len(leagues) > league_limit:
+        raise ValueError(
+            f"{command} scrape jobs support at most {league_limit} leagues; split broader selections into bounded jobs"
+        )
 
     scraper_engine = normalized.get("scraper_engine")
     if scraper_engine is not None:
@@ -923,7 +954,9 @@ def _redact_sensitive_args(args: list[str]) -> list[str]:
     return redacted
 
 
-def _build_oddsharvester_args(job: ScrapeJob, *, league_override: list[str] | None = None) -> list[str]:
+def _build_oddsharvester_args(
+    job: ScrapeJob, *, league_override: list[str] | None = None, scraper_engine: str | None = None
+) -> list[str]:
     params = job.params or {}
     command = params.get("command", "upcoming")
     sport = str(params.get("sport", "football"))
@@ -1003,8 +1036,9 @@ def _build_oddsharvester_args(job: ScrapeJob, *, league_override: list[str] | No
     if params.get("request_delay"):
         args.extend(["--request-delay", str(params["request_delay"])])
 
-    if params.get("scraper_engine"):
-        args.extend(["--engine", str(params["scraper_engine"])])
+    effective_engine = scraper_engine or params.get("scraper_engine")
+    if effective_engine:
+        args.extend(["--engine", str(effective_engine)])
 
     base_url = _validated_base_url(params.get("base_url"))
     locale = _validated_locale(params.get("locale"))
@@ -1026,17 +1060,20 @@ def _job_oddsharvester_timeout(job: ScrapeJob) -> int | None:
 
 def _effective_oddsharvester_timeout(job: ScrapeJob, league_count: int) -> int | None:
     configured = _job_oddsharvester_timeout(job)
-    if str((job.params or {}).get("command", "upcoming")) != "historic":
+    command = str((job.params or {}).get("command", "upcoming"))
+    if command != "historic" and league_count <= 1:
         return configured
-    # Multi-league historic jobs include pagination and may legitimately exceed
-    # the generic 600s bridge default. Keep an upper bound while scaling with
-    # the validated league batch.
-    adaptive = min(3600, 600 + max(1, league_count) * 300)
+    # Multi-league jobs launch a browser across every selected competition.
+    # Historic runs also paginate Results pages, so they need a larger
+    # per-league allowance. Keep both paths bounded by the validated maximum.
+    seconds_per_league = 300 if command == "historic" else 90
+    adaptive = min(3600, 600 + max(1, league_count) * seconds_per_league)
     return max(configured or 0, adaptive)
 
 
 def _scrape_report_summary(report: dict, records: list[dict], *, cli_error: str | None = None) -> dict[str, Any]:
-    if report.get("schema_version") != "1.0":
+    schema_version = report.get("schema_version")
+    if schema_version not in {"1.0", "1.1"}:
         raise BridgeError("Unsupported OddsHarvester scrape report schema_version")
 
     scraper_status = report.get("status")
@@ -1063,7 +1100,7 @@ def _scrape_report_summary(report: dict, records: list[dict], *, cli_error: str 
     partial_count = _coerce_int(stats.get("partial")) or 0
 
     source_command = source.get("command") or report.get("command")
-    empty_upcoming = (
+    legacy_empty_upcoming = (
         source_command == "upcoming"
         and not records
         and not failure_count
@@ -1072,6 +1109,25 @@ def _scrape_report_summary(report: dict, records: list[dict], *, cli_error: str 
         and (stats.get("total_urls") or 0) == 0
         and cli_error is not None
     )
+    # v1.1 must explicitly attest the benign outcome; otherwise a missing
+    # output is indistinguishable from a bridge/parser failure.
+    if schema_version == "1.1" and report.get("outcome") == "no_fixtures":
+        no_fixtures_invariants = (
+            source_command == "upcoming"
+            and scraper_status == "success"
+            and not records
+            and (_coerce_int(stats.get("total_urls")) or 0) == 0
+            and (_coerce_int(stats.get("successful")) or 0) == 0
+            and failure_count == 0
+            and partial_count == 0
+            and not anti_bot_detected
+            and cli_error is None
+        )
+        if not no_fixtures_invariants:
+            raise BridgeError("OddsHarvester scrape report has inconsistent no_fixtures attestation")
+        empty_upcoming = True
+    else:
+        empty_upcoming = legacy_empty_upcoming if schema_version == "1.0" else False
 
     if empty_upcoming:
         # OddsHarvester exits non-zero when a date has no match links. That is
@@ -1094,8 +1150,8 @@ def _scrape_report_summary(report: dict, records: list[dict], *, cli_error: str 
     if isinstance(match_links, list):
         safe_source["match_link_count"] = len(match_links)
 
-    return {
-        "schema_version": "1.0",
+    summary = {
+        "schema_version": schema_version,
         "health": health,
         "scraper_status": scraper_status,
         "records": len(records),
@@ -1126,6 +1182,44 @@ def _scrape_report_summary(report: dict, records: list[dict], *, cli_error: str 
         "no_fixtures": empty_upcoming,
     }
 
+    if schema_version == "1.1":
+        known_fields = {
+            "schema_version",
+            "status",
+            "stats",
+            "failures",
+            "warnings",
+            "engines",
+            "source",
+            "timing",
+            "locale",
+            "timezone",
+            "command",
+            "outcome",
+        }
+        additive_metadata = {key: value for key, value in report.items() if key not in known_fields}
+        if additive_metadata:
+            summary["metadata"] = additive_metadata
+        # v1.1 has additive telemetry both at the top level and inside the
+        # engines object; preserve stable categories without dropping future keys.
+        expected_types = {
+            "attempts": list,
+            "fallbacks": list,
+            "cache": dict,
+            "recipe": dict,
+            "repair": dict,
+        }
+        for key, expected_type in expected_types.items():
+            value = additive_metadata.get(key, engines.get(key))
+            if value is not None:
+                if not isinstance(value, expected_type):
+                    raise BridgeError(f"OddsHarvester scrape report has invalid {key} telemetry")
+                summary[key] = value
+                if key in engines:
+                    summary["engines"][key] = value
+
+    return summary
+
 
 async def _persist_scrape_report_artifact(db: AsyncSession, scrape_job_id: int, report_summary: dict[str, Any]) -> None:
     result = await db.execute(select(ScheduledJobRun).where(ScheduledJobRun.scrape_job_id == scrape_job_id))
@@ -1138,20 +1232,11 @@ async def _persist_scrape_report_artifact(db: AsyncSession, scrape_job_id: int, 
 async def _run_oddsharvester_with_report(
     args: list[str], *, label: str, timeout: int | None, extra_env: dict[str, str] | None = None
 ) -> list[dict] | OddsHarvesterJsonResult:
+    """Run once with the report and rollout environment; never silently downgrade."""
     kwargs: dict[str, Any] = {"label": label, "timeout": timeout, "include_report": True}
     if extra_env:
         kwargs["extra_env"] = extra_env
-    try:
-        return await run_oddsharvester_json(args, **kwargs)
-    except TypeError as exc:
-        # Test doubles and older in-process callers may still expose the original
-        # list-only bridge signature. The external CLI fallback lives in python_bridge.
-        if "include_report" not in str(exc):
-            raise
-        fallback_kwargs: dict[str, Any] = {"label": label, "timeout": timeout}
-        if extra_env:
-            fallback_kwargs["extra_env"] = extra_env
-        return await run_oddsharvester_json(args, **fallback_kwargs)
+    return await run_oddsharvester_json(args, **kwargs)
 
 
 def _requested_scrape_league_slugs(job: ScrapeJob) -> set[str]:
@@ -1164,8 +1249,237 @@ def _requested_scrape_league_slugs(job: ScrapeJob) -> set[str]:
     return {job.league} if job.league else set()
 
 
+VALIDATION_CACHE_TTL = timedelta(hours=24)
+
+
+SENSITIVE_RECIPE_KEYS = {"cookie", "cookies", "authorization", "token", "password", "proxy", "secret"}
+MAX_RECIPE_BYTES = 32 * 1024
+MAX_RECIPE_DEPTH = 8
+MAX_RECIPE_ITEMS = 500
+
+
+def sanitize_scraper_recipe(value: Any) -> dict[str, Any]:
+    """Validate a persistable recipe: no browser state, bounded request metadata."""
+    try:
+        encoded = json.dumps(value, allow_nan=False, separators=(",", ":"))
+    except (TypeError, ValueError, RecursionError) as exc:
+        raise ValueError("scraper recipe must be bounded JSON") from exc
+    if len(encoded.encode("utf-8")) > MAX_RECIPE_BYTES:
+        raise ValueError(f"scraper recipe must be at most {MAX_RECIPE_BYTES} bytes")
+    if _recipe_item_count(value) > MAX_RECIPE_ITEMS:
+        raise ValueError(f"scraper recipe must contain at most {MAX_RECIPE_ITEMS} items")
+    cleaned = _sanitize_recipe_value(value)
+    if not isinstance(cleaned, dict):
+        raise ValueError("scraper recipe must be an object")
+    endpoint = cleaned.get("endpoint")
+    if endpoint is not None:
+        cleaned["endpoint"] = _validate_recipe_endpoint(endpoint)
+    method = cleaned.get("method", "GET")
+    if not isinstance(method, str) or method.upper() not in {"GET", "POST"}:
+        raise ValueError("scraper recipe method must be GET or POST")
+    headers = cleaned.get("headers", {})
+    cleaned["headers"] = _validate_recipe_headers(headers)
+    body = cleaned.get("body")
+    if body is not None and len(json.dumps(body, separators=(",", ":"))) > 8192:
+        raise ValueError("scraper recipe body must be at most 8192 bytes")
+    return cleaned
+
+
+def _validate_recipe_headers(value: Any) -> dict[str, str]:
+    """Persist only deterministic, non-secret content negotiation headers."""
+    if not isinstance(value, dict) or len(value) > 3:
+        raise ValueError("scraper recipe headers must contain only safe allowlisted values")
+    safe: dict[str, str] = {}
+    for key, header_value in value.items():
+        normalized = str(key).strip().lower()
+        if normalized not in {"accept", "accept-language", "content-type"}:
+            raise ValueError("scraper recipe headers must contain only safe allowlisted values")
+        if not isinstance(header_value, str) or not header_value.strip() or len(header_value) > 256:
+            raise ValueError("scraper recipe headers must contain only safe allowlisted values")
+        value_normalized = header_value.strip().lower()
+        if normalized == "content-type" and value_normalized not in {
+            "application/json",
+            "application/json; charset=utf-8",
+        }:
+            raise ValueError("scraper recipe headers must contain only safe allowlisted values")
+        if any(marker in value_normalized for marker in ("bearer", "token", "key=", "secret", "session")):
+            raise ValueError("scraper recipe headers must contain only safe allowlisted values")
+        safe[normalized] = header_value.strip()
+    return safe
+
+
+def _recipe_item_count(value: Any, *, depth: int = 0) -> int:
+    if depth > MAX_RECIPE_DEPTH:
+        raise ValueError(f"scraper recipe nesting must not exceed {MAX_RECIPE_DEPTH}")
+    if isinstance(value, dict):
+        return len(value) + sum(_recipe_item_count(item, depth=depth + 1) for item in value.values())
+    if isinstance(value, list):
+        return len(value) + sum(_recipe_item_count(item, depth=depth + 1) for item in value)
+    return 1
+
+
+def _sanitize_recipe_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        cleaned: dict[str, Any] = {}
+        for key, item in value.items():
+            normalized_key = str(key).lower().replace("-", "_")
+            if any(marker in normalized_key for marker in SENSITIVE_RECIPE_KEYS):
+                raise ValueError("scraper recipes must not contain cookies, credentials, tokens, or proxy secrets")
+            cleaned[str(key)] = _sanitize_recipe_value(item)
+        return cleaned
+    if isinstance(value, list):
+        return [_sanitize_recipe_value(item) for item in value]
+    if isinstance(value, str):
+        if len(value) > 8192 or any(marker in value.lower() for marker in ("bearer ", "session=", "password=")):
+            raise ValueError("scraper recipes must not contain secret values")
+        return value
+    if value is None or isinstance(value, (int, float, bool)):
+        return value
+    raise ValueError("scraper recipes must be JSON-compatible")
+
+
+def _validate_recipe_endpoint(value: Any) -> str:
+    if not isinstance(value, str) or len(value) > 2048:
+        raise ValueError("scraper recipe endpoint is invalid")
+    parsed = urlsplit(value)
+    if (
+        value.startswith("/")
+        and not value.startswith("//")
+        and not parsed.scheme
+        and not parsed.netloc
+        and not parsed.query
+        and not parsed.fragment
+    ):
+        return parsed.path
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("scraper recipe endpoint has an invalid port") from exc
+    hostname = parsed.hostname.lower() if parsed.hostname else None
+    if (
+        parsed.scheme == "https"
+        and hostname
+        and (hostname == "oddsportal.com" or hostname.endswith(".oddsportal.com"))
+        and parsed.username is None
+        and parsed.password is None
+        and port in {None, 443}
+        and not parsed.query
+        and not parsed.fragment
+    ):
+        return urlunsplit(("https", hostname, parsed.path or "/", "", ""))
+    raise ValueError("scraper recipe endpoint must be relative or HTTPS OddsPortal")
+
+
+async def create_scraper_recipe(
+    db: AsyncSession, *, recipe_key: str, engine: str, recipe: dict[str, Any], schema_version: str = "1.0"
+) -> ScraperRecipe:
+    sanitized = sanitize_scraper_recipe(recipe)
+    entry = ScraperRecipe(
+        recipe_key=recipe_key, engine=engine, schema_version=schema_version, status="candidate", recipe=sanitized
+    )
+    db.add(entry)
+    await db.flush()
+    return entry
+
+
+async def approve_scraper_recipe(
+    db: AsyncSession,
+    recipe: ScraperRecipe,
+    *,
+    approved_by: str,
+    verified_at: datetime,
+) -> ScraperRecipe:
+    if recipe.status != "candidate":
+        raise ValueError("only candidate scraper recipes can be approved")
+    if not approved_by.strip():
+        raise ValueError("scraper recipe approval requires an operator")
+    now = datetime.now(timezone.utc)
+    active_result = await db.execute(
+        select(ScraperRecipe)
+        .where(ScraperRecipe.recipe_key == recipe.recipe_key, ScraperRecipe.status == "active")
+        .with_for_update()
+    )
+    for active_recipe in active_result.scalars().all():
+        if active_recipe.id != recipe.id:
+            active_recipe.status = "disabled"
+            active_recipe.retired_at = now
+    recipe.status = "active"
+    recipe.verified_at = verified_at
+    recipe.approved_by = approved_by.strip()
+    recipe.approved_at = now
+    recipe.retired_at = None
+    await db.flush()
+    return recipe
+
+
+async def retire_scraper_recipe(db: AsyncSession, recipe: ScraperRecipe) -> ScraperRecipe:
+    if recipe.status != "active":
+        raise ValueError("only active scraper recipes can be retired")
+    recipe.status = "disabled"
+    recipe.retired_at = datetime.now(timezone.utc)
+    await db.flush()
+    return recipe
+
+
+def _validation_cache_is_fresh(entry: ScraperValidationCache, now: datetime) -> bool:
+    expires_at = entry.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return expires_at > now
+
+
+async def _persist_validation_cache(
+    db: AsyncSession,
+    *,
+    scrape_slug: str,
+    season: str,
+    status: str,
+    historic_url: str | None,
+    validated_at: datetime,
+    expires_at: datetime,
+) -> None:
+    get_bind = getattr(db, "get_bind", None)
+    bind = get_bind() if callable(get_bind) else None
+    if getattr(getattr(bind, "dialect", None), "name", None) == "postgresql":
+        statement = pg_insert(ScraperValidationCache).values(
+            scrape_slug=scrape_slug,
+            season=season,
+            status=status,
+            historic_url=historic_url,
+            validated_at=validated_at,
+            expires_at=expires_at,
+        )
+        statement = statement.on_conflict_do_update(
+            index_elements=[ScraperValidationCache.scrape_slug, ScraperValidationCache.season],
+            set_={
+                "status": statement.excluded.status,
+                "historic_url": statement.excluded.historic_url,
+                "validated_at": statement.excluded.validated_at,
+                "expires_at": statement.excluded.expires_at,
+            },
+        )
+        await db.execute(statement)
+        return
+    add = getattr(db, "add", None)
+    if callable(add):
+        add(
+            ScraperValidationCache(
+                scrape_slug=scrape_slug,
+                season=season,
+                status=status,
+                historic_url=historic_url,
+                validated_at=validated_at,
+                expires_at=expires_at,
+            )
+        )
+
+
 async def _runtime_catalog_league_env(db: AsyncSession, job: ScrapeJob) -> RuntimeCatalogResolution:
-    """Inject only Results-page-validated dynamic leagues into this CLI process."""
+    """Inject validated football catalog URLs and reuse fresh historic Results-page checks.
+
+    The cache contains only slug/season/status/URL timestamps. Browser cookies, headers,
+    and credentials remain process-local and are deliberately never persisted.
+    """
     params = job.params or {}
     if str(params.get("sport", "football")) != "football":
         return RuntimeCatalogResolution({})
@@ -1190,12 +1504,64 @@ async def _runtime_catalog_league_env(db: AsyncSession, job: ScrapeJob) -> Runti
     season = str(params.get("season") or "").strip()
     if not season:
         raise ValueError("Historic scraping requires a season for runtime-validated leagues")
-    results = await validate_oddsharvester_football_catalog(
-        [{"scrape_slug": slug, "source_url": url} for slug, url in mapping.items()],
-        season=season,
+    now = datetime.now(timezone.utc)
+    cached_result = await db.execute(
+        select(ScraperValidationCache).where(
+            ScraperValidationCache.scrape_slug.in_(mapping),
+            ScraperValidationCache.season == season,
+        )
     )
-    by_slug = {str(result.get("scrape_slug")): result for result in results}
-    unavailable = sorted(slug for slug in mapping if by_slug.get(slug, {}).get("status") != "available")
+    cache_rows = {
+        row.scrape_slug: row for row in cached_result.scalars().all() if isinstance(row, ScraperValidationCache)
+    }
+    cached = {slug: row for slug, row in cache_rows.items() if _validation_cache_is_fresh(row, now)}
+    missing = {slug: url for slug, url in mapping.items() if slug not in cached}
+    validated_results: dict[str, dict[str, Any]] = {
+        slug: {"scrape_slug": slug, "status": row.status, "historic_url": row.historic_url}
+        for slug, row in cached.items()
+    }
+    if missing:
+        results = await validate_oddsharvester_football_catalog(
+            [{"scrape_slug": slug, "source_url": url} for slug, url in missing.items()],
+            timeout=_effective_oddsharvester_timeout(job, len(missing)),
+            season=season,
+        )
+        by_slug = {str(item.get("scrape_slug")): item for item in results if isinstance(item, dict)}
+        for slug in missing:
+            result_item = by_slug.get(slug, {"scrape_slug": slug, "status": "unavailable"})
+            status = str(result_item.get("status") or "unavailable")
+            historic_url = result_item.get("historic_url") if status == "available" else None
+            cache_entry = cache_rows.get(slug)
+            if cache_entry is None:
+                normalized_historic_url = str(historic_url) if isinstance(historic_url, str) and historic_url else None
+                await _persist_validation_cache(
+                    db,
+                    scrape_slug=slug,
+                    season=season,
+                    status=status,
+                    historic_url=normalized_historic_url,
+                    validated_at=now,
+                    expires_at=now + VALIDATION_CACHE_TTL,
+                )
+                cache_entry = ScraperValidationCache(
+                    scrape_slug=slug,
+                    season=season,
+                    status=status,
+                    historic_url=normalized_historic_url,
+                    validated_at=now,
+                    expires_at=now + VALIDATION_CACHE_TTL,
+                )
+            cache_entry.status = status
+            cache_entry.historic_url = str(historic_url) if isinstance(historic_url, str) and historic_url else None
+            cache_entry.validated_at = now
+            cache_entry.expires_at = now + VALIDATION_CACHE_TTL
+            validated_results[slug] = {
+                "scrape_slug": slug,
+                "status": status,
+                "historic_url": cache_entry.historic_url,
+            }
+
+    unavailable = sorted(slug for slug in mapping if validated_results.get(slug, {}).get("status") != "available")
     validated_dynamic_slugs = sorted(set(mapping) - set(unavailable))
     passthrough_slugs = sorted(slugs - set(mapping))
     validated_slugs = [*passthrough_slugs, *validated_dynamic_slugs]
@@ -1205,14 +1571,14 @@ async def _runtime_catalog_league_env(db: AsyncSession, job: ScrapeJob) -> Runti
     env["ODDSHARVESTER_RUNTIME_FOOTBALL_LEAGUES"] = json.dumps(mapping)
     historic_urls = {
         slug: {season: historic_url}
-        for slug, result in by_slug.items()
+        for slug, result_item in validated_results.items()
         if slug in validated_dynamic_slugs
-        and isinstance(historic_url := result.get("historic_url"), str)
+        and isinstance(historic_url := result_item.get("historic_url"), str)
         and historic_url
     }
     if len(historic_urls) != len(validated_dynamic_slugs):
-        missing = sorted(set(validated_dynamic_slugs) - set(historic_urls))
-        raise ValueError("Historic validator returned no exact Results URL for: " + ", ".join(missing))
+        missing_urls = sorted(set(validated_dynamic_slugs) - set(historic_urls))
+        raise ValueError("Historic validator returned no exact Results URL for: " + ", ".join(missing_urls))
     env["ODDSHARVESTER_RUNTIME_FOOTBALL_HISTORIC_URLS"] = json.dumps(historic_urls)
     return RuntimeCatalogResolution(
         env,
@@ -1221,23 +1587,308 @@ async def _runtime_catalog_league_env(db: AsyncSession, job: ScrapeJob) -> Runti
     )
 
 
-async def _upsert_match_from_record(db: AsyncSession, record: dict, sport: str) -> tuple[Match, bool, bool]:
-    match_link = record.get("match_link")
-    source_id = _extract_source_id(match_link)
+def _chunked(iterable: list[Any], size: int):
+    for offset in range(0, len(iterable), size):
+        yield iterable[offset : offset + size]
 
-    match: Match | None = None
-    if match_link:
-        source_stmt = select(MatchSource).where(MatchSource.source == ODDS_SOURCE, MatchSource.url == match_link)
-        source_result = await db.execute(source_stmt)
-        source = source_result.scalar_one_or_none()
-        if source is not None:
-            match = await db.get(Match, source.match_id)
+
+async def _preload_match_context(
+    db: AsyncSession,
+    records: list[dict],
+) -> tuple[dict[str, Match], dict[str, Match], dict[int, MatchSource | None]]:
+    match_links: set[str] = set()
+    source_ids: set[str] = set()
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        link = record.get("match_link")
+        if isinstance(link, str):
+            link = link.strip()
+            if link:
+                match_links.add(link)
+        source_id = _extract_source_id(record.get("match_link"))
+        if source_id:
+            source_ids.add(source_id)
+
+    source_map: dict[str, Match] = {}
+    external_map: dict[str, Match] = {}
+    if match_links:
+        source_rows = await db.execute(
+            select(MatchSource, Match)
+            .join(Match, Match.id == MatchSource.match_id)
+            .where(MatchSource.source == ODDS_SOURCE, MatchSource.url.in_(sorted(match_links)))
+        )
+        for source, match in source_rows.all():
+            if source.url:
+                source_map[source.url] = match
+
+    if source_ids:
+        external_rows = await db.execute(select(Match).where(Match.external_id.in_(sorted(source_ids))))
+        for match in external_rows.scalars().all():
+            if match.external_id:
+                external_map[match.external_id] = match
+
+    match_ids = {match.id for match in source_map.values()} | {match.id for match in external_map.values()}
+    source_by_match: dict[int, MatchSource | None] = {}
+    if match_ids:
+        rows = await db.execute(
+            select(MatchSource).where(MatchSource.source == ODDS_SOURCE, MatchSource.match_id.in_(sorted(match_ids)))
+        )
+        source_by_match = {source.match_id: source for source in rows.scalars().all()}
+    return source_map, external_map, source_by_match
+
+
+def _iter_record_odds(
+    record: dict, match: Match | None
+) -> list[tuple[int, str, str, datetime, float | None, float | None, float | None]]:
+    if match is None or match.id is None:
+        return []
+    scrape_timestamp = _coerce_datetime(record.get("scraped_date")) or datetime.now(timezone.utc)
+    rows: list[tuple[int, str, str, datetime, float | None, float | None, float | None]] = []
+    for market_key, market_rows in record.items():
+        if not market_key.endswith("_market") or not isinstance(market_rows, list):
+            continue
+        for bookmaker_market in market_rows:
+            if not isinstance(bookmaker_market, dict):
+                continue
+            home_odds, draw_odds, away_odds = _market_key_to_odds(market_key, bookmaker_market)
+            if home_odds is None and draw_odds is None and away_odds is None:
+                continue
+            market_name = _normalize_market_name(market_key, bookmaker_market)
+            bookmaker = str(bookmaker_market.get("bookmaker_name", "Unknown"))
+            rows.append((match.id, bookmaker, market_name, scrape_timestamp, home_odds, draw_odds, away_odds))
+    return rows
+
+
+def _snapshot_source_key(
+    match_id: int,
+    observed_at: datetime,
+    *,
+    dataset_id: int | None,
+    scrape_job_id: int | None,
+) -> str:
+    if scrape_job_id is not None:
+        scope = f"job:{scrape_job_id}"
+    elif dataset_id is not None:
+        scope = f"dataset:{dataset_id}"
+    else:
+        scope = "legacy"
+    return f"{scope}:match:{match_id}:observed:{observed_at.isoformat()}"
+
+
+async def _preload_odds_context(
+    db: AsyncSession,
+    odds_rows: list[tuple[int, str, str, datetime, float | None, float | None, float | None]],
+    *,
+    dataset_id: int | None,
+    scrape_job_id: int | None,
+) -> tuple[dict[tuple[str, str, str, datetime], OddsEntry], dict[str, OddsSnapshot]]:
+    existing_odds: dict[tuple[str, str, str, datetime], OddsEntry] = {}
+    existing_snapshots: dict[str, OddsSnapshot] = {}
+
+    if odds_rows:
+        snapshot_keys = list(
+            {
+                _snapshot_source_key(
+                    match_id,
+                    timestamp,
+                    dataset_id=dataset_id,
+                    scrape_job_id=scrape_job_id,
+                )
+                for match_id, _, _, timestamp, *_ in odds_rows
+            }
+        )
+        for key_chunk in _chunked(snapshot_keys, DEFAULT_INGESTION_BATCH_SIZE):
+            snapshot_result = await db.execute(
+                select(OddsSnapshot).where(OddsSnapshot.source == ODDS_SOURCE, OddsSnapshot.source_key.in_(key_chunk))
+            )
+            existing_snapshots.update({snapshot.source_key: snapshot for snapshot in snapshot_result.scalars().all()})
+
+        snapshots_by_id = {snapshot.id: snapshot for snapshot in existing_snapshots.values() if snapshot.id is not None}
+        for id_chunk in _chunked(list(snapshots_by_id), DEFAULT_INGESTION_BATCH_SIZE):
+            odds_result = await db.execute(select(OddsEntry).where(OddsEntry.odds_snapshot_id.in_(id_chunk)))
+            for entry in odds_result.scalars().all():
+                snapshot = snapshots_by_id.get(entry.odds_snapshot_id)
+                if snapshot is not None and entry.timestamp is not None:
+                    existing_odds[(snapshot.source_key, entry.bookmaker, entry.market, entry.timestamp)] = entry
+
+    return existing_odds, existing_snapshots
+
+
+async def _ingest_record_odds(
+    db: AsyncSession,
+    *,
+    record: dict,
+    match: Match,
+    dataset_id: int | None,
+    scrape_job_id: int | None,
+    existing_odds: dict[tuple[str, str, str, datetime], OddsEntry],
+    existing_snapshots: dict[str, OddsSnapshot],
+) -> OddsIngestResult:
+    written = 0
+    changed = 0
+    broadcast_payload: dict[str, Any] | None = None
+
+    for match_id, bookmaker, market_name, scrape_timestamp, home_odds, draw_odds, away_odds in _iter_record_odds(
+        record, match
+    ):
+        source_key = _snapshot_source_key(
+            match_id,
+            scrape_timestamp,
+            dataset_id=dataset_id,
+            scrape_job_id=scrape_job_id,
+        )
+        snapshot = existing_snapshots.get(source_key)
+        if snapshot is None:
+            snapshot = OddsSnapshot(
+                match_id=match.id,
+                source=ODDS_SOURCE,
+                source_key=source_key,
+                dataset_id=dataset_id,
+                scrape_job_id=scrape_job_id,
+                observed_at=scrape_timestamp,
+                quality="complete",
+                metadata_json={"match_link": record.get("match_link")},
+            )
+            db.add(snapshot)
+            existing_snapshots[source_key] = snapshot
+
+        odds_key = (source_key, bookmaker, market_name, scrape_timestamp)
+        existing = existing_odds.get(odds_key)
+        if existing is None:
+            entry = OddsEntry(
+                match_id=match.id,
+                odds_snapshot_id=snapshot.id,
+                odds_snapshot=snapshot,
+                bookmaker=bookmaker,
+                market=market_name,
+                home_odds=home_odds,
+                draw_odds=draw_odds,
+                away_odds=away_odds,
+                timestamp=scrape_timestamp,
+            )
+            db.add(entry)
+            existing_odds[odds_key] = entry
+            written += 1
+            changed += 1
+            if _is_live_relevant_market(market_name):
+                broadcast_payload = _build_odds_update_payload(
+                    match=match,
+                    bookmaker=bookmaker,
+                    market=market_name,
+                    home_odds=home_odds,
+                    draw_odds=draw_odds,
+                    away_odds=away_odds,
+                    timestamp=scrape_timestamp,
+                )
+        else:
+            entry_changed = existing.odds_snapshot_id != snapshot.id or any(
+                (
+                    existing.home_odds != home_odds,
+                    existing.draw_odds != draw_odds,
+                    existing.away_odds != away_odds,
+                    existing.timestamp != scrape_timestamp,
+                )
+            )
+            existing.odds_snapshot = snapshot
+            existing.home_odds = home_odds
+            existing.draw_odds = draw_odds
+            existing.away_odds = away_odds
+            existing.timestamp = scrape_timestamp
+            if entry_changed:
+                changed += 1
+                if _is_live_relevant_market(market_name):
+                    broadcast_payload = _build_odds_update_payload(
+                        match=match,
+                        bookmaker=bookmaker,
+                        market=market_name,
+                        home_odds=home_odds,
+                        draw_odds=draw_odds,
+                        away_odds=away_odds,
+                        timestamp=scrape_timestamp,
+                    )
+
+    return {
+        "written": written,
+        "changed": changed,
+        "broadcast_payload": broadcast_payload,
+    }
+
+
+async def _ingest_match_odds(
+    db: AsyncSession,
+    match: Match,
+    record: dict,
+    *,
+    dataset_id: int | None = None,
+    scrape_job_id: int | None = None,
+) -> OddsIngestResult:
+    """Compatibility entrypoint for single-record callers.
+
+    Batched ingestion uses the preloaded helper below; this keeps the prior
+    public-internal helper semantics (including snapshot lineage) for focused
+    callers and regression tests.
+    """
+    rows = _iter_record_odds(record, match)
+    if not rows:
+        return {"written": 0, "changed": 0, "broadcast_payload": None}
+    timestamp = rows[0][3]
+    source_key = _snapshot_source_key(
+        match.id,
+        timestamp,
+        dataset_id=dataset_id,
+        scrape_job_id=scrape_job_id,
+    )
+    snapshot_result = await db.execute(
+        select(OddsSnapshot).where(OddsSnapshot.source == ODDS_SOURCE, OddsSnapshot.source_key == source_key)
+    )
+    snapshot = snapshot_result.scalar_one_or_none()
+    if snapshot is None:
+        snapshot = OddsSnapshot(
+            match_id=match.id,
+            source=ODDS_SOURCE,
+            source_key=source_key,
+            dataset_id=dataset_id,
+            scrape_job_id=scrape_job_id,
+            observed_at=timestamp,
+            quality="complete",
+            metadata_json={"match_link": record.get("match_link")},
+        )
+        db.add(snapshot)
+        await db.flush()
+    existing_odds: dict[tuple[str, str, str, datetime], OddsEntry] = {}
+    existing_snapshots = {source_key: snapshot}
+    return await _ingest_record_odds(
+        db,
+        record=record,
+        match=match,
+        dataset_id=dataset_id,
+        scrape_job_id=scrape_job_id,
+        existing_odds=existing_odds,
+        existing_snapshots=existing_snapshots,
+    )
+
+
+async def _upsert_match_from_record(
+    db: AsyncSession,
+    record: dict,
+    sport: str,
+    *,
+    source_by_url: dict[str, Match],
+    external_by_source_id: dict[str, Match],
+    source_by_match_id: dict[int, MatchSource | None],
+) -> tuple[Match, bool, bool]:
+    match_link = record.get("match_link")
+    if isinstance(match_link, str) and match_link.strip() in source_by_url:
+        match = source_by_url[match_link.strip()]
+    else:
+        match = None
+
+    source_id = _extract_source_id(match_link)
+    if match is None and source_id and source_id in external_by_source_id:
+        match = external_by_source_id[source_id]
 
     match_date = _coerce_datetime(record.get("match_date"))
-    if match is None and source_id:
-        match_stmt = select(Match).where(Match.external_id == source_id)
-        match_result = await db.execute(match_stmt)
-        match = match_result.scalar_one_or_none()
 
     previous_snapshot = _match_broadcast_snapshot(match)
 
@@ -1250,6 +1901,11 @@ async def _upsert_match_from_record(db: AsyncSession, record: dict, sport: str) 
         )
         db.add(match)
         await db.flush()
+        # Populate match caches so follow-up records in the same chunk reuse it.
+        if source_id:
+            external_by_source_id[source_id] = match
+        if match_link and isinstance(match_link, str):
+            source_by_url[match_link.strip()] = match
 
     final_score_conflict = _has_conflicting_final_score(match, record)
     status, home_score, away_score = _resolve_match_result(match, record, match_date)
@@ -1264,152 +1920,29 @@ async def _upsert_match_from_record(db: AsyncSession, record: dict, sport: str) 
     match.competition = record.get("league_name") or match.competition
     match.status = status
 
-    source_stmt = select(MatchSource).where(MatchSource.match_id == match.id, MatchSource.source == ODDS_SOURCE)
-    source_result = await db.execute(source_stmt)
-    existing_source = source_result.scalar_one_or_none()
+    existing_source = source_by_match_id.get(match.id)
     if existing_source is None:
-        db.add(
-            MatchSource(
-                match_id=match.id,
-                source=ODDS_SOURCE,
-                source_id=source_id,
-                url=match_link,
-            )
+        existing_source = MatchSource(
+            match_id=match.id,
+            source=ODDS_SOURCE,
+            source_id=source_id,
+            url=match_link,
         )
+        source_by_match_id[match.id] = existing_source
+        db.add(existing_source)
     else:
         existing_source.source_id = source_id or existing_source.source_id
-        existing_source.url = match_link or existing_source.url
+        if match_link:
+            existing_source.url = str(match_link)
+
+    if match_link and isinstance(match_link, str):
+        source_by_url[match_link.strip()] = match
+    if source_id:
+        external_by_source_id[source_id] = match
 
     await db.flush()
     current_snapshot = _match_broadcast_snapshot(match)
     return match, previous_snapshot != current_snapshot, final_score_conflict
-
-
-async def _ingest_match_odds(
-    db: AsyncSession,
-    match: Match,
-    record: dict,
-    *,
-    dataset_id: int | None = None,
-    scrape_job_id: int | None = None,
-) -> dict[str, int | dict[str, Any] | None]:
-    written = 0
-    changed = 0
-    broadcast_payload: dict[str, Any] | None = None
-    scrape_timestamp = _coerce_datetime(record.get("scraped_date")) or datetime.now(timezone.utc)
-    snapshot: OddsSnapshot | None = None
-    snapshot_source_key = f"match:{match.id}:observed:{scrape_timestamp.isoformat()}"
-
-    for market_key, market_rows in record.items():
-        if not market_key.endswith("_market") or not isinstance(market_rows, list):
-            continue
-
-        for bookmaker_market in market_rows:
-            if not isinstance(bookmaker_market, dict):
-                continue
-
-            home_odds, draw_odds, away_odds = _market_key_to_odds(market_key, bookmaker_market)
-            if home_odds is None and draw_odds is None and away_odds is None:
-                continue
-
-            market_name = _normalize_market_name(market_key, bookmaker_market)
-            bookmaker = str(bookmaker_market.get("bookmaker_name", "Unknown"))
-
-            if snapshot is None:
-                snapshot_result = await db.execute(
-                    select(OddsSnapshot).where(
-                        OddsSnapshot.source == ODDS_SOURCE,
-                        OddsSnapshot.source_key == snapshot_source_key,
-                    )
-                )
-                snapshot = snapshot_result.scalar_one_or_none()
-                if snapshot is None:
-                    snapshot = OddsSnapshot(
-                        match_id=match.id,
-                        source=ODDS_SOURCE,
-                        source_key=snapshot_source_key,
-                        dataset_id=dataset_id,
-                        scrape_job_id=scrape_job_id,
-                        observed_at=scrape_timestamp,
-                        quality="complete",
-                        metadata_json={"match_link": record.get("match_link")},
-                    )
-                    db.add(snapshot)
-                    await db.flush()
-                # A source key can be revisited by replayed ingestion. Backfill
-                # missing lineage without rewriting the original provenance.
-                if hasattr(snapshot, "dataset_id") and snapshot.dataset_id is None:
-                    snapshot.dataset_id = dataset_id
-                if hasattr(snapshot, "scrape_job_id") and snapshot.scrape_job_id is None:
-                    snapshot.scrape_job_id = scrape_job_id
-
-            existing_stmt = select(OddsEntry).where(
-                OddsEntry.match_id == match.id,
-                OddsEntry.bookmaker == bookmaker,
-                OddsEntry.market == market_name,
-                OddsEntry.timestamp == scrape_timestamp,
-            )
-            existing_result = await db.execute(existing_stmt)
-            existing = existing_result.scalar_one_or_none()
-
-            if existing is None:
-                db.add(
-                    OddsEntry(
-                        match_id=match.id,
-                        odds_snapshot_id=snapshot.id,
-                        bookmaker=bookmaker,
-                        market=market_name,
-                        home_odds=home_odds,
-                        draw_odds=draw_odds,
-                        away_odds=away_odds,
-                        timestamp=scrape_timestamp,
-                    )
-                )
-                written += 1
-                changed += 1
-                if _is_live_relevant_market(market_name):
-                    broadcast_payload = _build_odds_update_payload(
-                        match=match,
-                        bookmaker=bookmaker,
-                        market=market_name,
-                        home_odds=home_odds,
-                        draw_odds=draw_odds,
-                        away_odds=away_odds,
-                        timestamp=scrape_timestamp,
-                    )
-            else:
-                entry_changed = existing.odds_snapshot_id != snapshot.id or any(
-                    (
-                        existing.home_odds != home_odds,
-                        existing.draw_odds != draw_odds,
-                        existing.away_odds != away_odds,
-                        existing.timestamp != scrape_timestamp,
-                    )
-                )
-                existing.odds_snapshot_id = snapshot.id
-                existing.home_odds = home_odds
-                existing.draw_odds = draw_odds
-                existing.away_odds = away_odds
-                existing.timestamp = scrape_timestamp
-                if entry_changed:
-                    changed += 1
-                    if _is_live_relevant_market(market_name):
-                        broadcast_payload = _build_odds_update_payload(
-                            match=match,
-                            bookmaker=bookmaker,
-                            market=market_name,
-                            home_odds=home_odds,
-                            draw_odds=draw_odds,
-                            away_odds=away_odds,
-                            timestamp=scrape_timestamp,
-                        )
-
-    await db.flush()
-    return {
-        "written": written,
-        "changed": changed,
-        "broadcast_payload": broadcast_payload,
-    }
 
 
 async def _ingest_scraped_payload(
@@ -1454,38 +1987,93 @@ async def _ingest_scraped_payload(
     final_score_conflicts = 0
     match_updates: dict[int, dict[str, Any]] = {}
     odds_updates: dict[int, dict[str, Any]] = {}
-    for record in payload:
-        if not isinstance(record, dict):
-            skipped_records += 1
-            continue
-        match, match_changed, final_score_conflict = await _upsert_match_from_record(db, record, sport=sport)
-        matches_written += 1
-        if final_score_conflict:
-            final_score_conflicts += 1
-            await append_scrape_job_log(
-                db,
-                job.id,
-                action="final_score_conflict",
-                level="warning",
-                message=f"Retained persisted final score for match {match.id}; refresh reported a conflicting score",
-                metadata={
-                    "match_id": match.id,
-                    "persisted_score": {"home": match.home_score, "away": match.away_score},
-                    "incoming_score": {
-                        "home": _coerce_int(record.get("home_score")),
-                        "away": _coerce_int(record.get("away_score")),
-                    },
-                },
-            )
-        odds_result = await _ingest_match_odds(db, match, record, dataset_id=dataset.id, scrape_job_id=job.id)
-        odds_written += int(odds_result["written"])
 
-        if _is_live_relevant_match(match):
-            if match_changed:
+    valid_records: list[dict] = [record for record in payload if isinstance(record, dict)]
+    skipped_records = len(payload) - len(valid_records)
+
+    for chunk in _chunked(valid_records, DEFAULT_INGESTION_BATCH_SIZE):
+        source_by_url, external_by_source_id, source_by_match_id = await _preload_match_context(db, chunk)
+
+        prepared: list[tuple[dict, Match, bool]] = []
+        for record in chunk:
+            match, match_changed, final_score_conflict = await _upsert_match_from_record(
+                db,
+                record,
+                sport,
+                source_by_url=source_by_url,
+                external_by_source_id=external_by_source_id,
+                source_by_match_id=source_by_match_id,
+            )
+            prepared.append((record, match, match_changed))
+            matches_written += 1
+            if final_score_conflict:
+                final_score_conflicts += 1
+                await append_scrape_job_log(
+                    db,
+                    job.id,
+                    action="final_score_conflict",
+                    level="warning",
+                    message=(
+                        f"Retained persisted final score for match {match.id}; refresh reported a conflicting score"
+                    ),
+                    metadata={
+                        "match_id": match.id,
+                        "persisted_score": {"home": match.home_score, "away": match.away_score},
+                        "incoming_score": {
+                            "home": _coerce_int(record.get("home_score")),
+                            "away": _coerce_int(record.get("away_score")),
+                        },
+                    },
+                )
+
+            if _is_live_relevant_match(match) and match_changed:
                 match_updates[match.id] = _build_match_update_payload(match)
+
+        chunk_odds_rows: list[tuple[int, str, str, datetime, float | None, float | None, float | None]] = []
+        for record, match, _ in prepared:
+            chunk_odds_rows.extend(_iter_record_odds(record, match))
+        existing_odds, existing_snapshots = await _preload_odds_context(
+            db,
+            chunk_odds_rows,
+            dataset_id=dataset.id,
+            scrape_job_id=job.id,
+        )
+
+        for record, match, _ in prepared:
+            if not _is_live_relevant_match(match):
+                continue
+            odds_result = await _ingest_record_odds(
+                db,
+                record=record,
+                match=match,
+                dataset_id=dataset.id,
+                scrape_job_id=job.id,
+                existing_odds=existing_odds,
+                existing_snapshots=existing_snapshots,
+            )
+            odds_written += int(odds_result["written"])
             odds_payload = odds_result.get("broadcast_payload")
             if odds_payload:
                 odds_updates[match.id] = odds_payload
+
+        # For non-live matches we still need to persist odds and snapshot lineage.
+        for record, match, _ in prepared:
+            if _is_live_relevant_match(match):
+                continue
+            odds_result = await _ingest_record_odds(
+                db,
+                record=record,
+                match=match,
+                dataset_id=dataset.id,
+                scrape_job_id=job.id,
+                existing_odds=existing_odds,
+                existing_snapshots=existing_snapshots,
+            )
+            odds_written += int(odds_result["written"])
+            if (odds_payload := odds_result.get("broadcast_payload")) is not None:
+                odds_updates[match.id] = odds_payload
+
+        await db.flush()
 
     await append_scrape_job_log(
         db,
@@ -1510,6 +2098,86 @@ async def _ingest_scraped_payload(
         match_updates,
         odds_updates,
     )
+
+
+def _scrape_exception_failure_kind(exc: Exception) -> str:
+    """Reduce scraper failures to the bounded worker retry taxonomy."""
+    if isinstance(exc, TimeoutError):
+        return "timeout"
+    if not isinstance(exc, BridgeError):
+        return "validation" if isinstance(exc, ValueError) else "internal"
+
+    if exc.failure_kind:
+        return exc.failure_kind
+
+    message = str(exc).lower()
+    if "timed out" in message or "timeout" in message:
+        return "timeout"
+    if "429" in message or "rate limit" in message:
+        return "provider_429"
+    if any(code in message for code in ("500", "502", "503", "504", "5xx")):
+        return "provider_5xx"
+    if any(marker in message for marker in ("anti-bot", "antibot", "captcha", "cloudflare", "challenge")):
+        return "anti_bot"
+    if "403" in message or "forbidden" in message:
+        return "forbidden"
+    if any(marker in message for marker in ("invalid json", "invalid report", "schema_version", "schema")):
+        return "schema"
+    if any(marker in message for marker in ("not configured", "not found", "runtime is not ready", "unsupported")):
+        return "contract_mismatch"
+    return "transport"
+
+
+def _scrape_report_failure_kind(report_summary: dict[str, Any]) -> str:
+    if report_summary.get("anti_bot_detected") is True:
+        return "anti_bot"
+    failure_types = {str(item).strip().lower() for item in report_summary.get("failure_types") or []}
+    if failure_types & {"rate_limited", "rate_limit", "http_429", "429"}:
+        return "provider_429"
+    if any(kind in failure_types for kind in {"http_500", "http_502", "http_503", "http_504", "server_error"}):
+        return "provider_5xx"
+    return "transport"
+
+
+async def _persist_scrape_job_failure(
+    db: AsyncSession,
+    *,
+    job_id: int,
+    exc: Exception,
+    prior_output: str | None,
+) -> ScrapeJob:
+    """Discard partial ingestion, then persist only the bounded failure fact."""
+    failure_kind = _scrape_exception_failure_kind(exc)
+    message = str(exc)
+    try:
+        safe_output = json.loads(prior_output) if prior_output else {}
+    except (TypeError, ValueError):
+        safe_output = {}
+    if not isinstance(safe_output, dict):
+        safe_output = {}
+    report = safe_output.get("scrape_report")
+    if failure_kind == "transport" and isinstance(report, dict):
+        failure_kind = _scrape_exception_failure_kind(BridgeError(json.dumps(report, sort_keys=True)))
+    safe_output["failure"] = {"kind": failure_kind}
+
+    await db.rollback()
+    job = await db.get(ScrapeJob, job_id)
+    if job is None:
+        raise LookupError(f"ScrapeJob {job_id} disappeared while recording failure") from exc
+    job.status = "failed"
+    job.error = message
+    job.output = json.dumps(safe_output)
+    job.completed_at = datetime.now(timezone.utc)
+    await append_scrape_job_log(
+        db,
+        job.id,
+        action="job_failed",
+        message=message,
+        level="error",
+        metadata={"error_type": exc.__class__.__name__, "failure_kind": failure_kind},
+    )
+    await db.flush()
+    return job
 
 
 async def execute_scrape_job(db: AsyncSession, job_id: int) -> ScrapeJob:
@@ -1566,10 +2234,18 @@ async def execute_scrape_job(db: AsyncSession, job_id: int) -> ScrapeJob:
         if job.job_type in BRIDGE_SCRAPE_JOB_TYPES:
             if job.job_type == "refresh_results" and not (job.params or {}).get("match_links"):
                 raise ValueError("Result refresh job is missing source match links")
-            scraper_engine = (job.params or {}).get("scraper_engine") or "playwright"
+            scraper_engine, pipeline_v2_enabled = _selected_scraper_engine(job)
             runtime_catalog = await _runtime_catalog_league_env(db, job)
-            runtime_catalog_env = runtime_catalog.env
-            args = _build_oddsharvester_args(job, league_override=runtime_catalog.league_override)
+            runtime_catalog_env = {
+                **runtime_catalog.env,
+                "ODDSHARVESTER_PIPELINE_V2": "1" if pipeline_v2_enabled else "0",
+                "ODDSHARVESTER_PIPELINE_V2_PERCENT": str(settings.scrape_pipeline_v2_percent),
+            }
+            args = _build_oddsharvester_args(
+                job,
+                league_override=runtime_catalog.league_override,
+                scraper_engine=scraper_engine,
+            )
             effective_leagues = runtime_catalog.league_override or sorted(_requested_scrape_league_slugs(job))
             timeout_seconds = _effective_oddsharvester_timeout(job, len(effective_leagues))
             runtime_catalog_league_count = len(
@@ -1589,7 +2265,11 @@ async def execute_scrape_job(db: AsyncSession, job_id: int) -> ScrapeJob:
                 job.id,
                 action="engine_selected",
                 message=f"Selected scraper engine: {scraper_engine}",
-                metadata={"scraper_engine": scraper_engine},
+                metadata={
+                    "scraper_engine": scraper_engine,
+                    "pipeline_v2_enabled": pipeline_v2_enabled,
+                    "pipeline_v2_percent": settings.scrape_pipeline_v2_percent,
+                },
             )
             await append_scrape_job_log(
                 db,
@@ -1600,6 +2280,7 @@ async def execute_scrape_job(db: AsyncSession, job_id: int) -> ScrapeJob:
                     "args": _redact_sensitive_args(args),
                     "timeout_seconds": timeout_seconds,
                     "scraper_engine": scraper_engine,
+                    "pipeline_v2_enabled": pipeline_v2_enabled,
                     "report_requested": True,
                     "runtime_catalog_league_count": runtime_catalog_league_count,
                 },
@@ -1648,7 +2329,10 @@ async def execute_scrape_job(db: AsyncSession, job_id: int) -> ScrapeJob:
                 )
                 if report_summary["health"] == "failed":
                     job.output = json.dumps({"scrape_report": report_summary})
-                    raise BridgeError("OddsHarvester scrape report classified the run as failed")
+                    raise BridgeError(
+                        "OddsHarvester scrape report classified the run as failed",
+                        failure_kind=_scrape_report_failure_kind(report_summary),
+                    )
 
             ingestion_result = await _ingest_scraped_payload(db, job, payload)
             if isinstance(ingestion_result, tuple) and len(ingestion_result) == 3:
@@ -1688,29 +2372,9 @@ async def execute_scrape_job(db: AsyncSession, job_id: int) -> ScrapeJob:
 
         job.completed_at = datetime.now(timezone.utc)
     except BridgeError as e:
-        job.status = "failed"
-        job.error = str(e)
-        job.completed_at = datetime.now(timezone.utc)
-        await append_scrape_job_log(
-            db,
-            job.id,
-            action="job_failed",
-            message=str(e),
-            level="error",
-            metadata={"error_type": e.__class__.__name__},
-        )
+        job = await _persist_scrape_job_failure(db, job_id=job_id, exc=e, prior_output=job.output)
     except Exception as e:
-        job.status = "failed"
-        job.error = str(e)
-        job.completed_at = datetime.now(timezone.utc)
-        await append_scrape_job_log(
-            db,
-            job.id,
-            action="job_failed",
-            message=str(e),
-            level="error",
-            metadata={"error_type": e.__class__.__name__},
-        )
+        job = await _persist_scrape_job_failure(db, job_id=job_id, exc=e, prior_output=job.output)
 
     await db.flush()
     return job

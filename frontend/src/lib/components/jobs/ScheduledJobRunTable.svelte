@@ -137,7 +137,7 @@
 							<td class="py-2 pr-3 font-mono text-muted-foreground">#{run.id}</td>
 							<td class="py-2 pr-3"><JobRunStatusBadge status={run.status} /></td>
 							<td class="py-2 pr-3 text-muted-foreground">{formatRunDuration(run)}</td>
-							<td class="py-2 pr-3 text-muted-foreground" title={run.detail || run.error || ''}>
+							<td class="py-2 pr-3 text-muted-foreground">
 								{artifactSummary(run)}
 							</td>
 						</tr>

@@ -60,7 +60,14 @@ export function formatRunDuration(run: ScheduledJobRun): string {
 export function artifactSummary(run: ScheduledJobRun): string {
 	const artifacts = run.artifacts || {};
 	const parts: string[] = [];
-	for (const key of ['scrape_job_ids', 'prediction_run_ids', 'ticket_ids', 'ticket_batch_ids']) {
+	for (const key of [
+		'provider_dataset_generation_ids',
+		'model_artifact_ids',
+		'scrape_job_ids',
+		'prediction_run_ids',
+		'ticket_ids',
+		'ticket_batch_ids'
+	]) {
 		const value = artifacts[key];
 		if (Array.isArray(value) && value.length > 0) {
 			parts.push(`${key.replace(/_ids$/, '').replaceAll('_', ' ')}: ${value.join(', ')}`);

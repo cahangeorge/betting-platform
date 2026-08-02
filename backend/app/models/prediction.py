@@ -1,13 +1,27 @@
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, func, text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    func,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models import Base
 
 if TYPE_CHECKING:
     from app.models.match import Match
+    from app.models.model_artifact import ModelArtifact
     from app.models.model_governance import ModelVersion, PredictionOutcome
     from app.models.odds_lineage import OddsSnapshot
     from app.models.user import User
@@ -27,6 +41,18 @@ class PredictionRun(Base):
             sqlite_where=text("dedupe_enabled = 1 AND input_hash IS NOT NULL AND status IN ('running', 'completed')"),
         ),
         Index("ix_prediction_runs_training_fingerprint", "training_data_fingerprint"),
+        CheckConstraint(
+            "output_fingerprint IS NULL OR length(output_fingerprint) = 64",
+            name="ck_prediction_runs_output_fingerprint_length",
+        ),
+        CheckConstraint(
+            "pipeline_contract_version IS NULL OR pipeline_contract_version != 'penaltyblog-model-pipeline/v1' OR "
+            "(model_version_id IS NOT NULL AND model_artifact_id IS NOT NULL "
+            "AND source_generation_id IS NOT NULL AND forecast_at IS NOT NULL "
+            "AND output_fingerprint IS NOT NULL AND strategy_config_hash IS NOT NULL "
+            "AND training_data_fingerprint IS NOT NULL)",
+            name="ck_prediction_runs_p4_lineage_complete",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -51,9 +77,18 @@ class PredictionRun(Base):
     model_version_id: Mapped[int | None] = mapped_column(
         ForeignKey("model_versions.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    model_artifact_id: Mapped[int | None] = mapped_column(
+        ForeignKey("model_artifacts.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
     strategy_config_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     training_data_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
     training_cutoff_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    pipeline_contract_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_generation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("provider_dataset_generations.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    forecast_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    output_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
     governance_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
@@ -65,6 +100,7 @@ class PredictionRun(Base):
         "EnsemblePrediction", back_populates="run", cascade="all, delete-orphan"
     )
     model_version: Mapped["ModelVersion | None"] = relationship("ModelVersion")
+    model_artifact: Mapped["ModelArtifact | None"] = relationship("ModelArtifact")
 
 
 class ModelPrediction(Base):

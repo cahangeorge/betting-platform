@@ -4,8 +4,75 @@ from types import SimpleNamespace
 import pytest
 
 from app.api.v1 import strategies as strategies_api
+from app.providers import ProviderExecutionContext, ProviderPolicyError
 from app.services import prediction_engine
 from app.services.python_bridge import BridgeError
+
+
+def test_penaltyblog_prediction_bridge_authorization_uses_explicit_provider_identity(monkeypatch):
+    calls = []
+
+    class RegistrySpy:
+        def require_operation(self, adapter_key, source_key, operation, *, context):
+            calls.append((adapter_key, source_key, operation, context))
+
+    monkeypatch.setattr(prediction_engine, "DEFAULT_PROVIDER_REGISTRY", RegistrySpy())
+
+    prediction_engine._authorize_penaltyblog_operation("model_fit_predict")
+
+    assert calls == [("penaltyblog", "local-model", "model_fit_predict", ProviderExecutionContext.PRODUCTION)]
+
+
+@pytest.mark.asyncio
+async def test_model_fit_policy_denial_propagates_before_bridge_or_fallback(monkeypatch):
+    training = [
+        SimpleNamespace(
+            id=index,
+            home_team=f"Home {index % 4}",
+            away_team=f"Away {index % 4}",
+            home_score=1,
+            away_score=0,
+            match_date=datetime(2026, 1, index + 1, tzinfo=timezone.utc),
+        )
+        for index in range(20)
+    ]
+    targets = [SimpleNamespace(id=91, home_team="Alpha FC", away_team="Beta United")]
+    bridge_called = False
+
+    async def fake_fetch_training_matches(*args, **kwargs):
+        return training
+
+    async def fake_fetch_target_matches(*args, **kwargs):
+        return targets
+
+    async def fake_fetch_target_odds_map(*args, **kwargs):
+        return {}
+
+    async def fake_run_penaltyblog(payload):
+        nonlocal bridge_called
+        bridge_called = True
+        raise AssertionError(f"Bridge must not run after policy denial: {payload}")
+
+    class DenyingRegistry:
+        def require_operation(self, adapter_key, source_key, operation, *, context):
+            raise ProviderPolicyError("denied by test policy")
+
+    monkeypatch.setattr(prediction_engine, "fetch_training_matches", fake_fetch_training_matches)
+    monkeypatch.setattr(prediction_engine, "fetch_target_matches", fake_fetch_target_matches)
+    monkeypatch.setattr(prediction_engine, "fetch_target_odds_map", fake_fetch_target_odds_map)
+    monkeypatch.setattr(prediction_engine, "run_penaltyblog", fake_run_penaltyblog)
+    monkeypatch.setattr(prediction_engine, "DEFAULT_PROVIDER_REGISTRY", DenyingRegistry())
+
+    with pytest.raises(ProviderPolicyError, match="denied by test policy"):
+        await prediction_engine.execute_single_model_run(
+            db=SimpleNamespace(),
+            run_id=12,
+            model_key="dixon_coles",
+            league="Premier League",
+            markets=["1x2"],
+        )
+
+    assert bridge_called is False
 
 
 def test_normalize_strategy_markets_maps_ui_aliases():

@@ -8,6 +8,15 @@ from pydantic import ValidationError
 from app.api.v1 import tickets as tickets_api
 from app.schemas.ticket import TicketPreflightRequest
 from app.services import ticket_engine
+from app.services.portfolio_risk import (
+    LeagueExposure,
+    PortfolioExposure,
+    RiskCandidate,
+    RiskContext,
+    RiskPolicy,
+    assess_portfolio_risk,
+)
+from app.services.staking import StakingPolicy
 from app.services.ticket_engine import preflight_ticket_generation
 
 
@@ -30,8 +39,10 @@ class _ReadOnlyDb:
     def __init__(self, run, predictions):
         self._results = [_Result(scalar=run), _Result(values=predictions)]
         self.writes = 0
+        self.statements = []
 
-    async def execute(self, _statement):
+    async def execute(self, statement):
+        self.statements.append(str(statement.compile(compile_kwargs={"literal_binds": True})))
         return self._results.pop(0)
 
     def add(self, *_args, **_kwargs):
@@ -84,6 +95,96 @@ def _prediction(index: int):
     )
 
 
+def test_governed_ticket_candidate_uses_pinned_fixture_after_match_mutation():
+    now = datetime(2026, 7, 16, 10, 0, tzinfo=timezone.utc)
+    prediction = _prediction(1)
+    prediction.quality_report.update(
+        {
+            "pipeline_contract_version": "penaltyblog-model-pipeline/v1",
+            "canonical_fixture": {
+                "match_id": prediction.match_id,
+                "home_team": "Pinned Home",
+                "away_team": "Pinned Away",
+                "kickoff_at": (now + timedelta(hours=2)).isoformat(),
+                "competition_key": "Canonical League",
+            },
+        }
+    )
+    prediction.match.home_team = "Mutable Home"
+    prediction.match.away_team = "Mutable Away"
+    prediction.match.match_date = now - timedelta(hours=1)
+    prediction.match.competition = "Mutable League"
+
+    candidate, reason = ticket_engine._prediction_ticket_exclusion_reason(
+        prediction, normalized_markets={"1x2"}, min_odds=1.01, max_odds=100, now=now
+    )
+
+    assert reason is None
+    assert candidate is not None
+    assert candidate["kickoff"] == now + timedelta(hours=2)
+    assert candidate["team_ids"] == ("Pinned Home", "Pinned Away")
+    assert candidate["league_ids"] == ("Canonical League",)
+    assessment = assess_portfolio_risk(
+        policy=RiskPolicy(
+            version="p4-canonical-league",
+            staking=StakingPolicy(mode="flat_percent", flat_stake_percent="1", kelly_fraction=None),
+            max_ticket_percent="5",
+            max_open_exposure_percent="20",
+            max_daily_stake_percent="10",
+            max_weekly_stake_percent="30",
+            max_daily_ticket_count=10,
+            max_weekly_ticket_count=50,
+            max_match_exposure_percent="10",
+            max_team_exposure_percent="10",
+            max_league_window_exposure_percent="15",
+            league_window_hours=6,
+            accumulators_enabled=False,
+            automation_enabled=False,
+            paused_until=None,
+        ),
+        context=RiskContext(
+            bankroll_amount="1000",
+            available_balance="1000",
+            exposure=PortfolioExposure(
+                open_total="0",
+                staked_last_24h="0",
+                staked_last_7d="0",
+                ticket_count_last_24h=0,
+                ticket_count_last_7d=0,
+                by_match={},
+                by_team={},
+                league_exposures=(
+                    LeagueExposure(
+                        exposure_id=1,
+                        league_id="Canonical League",
+                        kickoff=now + timedelta(hours=3),
+                        stake="145",
+                    ),
+                ),
+            ),
+            now=now,
+        ),
+        candidate=RiskCandidate(
+            stake="10",
+            ticket_format="single",
+            match_ids=frozenset({candidate["match_id"]}),
+            team_ids=frozenset(candidate["team_ids"]),
+            league_ids=frozenset(candidate["league_ids"]),
+            league_kickoffs=ticket_engine._candidate_league_kickoffs([candidate]),
+            accumulator_risk_acknowledged=False,
+            is_automated=False,
+        ),
+    )
+    assert "league_window_exposure_limit_exceeded" in assessment.blocker_codes
+
+    prediction.quality_report["canonical_fixture"]["kickoff_at"] = (now - timedelta(minutes=1)).isoformat()
+    candidate, reason = ticket_engine._prediction_ticket_exclusion_reason(
+        prediction, normalized_markets={"1x2"}, min_odds=1.01, max_odds=100, now=now
+    )
+    assert candidate is None
+    assert reason == "match_started_or_finished"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("match_count", [1, 2, 3])
 async def test_preflight_reports_all_risk_tiers_without_writes(match_count):
@@ -127,6 +228,25 @@ async def test_preflight_rejects_foreign_run_before_prediction_query():
         )
     assert db.writes == 0
     assert db._results  # Prediction rows were not queried after ownership failure.
+
+
+@pytest.mark.asyncio
+async def test_preflight_requires_a_completed_prediction_run():
+    db = _ReadOnlyDb(None, [])
+
+    with pytest.raises(ValueError, match="not found or not eligible"):
+        await preflight_ticket_generation(
+            db,
+            user_id=7,
+            run_id=101,
+            run_ids=None,
+            prediction_ids=None,
+            market_types=["1x2"],
+            min_odds=1.01,
+            max_odds=100,
+        )
+
+    assert "prediction_runs.status = 'completed'" in db.statements[0]
 
 
 @pytest.mark.asyncio

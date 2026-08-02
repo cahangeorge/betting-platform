@@ -7,6 +7,7 @@ from sqlalchemy import inspect
 from sqlalchemy.orm import make_transient_to_detached
 
 from app.models.match import Match
+from app.models.scrape import ScrapeJob
 from app.services import scraper
 from app.services.python_bridge import BridgeError
 
@@ -36,6 +37,9 @@ class _FakeSession:
 
     async def commit(self):
         self.commit_calls += 1
+
+    async def rollback(self):
+        return None
 
     async def flush(self):
         self.flush_calls += 1
@@ -109,7 +113,7 @@ async def test_execute_scrape_job_completes_and_persists_ingestion_summary(monke
     )
     db = _FakeSession(job=job)
 
-    async def fake_bridge(args, label, *, timeout=None):
+    async def fake_bridge(args, label, *, timeout=None, include_report=False, extra_env=None):
         assert "--sport" in args
         assert label == "scrape_job_5"
         assert timeout is None
@@ -167,7 +171,7 @@ async def test_execute_scrape_job_marks_failed_on_bridge_error(monkeypatch):
     )
     db = _FakeSession(job=job)
 
-    async def fake_bridge(args, label, *, timeout=None):
+    async def fake_bridge(args, label, *, timeout=None, include_report=False, extra_env=None):
         assert timeout is None
         raise BridgeError("OddsHarvester bridge failed")
 
@@ -178,7 +182,7 @@ async def test_execute_scrape_job_marks_failed_on_bridge_error(monkeypatch):
     assert result is job
     assert job.status == "failed"
     assert job.error == "OddsHarvester bridge failed"
-    assert job.output is None
+    assert json.loads(job.output) == {"failure": {"kind": "transport"}}
     assert job.started_at is not None
     assert job.completed_at is not None
     log_actions = [obj.action for obj in db.added if obj.__class__.__name__ == "ScrapeJobLog"]
@@ -214,7 +218,7 @@ async def test_execute_scrape_job_skips_duplicate_when_avoid_rescraping_requeste
     )
     db = _FakeSession(job=job, duplicate_jobs=[duplicate], dataset_ids={17})
 
-    async def fail_bridge(args, label, *, timeout=None):
+    async def fail_bridge(args, label, *, timeout=None, include_report=False, extra_env=None):
         assert timeout is None
         raise AssertionError("scraper bridge should not run for duplicate jobs")
 
@@ -327,7 +331,7 @@ async def test_execute_scrape_job_passes_per_job_timeout_to_oddsharvester(monkey
     )
     db = _FakeSession(job=job)
 
-    async def fake_bridge(args, label, *, timeout=None):
+    async def fake_bridge(args, label, *, timeout=None, include_report=False, extra_env=None):
         assert label == "scrape_job_12"
         assert timeout == 2400
         assert args[:3] == ["historic", "--sport", "football"]
@@ -414,6 +418,49 @@ def test_normalize_scrape_params_rechecks_size_after_adding_defaults(monkeypatch
 def test_normalize_scrape_params_rejects_non_finite_numbers():
     with pytest.raises(ValueError, match="finite JSON-compatible"):
         scraper._normalize_scrape_params("scrape_odds", {"request_delay": float("nan")})
+
+
+def test_normalize_scrape_params_requires_bounded_league_batches():
+    historic_leagues = [f"historic-{index}" for index in range(6)]
+    with pytest.raises(ValueError, match="historic scrape jobs support at most 5 leagues"):
+        scraper._normalize_scrape_params(
+            "scrape_odds",
+            {"command": "historic", "season": "2025-2026", "leagues": historic_leagues},
+        )
+
+    upcoming_leagues = [f"upcoming-{index}" for index in range(11)]
+    with pytest.raises(ValueError, match="upcoming scrape jobs support at most 10 leagues"):
+        scraper._normalize_scrape_params(
+            "scrape_odds",
+            {"command": "upcoming", "date": "20260730", "leagues": upcoming_leagues},
+        )
+
+    assert (
+        len(
+            scraper._normalize_scrape_params(
+                "scrape_odds",
+                {
+                    "command": "historic",
+                    "season": "2025-2026",
+                    "leagues": historic_leagues[:5],
+                },
+            )["leagues"]
+        )
+        == 5
+    )
+    assert (
+        len(
+            scraper._normalize_scrape_params(
+                "scrape_odds",
+                {
+                    "command": "upcoming",
+                    "date": "20260730",
+                    "leagues": upcoming_leagues[:10],
+                },
+            )["leagues"]
+        )
+        == 10
+    )
 
 
 @pytest.mark.asyncio
@@ -510,3 +557,77 @@ async def test_execute_unknown_job_type_fails_without_marking_completed():
 
     assert result.status == "failed"
     assert result.error == "Unsupported scrape job type: unsupported"
+
+
+def test_scraper_v2_rollout_gates_auto_engine_at_0_10_and_100(monkeypatch):
+    auto_job = ScrapeJob(id=379, params={"scraper_engine": "auto"})
+    default_job = ScrapeJob(id=368, params={})
+    monkeypatch.setattr(scraper.settings, "scrape_pipeline_v2_percent", 0)
+    assert scraper._selected_scraper_engine(auto_job) == ("playwright", False)
+    monkeypatch.setattr(scraper.settings, "scrape_pipeline_v2_percent", 10)
+    assert scraper._selected_scraper_engine(auto_job) == ("auto", True)
+    assert scraper._selected_scraper_engine(default_job) == ("playwright", False)
+    monkeypatch.setattr(scraper.settings, "scrape_pipeline_v2_percent", 100)
+    assert scraper._selected_scraper_engine(default_job) == ("auto", True)
+    assert scraper._selected_scraper_engine(ScrapeJob(id=379, params={"scraper_engine": "camoufox"})) == (
+        "camoufox",
+        False,
+    )
+
+
+def test_scraper_v2_rollout_hashes_sequential_job_ids_into_stable_nested_cohorts():
+    ids = range(368, 388)
+
+    assert [job_id for job_id in ids if scraper._pipeline_v2_enabled_for_job(job_id, percent=10)] == [379]
+    cohort_10 = {job_id for job_id in ids if scraper._pipeline_v2_enabled_for_job(job_id, percent=10)}
+    cohort_25 = {job_id for job_id in ids if scraper._pipeline_v2_enabled_for_job(job_id, percent=25)}
+    assert cohort_10 < cohort_25
+    assert all(not scraper._pipeline_v2_enabled_for_job(job_id, percent=0) for job_id in ids)
+    assert all(scraper._pipeline_v2_enabled_for_job(job_id, percent=100) for job_id in ids)
+
+
+def test_scrape_report_v11_preserves_pipeline_metadata():
+    report = {
+        "schema_version": "1.1",
+        "status": "success",
+        "stats": {"total_urls": 1, "successful": 1, "failed": 0, "partial": 0, "success_rate_pct": 100},
+        "failures": [],
+        "warnings": [],
+        "engines": {
+            "requested": "auto",
+            "used": ["scrapling-http"],
+            "attempts": [{"engine": "scrapling-http"}],
+            "cache": {"hit": True},
+            "repair": {"status": "repair_skipped"},
+        },
+        "source": {"command": "upcoming", "sport": "football"},
+        "timing": {"started_at": "x", "finished_at": "y", "duration_seconds": 1},
+        "fallbacks": [{"from": "scrapling-http", "to": "playwright"}],
+        "recipe": {"status": "candidate"},
+    }
+
+    summary = scraper._scrape_report_summary(report, [{"match_link": "https://example.test/"}])
+
+    assert summary["schema_version"] == "1.1"
+    assert summary["attempts"] == report["engines"]["attempts"]
+    assert summary["fallbacks"] == report["fallbacks"]
+    assert summary["cache"] == report["engines"]["cache"]
+    assert summary["recipe"] == report["recipe"]
+    assert summary["repair"] == report["engines"]["repair"]
+    assert summary["engines"]["attempts"] == report["engines"]["attempts"]
+
+
+def test_scrape_report_v11_rejects_malformed_nested_pipeline_metadata():
+    report = {
+        "schema_version": "1.1",
+        "status": "success",
+        "stats": {"total_urls": 1, "successful": 1, "failed": 0, "partial": 0},
+        "failures": [],
+        "warnings": [],
+        "engines": {"requested": "auto", "used": [], "attempts": "not-a-list"},
+        "source": {"command": "upcoming"},
+        "timing": {},
+    }
+
+    with pytest.raises(BridgeError, match="invalid attempts telemetry"):
+        scraper._scrape_report_summary(report, [])

@@ -14,6 +14,7 @@ from app.database import engine, ensure_dev_admin, ensure_schema
 from app.models.user import User
 from app.services.python_bridge import bridge_runtime_summary, validate_bridge_runtime
 from app.services.scheduled_jobs import start_scheduler, stop_scheduler
+from app.services.task_runs import LaneBackpressureError, WorkerLaneAdmissionClosedError
 
 settings = get_settings()
 
@@ -97,6 +98,16 @@ app.add_middleware(
 app.include_router(v1_router)
 
 
+@app.exception_handler(LaneBackpressureError)
+@app.exception_handler(WorkerLaneAdmissionClosedError)
+async def lane_backpressure_handler(_request: Request, exc: LaneBackpressureError):
+    return JSONResponse(
+        status_code=503,
+        headers={"Retry-After": "30"},
+        content={"detail": str(exc), "lane": exc.lane.value, "retry_after_seconds": 30},
+    )
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "app": settings.app_name}
@@ -135,7 +146,7 @@ async def readiness():
         response["bridge_runtime"] = "ready"
 
     if settings.task_queue_backend == "taskiq":
-        from app.tasks.runtime import task_queue_probe, verify_any_runtime_role
+        from app.tasks.runtime import task_queue_probe, verify_any_runtime_role, verify_enabled_worker_roles
 
         try:
             await task_queue_probe(
@@ -152,7 +163,7 @@ async def readiness():
                 },
             )
         try:
-            await verify_any_runtime_role("worker")
+            await verify_enabled_worker_roles()
             await verify_any_runtime_role("scheduler")
         except (OSError, RuntimeError):
             return JSONResponse(

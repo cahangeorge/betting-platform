@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -113,7 +114,47 @@ async def test_penaltyblog_wrapper_checks_only_its_provider_at_use_site(monkeypa
     response = await python_bridge.run_penaltyblog({"operation": "catalog", "payload": {}})
 
     assert response["operation"] == "catalog"
-    assert captured["kwargs"]["extra_env"] == {"BET_PENALTYBLOG_ROOT": str(tmp_path)}
+    assert captured["kwargs"]["extra_env"] == {
+        "BET_PENALTYBLOG_ROOT": str(tmp_path),
+        "BET_MODEL_ARTIFACT_ROOT": python_bridge.settings.resolved_model_artifact_root,
+    }
+    assert captured["kwargs"]["payload_file"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ("model_train", "model_backtest_fold"))
+async def test_penaltyblog_model_payload_file_serializes_canonical_datetime_rows(monkeypatch, tmp_path, operation):
+    """Model train/backtest payloads must cross the subprocess JSON boundary."""
+    bridge = tmp_path / "bridge.py"
+    bridge.write_text(
+        "import argparse, json\n"
+        "parser = argparse.ArgumentParser(); parser.add_argument('--payload-file'); parser.add_argument('--output')\n"
+        "args = parser.parse_args()\n"
+        "with open(args.payload_file, encoding='utf-8') as source: payload = json.load(source)\n"
+        "with open(args.output, 'w', encoding='utf-8') as target: json.dump({'ok': True, 'result': payload}, target)\n",
+        encoding="utf-8",
+    )
+    root = tmp_path / "penaltyblog"
+    root.mkdir()
+    monkeypatch.setattr(python_bridge.settings, "penaltyblog_python", sys.executable)
+    monkeypatch.setattr(python_bridge.settings, "penaltyblog_bridge", str(bridge))
+    monkeypatch.setattr(python_bridge.settings, "penaltyblog_root", str(root))
+    monkeypatch.setattr(python_bridge, "TEMP_DIR", tmp_path / "bridge-temp")
+    python_bridge.TEMP_DIR.mkdir()
+
+    result = await python_bridge.run_penaltyblog(
+        {
+            "operation": operation,
+            "payload": {
+                "training_matches": [
+                    {"date": datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC), "team_home": "A", "team_away": "B"}
+                ]
+            },
+        }
+    )
+
+    assert result["operation"] == operation
+    assert result["payload"]["training_matches"][0]["date"] == "2026-01-02T03:04:05Z"
 
 
 @pytest.mark.asyncio
@@ -142,3 +183,31 @@ async def test_soccerdata_wrapper_uses_a_writable_default_cache(monkeypatch, tmp
         "BET_SOCCERDATA_ROOT": str(tmp_path),
         "SOCCERDATA_DIR": str(expected_cache),
     }
+
+
+def test_penaltyblog_bridge_accepts_private_payload_file_transport(tmp_path):
+    stubs = tmp_path / "stubs"
+    stubs.mkdir()
+    (stubs / "numpy.py").write_text("class generic: pass\nclass ndarray: pass\n", encoding="utf-8")
+    (stubs / "pandas.py").write_text("class DataFrame: pass\nclass Series: pass\n", encoding="utf-8")
+    payload_file = tmp_path / "payload.json"
+    payload_file.write_text(json.dumps({"operation": "catalog", "payload": {}}), encoding="utf-8")
+    output = tmp_path / "output.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(BRIDGE_ROOT / "penaltyblog_bridge.py"),
+            "--payload-file",
+            str(payload_file),
+            "--output",
+            str(output),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "BET_PENALTYBLOG_ROOT": str(tmp_path), "PYTHONPATH": str(stubs)},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(output.read_text())["ok"] is True

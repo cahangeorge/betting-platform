@@ -51,6 +51,14 @@ def test_revisions_017_to_019_nullable_lineage_columns_match_foreign_keys() -> N
         assert _foreign_key_target(table_name, column_name) == target
 
 
+def test_ticket_leg_prediction_run_snapshot_is_retained_by_foreign_key() -> None:
+    column = Base.metadata.tables["ticket_legs"].c.prediction_run_id_snapshot
+    foreign_key = next(iter(column.foreign_keys))
+    assert column.nullable is True
+    assert foreign_key.target_fullname == "prediction_runs.id"
+    assert foreign_key.ondelete == "RESTRICT"
+
+
 def test_revision_018_ticket_audit_columns_and_indexes_are_exposed_by_orm() -> None:
     ticket_batch = Base.metadata.tables["ticket_batches"]
     ticket = Base.metadata.tables["tickets"]
@@ -196,6 +204,7 @@ def test_historical_migration_indexes_are_declared_in_orm_metadata() -> None:
             ("ix_ticket_legs_ticket_id", ("ticket_id",), False, None),
             ("ix_ticket_legs_ticket_status", ("ticket_id", "status"), False, None),
             ("ix_ticket_legs_model_prediction_id", ("model_prediction_id",), False, None),
+            ("ix_ticket_legs_prediction_run_id_snapshot", ("prediction_run_id_snapshot",), False, None),
         ),
         "bet_placements": (("ix_bet_placements_ticket_id", ("ticket_id",), False, None),),
         "ledger_entries": (("ix_ledger_entries_bankroll_id", ("bankroll_id",), False, None),),

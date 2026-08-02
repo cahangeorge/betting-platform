@@ -126,6 +126,7 @@ class TicketLeg(Base):
         Index("ix_ticket_legs_ticket_id", "ticket_id"),
         Index("ix_ticket_legs_ticket_status", "ticket_id", "status"),
         Index("ix_ticket_legs_model_prediction_id", "model_prediction_id"),
+        Index("ix_ticket_legs_prediction_run_id_snapshot", "prediction_run_id_snapshot"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -141,7 +142,9 @@ class TicketLeg(Base):
     # Immutable generation-time evidence. These nullable snapshots keep old
     # rows valid and preserve the decision basis even when the linked model
     # prediction is later deleted or its quality payload evolves.
-    prediction_run_id_snapshot: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    prediction_run_id_snapshot: Mapped[int | None] = mapped_column(
+        ForeignKey("prediction_runs.id", ondelete="RESTRICT"), nullable=True
+    )
     model_probability_snapshot: Mapped[float | None] = mapped_column(Float, nullable=True)
     market_probability_snapshot: Mapped[float | None] = mapped_column(Float, nullable=True)
     market_probability_basis_snapshot: Mapped[str | None] = mapped_column(String(50), nullable=True)

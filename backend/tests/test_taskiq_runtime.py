@@ -171,6 +171,9 @@ async def test_scheduler_reconciles_outbox_before_publishing_poll(monkeypatch):
         async def __aexit__(self, *_args):
             return None
 
+    async def fake_requeue(_db):
+        calls.append("requeue")
+
     async def fake_reconcile(_db):
         calls.append("reconcile")
 
@@ -181,6 +184,7 @@ async def test_scheduler_reconciles_outbox_before_publishing_poll(monkeypatch):
         raise StopLoopError
 
     monkeypatch.setattr(scheduler, "async_session_factory", FakeSession)
+    monkeypatch.setattr(scheduler, "requeue_expired_task_run_leases", fake_requeue)
     monkeypatch.setattr(scheduler, "reconcile_task_outbox", fake_reconcile)
     monkeypatch.setattr(scheduler.poll_due_scheduled_jobs_task, "kiq", fake_kiq)
     monkeypatch.setattr(scheduler.asyncio, "sleep", stop_after_one_iteration)
@@ -188,4 +192,48 @@ async def test_scheduler_reconciles_outbox_before_publishing_poll(monkeypatch):
     with pytest.raises(StopLoopError):
         await scheduler.scheduler_loop()
 
-    assert calls == ["reconcile", "commit", "publish-poll"]
+    assert calls == ["requeue", "reconcile", "commit", "publish-poll"]
+
+
+@pytest.mark.asyncio
+async def test_enabled_worker_role_readiness_requires_all_durable_lanes(monkeypatch):
+    checked: list[str] = []
+
+    async def fake_verify(role: str):
+        checked.append(role)
+
+    monkeypatch.setattr(runtime, "verify_any_runtime_role", fake_verify)
+
+    await runtime.verify_enabled_worker_roles()
+
+    assert checked == [
+        "worker:control",
+        "worker:provider-http",
+        "worker:provider-browser",
+        "worker:model-cpu",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_enabled_worker_role_readiness_checks_only_the_configured_ordered_subset(monkeypatch):
+    checked: list[str] = []
+
+    async def fake_verify(role: str):
+        checked.append(role)
+
+    monkeypatch.setattr(runtime.settings, "taskiq_enabled_lanes", ("control", "model-cpu"))
+    monkeypatch.setattr(runtime, "verify_any_runtime_role", fake_verify)
+
+    await runtime.verify_enabled_worker_roles()
+
+    assert checked == ["worker:control", "worker:model-cpu"]
+
+
+def test_cgroup_resource_snapshot_reads_v2_counters_or_degrades(tmp_path):
+    (tmp_path / "memory.peak").write_text("123\n", encoding="utf-8")
+    (tmp_path / "pids.peak").write_text("4\n", encoding="utf-8")
+    assert runtime.cgroup_resource_snapshot(str(tmp_path)) == {"peak_rss_bytes": 123, "peak_pid_count": 4}
+    assert runtime.cgroup_resource_snapshot(str(tmp_path / "unsupported")) == {
+        "peak_rss_bytes": None,
+        "peak_pid_count": None,
+    }

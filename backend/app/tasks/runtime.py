@@ -9,6 +9,7 @@ from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
 from app.config import get_settings
+from app.tasks.worker_lanes import enabled_worker_lanes
 
 settings = get_settings()
 
@@ -90,6 +91,16 @@ async def verify_any_runtime_role(role: str) -> None:
         await client.aclose()
 
 
+def enabled_worker_runtime_roles() -> tuple[str, ...]:
+    """Roles required by readiness for the configured rollout subset."""
+    return tuple(f"worker:{lane.value}" for lane in enabled_worker_lanes(settings))
+
+
+async def verify_enabled_worker_roles() -> None:
+    for role in enabled_worker_runtime_roles():
+        await verify_any_runtime_role(role)
+
+
 async def task_queue_probe(broker_url: str, result_backend_url: str) -> None:
     """Verify every distinct Redis endpoint required by the Taskiq runtime."""
     urls: Iterable[str] = dict.fromkeys((broker_url, result_backend_url))
@@ -109,3 +120,24 @@ if __name__ == "__main__":
 
     asyncio.run(main())
     print("Taskiq runtime is ready")
+
+
+def cgroup_resource_snapshot(cgroup_root: str = "/sys/fs/cgroup") -> dict[str, int | None]:
+    """Best-effort cgroup v2 peak RSS/PID probe; unsupported hosts return nulls."""
+    from pathlib import Path
+
+    root = Path(cgroup_root)
+
+    def read_counter(name: str) -> int | None:
+        try:
+            value = (root / name).read_text(encoding="utf-8").strip()
+            return int(value) if value.isdigit() else None
+        except OSError:
+            return None
+
+    return {
+        # Current usage is not a peak. Preserve null when the kernel does not
+        # expose the v2 peak counters rather than mislabel a point-in-time read.
+        "peak_rss_bytes": read_counter("memory.peak"),
+        "peak_pid_count": read_counter("pids.peak"),
+    }

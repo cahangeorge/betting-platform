@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -9,6 +10,7 @@ from typing import Any
 from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.model_artifact import ModelArtifact
 from app.models.model_governance import (
     ModelCertification,
     ModelEvaluation,
@@ -17,6 +19,7 @@ from app.models.model_governance import (
     ModelMonitoringSnapshot,
     ModelVersion,
 )
+from app.models.prediction import ModelPrediction
 from app.schemas.model_governance import (
     EvaluationFoldInput,
     EvaluationObservationInput,
@@ -24,6 +27,8 @@ from app.schemas.model_governance import (
     ModelEvaluationCreateRequest,
     MonitoringSnapshotCreateRequest,
 )
+from app.schemas.model_pipeline import MODEL_PIPELINE_CONTRACT_VERSION
+from app.services.model_artifacts import ordered_output_fingerprint
 from app.services.model_validation import (
     CalibrationMetrics,
     calibration_metrics,
@@ -762,6 +767,98 @@ async def governance_evidence(
     return model_version, latest_evaluation, latest_certification, latest_monitoring, gate
 
 
+async def pipeline_prediction_output_is_complete(db: AsyncSession, run: Any, model_version_id: int) -> bool:
+    if getattr(run, "status", None) != "completed" or not isinstance(getattr(run, "matches_count", None), int):
+        return False
+    predictions = (
+        await db.scalars(select(ModelPrediction).where(ModelPrediction.run_id == run.id).order_by(ModelPrediction.id))
+    ).all()
+    if len(predictions) != run.matches_count:
+        return False
+    rows: list[dict[str, Any]] = []
+    for prediction in predictions:
+        report = prediction.quality_report or {}
+        values = (prediction.home_prob, prediction.draw_prob, prediction.away_prob)
+        odds = (prediction.home_odds, prediction.draw_odds, prediction.away_odds)
+        canonical_fixture = report.get("canonical_fixture") if isinstance(report, dict) else None
+        try:
+            fixture_kickoff = (
+                datetime.fromisoformat(canonical_fixture["kickoff_at"].replace("Z", "+00:00"))
+                if isinstance(canonical_fixture, dict) and isinstance(canonical_fixture.get("kickoff_at"), str)
+                else None
+            )
+        except ValueError:
+            fixture_kickoff = None
+        if (
+            prediction.model_version_id != model_version_id
+            or prediction.odds_snapshot_id is None
+            or prediction.market != "1x2"
+            or report.get("pipeline_contract_version") != MODEL_PIPELINE_CONTRACT_VERSION
+            or report.get("output_fingerprint") != run.output_fingerprint
+            or not isinstance(report.get("odds_entry_id"), int)
+            or not isinstance(canonical_fixture, dict)
+            or canonical_fixture.get("match_id") != prediction.match_id
+            or not isinstance(canonical_fixture.get("home_team"), str)
+            or not canonical_fixture["home_team"].strip()
+            or not isinstance(canonical_fixture.get("away_team"), str)
+            or not canonical_fixture["away_team"].strip()
+            or not isinstance(canonical_fixture.get("kickoff_at"), str)
+            or fixture_kickoff is None
+            or fixture_kickoff.tzinfo is None
+            or not isinstance(canonical_fixture.get("competition_key"), str)
+            or not canonical_fixture["competition_key"].strip()
+            or any(value is None for value in values)
+            or any(value is None or not math.isfinite(float(value)) or float(value) <= 1 for value in odds)
+        ):
+            return False
+        rows.append(
+            {
+                "match_id": prediction.match_id,
+                "odds_snapshot_id": prediction.odds_snapshot_id,
+                "odds_entry_id": report.get("odds_entry_id"),
+                "home": prediction.home_prob,
+                "draw": prediction.draw_prob,
+                "away": prediction.away_prob,
+                "home_odds": prediction.home_odds,
+                "draw_odds": prediction.draw_odds,
+                "away_odds": prediction.away_odds,
+                "canonical_fixture": canonical_fixture,
+            }
+        )
+    return ordered_output_fingerprint(rows) == run.output_fingerprint
+
+
+# Compatibility alias for callers and historical tests while new trust
+# boundaries use the public, named integrity verifier above.
+_pipeline_prediction_output_is_complete = pipeline_prediction_output_is_complete
+
+
+async def _pipeline_artifact_is_exact(db: AsyncSession, run: Any, model_version: ModelVersion) -> bool:
+    """Revalidate the exact immutable artifact, not merely any model artifact."""
+    artifact_id = getattr(run, "model_artifact_id", None)
+    if not isinstance(artifact_id, int) or artifact_id <= 0:
+        return False
+    artifact = await db.get(ModelArtifact, artifact_id)
+    if artifact is None:
+        return False
+    manifest = artifact.manifest_json if isinstance(artifact.manifest_json, dict) else {}
+    context = getattr(run, "input_context", None)
+    runtime = context.get("runtime_fingerprint") if isinstance(context, dict) else None
+    return (
+        artifact.state == "completed"
+        and artifact.artifact_kind == "training_manifest"
+        and artifact.model_version_id == model_version.id
+        and artifact.source_generation_id == getattr(run, "source_generation_id", None)
+        and artifact.feature_set_id == model_version.feature_set_id
+        and artifact.runtime_dependency_fingerprint == model_version.runtime_dependency_fingerprint
+        and runtime == artifact.runtime_dependency_fingerprint
+        and manifest.get("runtime_fingerprint") == artifact.runtime_dependency_fingerprint
+        and manifest.get("training_data_fingerprint") == model_version.training_data_fingerprint
+        and manifest.get("model_config_fingerprint") == model_version.strategy_config_hash
+        and manifest.get("feature_set_fingerprint") == model_version.feature_schema_hash
+    )
+
+
 async def assess_prediction_runs_governance(
     db: AsyncSession,
     *,
@@ -772,8 +869,8 @@ async def assess_prediction_runs_governance(
 ) -> dict[str, Any]:
     """Revalidate versioned prediction runs at every paper action boundary.
 
-    Unversioned historical runs remain usable during the staged rollout. Once
-    a run declares a model version, however, certification, ownership,
+    Unversioned historical runs remain usable only outside the P4 contract.
+    Once a run declares the P4 contract or a model version, certification, ownership,
     immutable fingerprints, expiry, suspension, and critical drift are all
     fail-closed. Scheduled jobs require full certification; manual draft and
     activation paths may use the staged manual statuses.
@@ -786,12 +883,15 @@ async def assess_prediction_runs_governance(
     for run in runs:
         model_version_id = getattr(run, "model_version_id", None)
         if model_version_id is None:
+            is_pipeline_run = getattr(run, "pipeline_contract_version", None) == MODEL_PIPELINE_CONTRACT_VERSION
             run_results.append(
                 {
                     "run_id": run.id,
                     "model_version_id": None,
-                    "allowed": True,
-                    "reason": "unversioned_rollout_compatibility",
+                    "allowed": not is_pipeline_run,
+                    "reason": (
+                        "pipeline_model_version_required" if is_pipeline_run else "unversioned_rollout_compatibility"
+                    ),
                 }
             )
             continue
@@ -812,15 +912,32 @@ async def assess_prediction_runs_governance(
             )
             continue
         model_version, evaluation, certification, monitoring, gate = evidence
-        fingerprint_matches = getattr(run, "strategy_config_hash", None) in {
-            None,
-            model_version.strategy_config_hash,
-        } and getattr(run, "training_data_fingerprint", None) in {None, model_version.training_data_fingerprint}
+        is_pipeline_run = getattr(run, "pipeline_contract_version", None) == MODEL_PIPELINE_CONTRACT_VERSION
+        if is_pipeline_run:
+            fingerprint_matches = (
+                getattr(run, "strategy_config_hash", None) == model_version.strategy_config_hash
+                and getattr(run, "training_data_fingerprint", None) == model_version.training_data_fingerprint
+                and getattr(run, "source_generation_id", None) is not None
+                and getattr(run, "output_fingerprint", None) is not None
+            )
+            artifact_id = await _pipeline_artifact_is_exact(db, run, model_version)
+        else:
+            fingerprint_matches = getattr(run, "strategy_config_hash", None) in {
+                None,
+                model_version.strategy_config_hash,
+            } and getattr(run, "training_data_fingerprint", None) in {None, model_version.training_data_fingerprint}
+            artifact_id = True
         allowed = gate.scheduled_paper_allowed if automated else gate.manual_paper_allowed
         reason = gate.reason
         if not fingerprint_matches:
             allowed = False
             reason = "run_model_version_fingerprint_mismatch"
+        if not artifact_id:
+            allowed = False
+            reason = "pipeline_model_artifact_incomplete"
+        elif is_pipeline_run and not await _pipeline_prediction_output_is_complete(db, run, model_version.id):
+            allowed = False
+            reason = "pipeline_prediction_output_incomplete_or_tampered"
         if model_version.status == "retired":
             allowed = False
             reason = "model_version_retired"

@@ -17,7 +17,7 @@ application_db=$(
   fail "BET_DATABASE_URL and POSTGRES_DB must target the same database"
 "$(dirname "$0")/verify-postgres-backup.sh" "$backup" >/dev/null
 "$(dirname "$0")/../release/render.sh" "$env_file" >/dev/null
-compose "$env_file" stop api worker scheduler frontend nginx
+compose "$env_file" stop api worker provider-http-worker provider-browser-worker model-cpu-worker scheduler frontend nginx
 compose "$env_file" cp "$backup" postgres:/tmp/restore.dump
 trap 'compose "$env_file" exec -T postgres rm -f /tmp/restore.dump >/dev/null 2>&1 || true' EXIT
 postgres_user=$(grep '^POSTGRES_USER=' "$env_file" | tail -n1 | cut -d= -f2-)
@@ -27,5 +27,7 @@ compose "$env_file" exec -T postgres pg_restore --no-owner -U "$postgres_user" -
 compose "$env_file" exec -T postgres rm -f /tmp/restore.dump
 trap - EXIT
 compose "$env_file" run --rm migrate
-compose "$env_file" up --detach api worker scheduler frontend nginx
+declare -a restored_services
+release_services_for_enabled_lanes "$env_file" restored_services
+compose "$env_file" up --detach "${restored_services[@]}"
 printf '%s\n' 'Restore and Alembic upgrade completed. Run release smoke and application-level integrity checks before reopening traffic.'

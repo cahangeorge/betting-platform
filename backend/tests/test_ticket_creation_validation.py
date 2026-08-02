@@ -10,6 +10,7 @@ from app.services.portfolio_risk import PortfolioExposure, RiskContext, RiskPoli
 from app.services.staking import StakingPolicy
 from app.services.ticket_engine import (
     _build_ticket_candidate,
+    _load_portfolio_exposure,
     _recalculate_ticket_totals,
     activate_ticket_batch,
     create_manual_ticket,
@@ -113,6 +114,98 @@ class _FakeExecuteResult:
 
     def all(self):
         return self._rows
+
+
+class _ExposureScalars:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def unique(self):
+        return self
+
+    def all(self):
+        return self._rows
+
+
+class _ExposureResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def scalars(self):
+        return _ExposureScalars(self._rows)
+
+
+class _ExposureSession:
+    def __init__(self, *result_rows):
+        self._result_rows = list(result_rows)
+
+    async def execute(self, _statement):
+        return _ExposureResult(self._result_rows.pop(0))
+
+
+@pytest.mark.asyncio
+async def test_active_ticket_with_lost_prediction_lineage_fails_closed_for_exposure():
+    """A deleted governed prediction cannot be reinterpreted from Match data."""
+    now = datetime(2026, 8, 1, 12, tzinfo=timezone.utc)
+    active_ticket = SimpleNamespace(
+        id=1,
+        stake=10,
+        legs=[
+            SimpleNamespace(
+                id=2,
+                match_id=3,
+                prediction_run_id_snapshot=99,
+                model_prediction=None,
+                match=SimpleNamespace(
+                    home_team="mutable home",
+                    away_team="mutable away",
+                    competition="mutable league",
+                    match_date=now,
+                ),
+            )
+        ],
+    )
+    db = _ExposureSession([active_ticket], [])
+
+    with pytest.raises(ValueError, match="lost immutable prediction lineage"):
+        await _load_portfolio_exposure(db, bankroll_id=1, now=now)
+
+
+@pytest.mark.asyncio
+async def test_active_governed_ticket_with_tampered_output_fails_closed_for_exposure(monkeypatch):
+    """Canonical fixture shape alone is insufficient without output attestation."""
+    now = datetime(2026, 8, 1, 12, tzinfo=timezone.utc)
+    run = SimpleNamespace(
+        id=99,
+        model_version_id=7,
+        pipeline_contract_version="penaltyblog-model-pipeline/v1",
+    )
+    prediction = SimpleNamespace(run=run)
+    active_ticket = SimpleNamespace(
+        id=1,
+        stake=10,
+        legs=[
+            SimpleNamespace(
+                id=2,
+                match_id=3,
+                prediction_run_id_snapshot=99,
+                model_prediction=prediction,
+                match=SimpleNamespace(),
+            )
+        ],
+    )
+    db = _ExposureSession([active_ticket], [])
+    calls = []
+
+    async def output_is_tampered(_db, checked_run, model_version_id):
+        calls.append((checked_run.id, model_version_id))
+        return False
+
+    monkeypatch.setattr(ticket_engine, "pipeline_prediction_output_is_complete", output_is_tampered)
+
+    with pytest.raises(ValueError, match="incomplete or tampered prediction output"):
+        await _load_portfolio_exposure(db, bankroll_id=1, now=now)
+    assert calls == [(99, 7)]
 
 
 class _FakeGenerateSession:
@@ -1010,7 +1103,7 @@ async def test_batch_revalidation_reloads_versioned_run_governance(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_generate_tickets_uses_latest_eligible_prediction_run_by_default(monkeypatch):
+async def test_generate_tickets_uses_latest_completed_prediction_run_by_default(monkeypatch):
     db = _FakeGenerateSession(
         [
             _FakeExecuteResult(scalar=_run(22)),
@@ -1050,6 +1143,7 @@ async def test_generate_tickets_uses_latest_eligible_prediction_run_by_default(m
     assert ticket_calls[0]["status"] == "generated"
     assert ticket_calls[0]["debit_bankroll"] is False
     assert "FROM prediction_runs" in db.statements[0]
+    assert "prediction_runs.status = 'completed'" in db.statements[0]
     assert "ORDER BY prediction_runs.completed_at DESC NULLS LAST" in db.statements[0]
     assert "model_predictions.run_id = 22" in db.statements[1]
 
@@ -1080,13 +1174,8 @@ async def test_generate_tickets_replays_a_committed_scheduled_run_without_creati
 
 
 @pytest.mark.asyncio
-async def test_generate_tickets_can_scope_to_explicit_prediction_run(monkeypatch):
-    db = _FakeGenerateSession(
-        [
-            _FakeExecuteResult(scalar=_run(11, status="partial")),
-            _FakeExecuteResult(rows=[_prediction(prediction_id=101, run_id=11, match_id=10)]),
-        ]
-    )
+async def test_generate_tickets_rejects_partial_explicit_prediction_run(monkeypatch):
+    db = _FakeGenerateSession([_FakeExecuteResult(scalar=None)])
     ticket_calls = []
 
     async def fake_create_ticket(**kwargs):
@@ -1095,31 +1184,31 @@ async def test_generate_tickets_can_scope_to_explicit_prediction_run(monkeypatch
 
     monkeypatch.setattr(ticket_engine, "create_ticket", fake_create_ticket)
 
-    await generate_tickets(
-        db=db,
-        user_id=7,
-        bankroll_id=None,
-        ticket_count=1,
-        difficulty="safe",
-        market_types=["1x2"],
-        min_odds=1.5,
-        max_odds=2.5,
-        stake=10.0,
-        run_id=11,
-    )
+    with pytest.raises(ValueError, match="not found or not eligible"):
+        await generate_tickets(
+            db=db,
+            user_id=7,
+            bankroll_id=None,
+            ticket_count=1,
+            difficulty="safe",
+            market_types=["1x2"],
+            min_odds=1.5,
+            max_odds=2.5,
+            stake=10.0,
+            run_id=11,
+        )
 
-    assert ticket_calls[0]["legs_data"][0]["model_prediction_id"] == 101
+    assert ticket_calls == []
     assert "prediction_runs.id = 11" in db.statements[0]
-    assert "prediction_runs.status IN ('completed', 'partial')" in db.statements[0]
+    assert "prediction_runs.status = 'completed'" in db.statements[0]
     assert "ORDER BY prediction_runs.completed_at" not in db.statements[0]
-    assert "model_predictions.run_id = 11" in db.statements[1]
 
 
 @pytest.mark.asyncio
 async def test_generate_tickets_accepts_multiple_runs_from_one_dataset(monkeypatch):
     db = _FakeGenerateSession(
         [
-            _FakeExecuteResult(rows=[_run(22), _run(11, status="partial")]),
+            _FakeExecuteResult(rows=[_run(22), _run(11)]),
             _FakeExecuteResult(
                 rows=[
                     _prediction(prediction_id=202, run_id=22, match_id=12, expected_value=0.2),
@@ -1170,7 +1259,30 @@ async def test_generate_tickets_accepts_multiple_runs_from_one_dataset(monkeypat
     ]
     assert {leg["model_prediction_id"] for leg in ticket_calls[0]["legs_data"]} == {101, 202}
     assert "prediction_runs.id IN (11, 22)" in db.statements[0]
+    assert "prediction_runs.status = 'completed'" in db.statements[0]
     assert "model_predictions.run_id IN (11, 22)" in db.statements[1]
+
+
+@pytest.mark.asyncio
+async def test_generate_tickets_rejects_partial_run_in_multiple_run_selection():
+    db = _FakeGenerateSession([_FakeExecuteResult(rows=[_run(22)])])
+
+    with pytest.raises(ValueError, match="not found or not eligible"):
+        await generate_tickets(
+            db=db,
+            user_id=7,
+            bankroll_id=None,
+            ticket_count=1,
+            difficulty="balanced",
+            market_types=["1x2"],
+            min_odds=1.5,
+            max_odds=2.5,
+            stake=10.0,
+            run_ids=[11, 22],
+        )
+
+    assert "prediction_runs.id IN (11, 22)" in db.statements[0]
+    assert "prediction_runs.status = 'completed'" in db.statements[0]
 
 
 @pytest.mark.asyncio
@@ -1251,7 +1363,7 @@ async def test_generate_tickets_excludes_started_and_explicitly_ineligible_predi
     eligible = _prediction(prediction_id=103, run_id=11, match_id=12)
     db = _FakeGenerateSession(
         [
-            _FakeExecuteResult(scalar=_run(11, status="partial")),
+            _FakeExecuteResult(scalar=_run(11)),
             _FakeExecuteResult(rows=[started, ineligible, eligible]),
         ]
     )
@@ -1377,7 +1489,7 @@ async def test_generate_tickets_rejects_difficulty_when_unique_matches_are_insuf
 async def test_generate_tickets_rejects_run_with_no_predictions_truthfully():
     db = _FakeGenerateSession(
         [
-            _FakeExecuteResult(scalar=_run(11, status="partial")),
+            _FakeExecuteResult(scalar=_run(11)),
             _FakeExecuteResult(rows=[]),
         ]
     )
@@ -1397,7 +1509,7 @@ async def test_generate_tickets_rejects_run_with_no_predictions_truthfully():
         )
 
     assert exc_info.value.report["scanned_predictions"] == 0
-    assert exc_info.value.report["prediction_run_status"] == "partial"
+    assert exc_info.value.report["prediction_run_status"] == "completed"
 
 
 @pytest.mark.asyncio
