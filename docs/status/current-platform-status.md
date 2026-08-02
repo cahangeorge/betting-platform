@@ -1,6 +1,6 @@
 # Current Platform Status
 
-Updated: 2026-08-02T08:39:49+03:00
+Updated: 2026-08-02T08:45:51+03:00
 Repository/branch: `/home/gion/Projects/bet` /
 `main` at `0620287`
 Git state at this handoff refresh:
@@ -14,6 +14,20 @@ commit, push, tag, production deployment, or rollout activation was performed.
 
 This is the first status document to read in a new coding session. Re-run
 `git status --short --branch` before relying on this snapshot.
+
+## 2026-08-02 authorized GitHub publication
+
+- Published the verified nested OddsHarvester changes as
+  `8f5f80b feat: harden OddsPortal catalog and browser extraction` on
+  `origin/codex/football-catalog-validation-2026-07-17`.
+- Published the Bet platform plus the nested revision reference as
+  `0e7e1e1 feat: complete provider data platform MVP hardening` on
+  `origin/main`.
+- The publication was preceded by staged whitespace and credential-shaped
+  value scans. No secret-shaped staged value was found; test-only execution
+  tokens were reviewed as non-credentials. No tag, GitHub Release, deployment,
+  live commercial-data API call, credential rotation, or rollout activation
+  was performed.
 
 ## Objective
 
